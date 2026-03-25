@@ -34,6 +34,51 @@ POST /runs { directive: "...", profile: "research" }
 +----------------------------------------------------+
 ```
 
+## Tools
+
+CUA exposes a single `browser_dom` tool with 9 actions. The agent chooses which action to call based on the task and page state.
+
+| Action | Description | Returns |
+|---|---|---|
+| `goto(url)` | Navigate to a URL | DOM snapshot |
+| `click(selector)` | Click an element (CSS, `text=`, `role=` selectors) | DOM snapshot |
+| `screenshot` | Capture the viewport | Screenshot + DOM |
+| `key_press(text, key)` | Type text and/or press a key (Enter, Tab, etc.) | Confirmation |
+| `scroll(direction, amount)` | Scroll the page | Screenshot |
+| `extract(selector, mode)` | Extract text, HTML, or form values from elements | Content string |
+| `get_dom(selector?)` | Get a compact DOM snapshot (optionally scoped) | DOM string |
+| `wait_for(selector, state)` | Wait for an element to be visible, hidden, etc. | Confirmation |
+| `execute_sequence(steps)` | **Batch multiple actions in a single tool call** | Combined results + DOM |
+
+### Why `execute_sequence` matters
+
+`execute_sequence` is the most important action for performance. Each tool call has ~3-5s of overhead (API round-trip + thinking). Without batching, filling a 5-field form takes 5 separate calls = ~20s of pure overhead. With `execute_sequence`, it's a single call:
+
+```json
+{
+  "action": "execute_sequence",
+  "steps": [
+    {"action": "click", "selector": "#email"},
+    {"action": "key_press", "text": "user@example.com"},
+    {"action": "click", "selector": "#password"},
+    {"action": "key_press", "text": "secretpass"},
+    {"action": "click", "selector": "button[type=submit]"}
+  ]
+}
+```
+
+Intermediate steps skip screenshots for speed. Only the final step captures the DOM, so the agent sees the result of the entire sequence in one response.
+
+### Design choices that make CUA fast
+
+- **DOM-first, not screenshot-first.** `goto` and `click` return a compact DOM snapshot (~200-500 tokens) instead of a screenshot (~1-2K image tokens). The agent only takes screenshots when it needs to *see* the page visually (layout, images, charts).
+- **Streaming execution.** Tool calls are executed as they arrive from the Claude API stream, not after the full response. If Claude emits two tool calls, the first starts executing while the second is still being generated.
+- **Adaptive thinking budget.** Early steps get full thinking budget for task planning. After 3+ consecutive successes, the budget drops since the agent is in a known-good flow. Errors reset to full budget.
+- **Aggressive context pruning.** Old screenshots, DOM snapshots, and thinking blocks are stripped from the conversation every iteration. Only the most recent observation is kept in full, so input tokens stay flat regardless of run length.
+- **Page-change detection.** After a `goto`, `click`, or `execute_sequence`, any remaining tool calls in the same streaming response are skipped — they were planned on stale state. The agent re-observes the new page instead.
+- **CAPTCHA auto-resolution.** Patchright's stealth patches avoid most bot detection. When CAPTCHAs do appear (Cloudflare, reCAPTCHA, hCaptcha), CUA detects them and waits up to 30s for auto-resolution before continuing.
+- **Stuck detection.** If 4+ of the last 6 actions produce identical results, the agent gets a system hint to try a different approach, preventing infinite loops.
+
 ## Profiles
 
 Profiles specialize the agent for different use cases by bundling a prompt extension and guardrail overrides. The same tools and agent loop are used for all profiles.
