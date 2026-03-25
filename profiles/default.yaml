@@ -1,0 +1,4 @@
+name: default
+description: General-purpose browser automation agent.
+prompt_extension: null
+guardrail_overrides: {}

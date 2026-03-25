@@ -1,0 +1,13 @@
+services:
+  cua:
+    build: .
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DIRECTIVE=${DIRECTIVE:-Go to example.com and tell me the page title}
+      - MODEL=${MODEL:-claude-sonnet-4-6}
+      - MAX_STEPS=${MAX_STEPS:-50}
+      - THINKING_BUDGET=${THINKING_BUDGET:-4096}
+      - PROFILE=${PROFILE:-default}
+    ports:
+      - "6080:6080"   # noVNC — watch the agent in your browser
+      - "8090:8090"   # Status API — GET /status, GET /events (SSE)

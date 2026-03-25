@@ -1,0 +1,74 @@
+"""Profile loader — reads YAML profile definitions from the profiles/ directory.
+
+Profiles bundle a prompt extension and guardrail overrides to specialize
+the agent for different use cases without changing the tools or agent loop.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+
+from guardrails import GuardrailConfig
+
+_PROFILES_DIR = Path(__file__).parent
+
+
+@dataclass(slots=True)
+class Profile:
+    """A CUA agent profile — prompt extension + guardrail overrides."""
+
+    name: str
+    description: str = ""
+    prompt_extension: str | None = None
+    guardrail_overrides: dict = field(default_factory=dict)
+
+
+def load_profile(name: str) -> Profile:
+    """Load a profile by name from the profiles/ directory.
+
+    Args:
+        name: Profile name (without .yaml extension).
+
+    Raises:
+        ValueError: If the profile file doesn't exist.
+    """
+    path = _PROFILES_DIR / f"{name}.yaml"
+    if not path.exists():
+        available = list_profiles()
+        raise ValueError(f"Profile '{name}' not found. Available profiles: {available}")
+
+    with open(path) as f:
+        data = yaml.safe_load(f)
+
+    return Profile(
+        name=data.get("name", name),
+        description=data.get("description", ""),
+        prompt_extension=data.get("prompt_extension"),
+        guardrail_overrides=data.get("guardrail_overrides") or {},
+    )
+
+
+def list_profiles() -> list[str]:
+    """Return names of all available profiles."""
+    return sorted(p.stem for p in _PROFILES_DIR.glob("*.yaml"))
+
+
+def apply_guardrail_overrides(
+    profile: Profile,
+    base: GuardrailConfig | None = None,
+) -> GuardrailConfig:
+    """Merge a profile's guardrail overrides into a base config.
+
+    Profile overrides take precedence over the base config values.
+    """
+    if not profile.guardrail_overrides:
+        return base or GuardrailConfig()
+
+    from dataclasses import asdict
+
+    base_dict = asdict(base) if base else asdict(GuardrailConfig())
+    merged = {**base_dict, **profile.guardrail_overrides}
+    return GuardrailConfig.from_dict(merged)

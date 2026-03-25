@@ -1,0 +1,100 @@
+[project]
+name = "cua"
+version = "0.1.0"
+description = "Computer Use Agent — autonomous desktop automation"
+requires-python = ">=3.13"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+  "anthropic>=0.52",
+  "fastapi>=0.115",
+  "httpx>=0.28",
+  "modal>=0.73",
+  "patchright>=1",
+  "pyyaml>=6",
+  "uvicorn>=0.34",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.25",
+  "ruff>=0.11",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+indent-width = 4
+exclude = [
+  ".git",
+  ".pyenv",
+  ".pytest_cache",
+  ".pytype",
+  ".ruff_cache",
+  ".venv",
+  ".vscode",
+  "__pypackages__",
+  "venv",
+]
+format.indent-style = "space"
+format.quote-style = "double"
+format.line-ending = "auto"
+format.skip-magic-trailing-comma = false
+format.docstring-code-line-length = "dynamic"
+format.docstring-code-format = true
+lint.select = [
+  "B",   # flake8-bugbear
+  "C4",  # flake8-comprehensions
+  "E",
+  "F",
+  "I",   # isort
+  "N",   # pep8-naming
+  "PT",  # flake8-pytest-style
+  "SIM", # flake8-simplify
+  "T20", # flake8-print
+  "UP",  # pyupgrade
+  "W",   # pycodestyle & Pyflakes
+]
+lint.ignore = [
+  "D203", # "1 blank line required before class docstring" (conflicts with D211)
+  "D212", # "Multi-line docstring summary should start at the first line"
+  "E501", # Line too long (handled by formatter)
+  "N802", # Allow uppercase function name for grpc
+]
+lint.per-file-ignores."**/__init__.py" = [ "F401" ]  # allow re-export patterns
+lint.per-file-ignores."**/scripts/**" = [ "T20" ]  # allow prints in scripts
+lint.per-file-ignores."**/tests/**" = [
+  "T20",
+]  # allow prints while debugging tests
+lint.per-file-ignores."**/{tests,docs,tools}/*" = [
+  "E402",
+]  # allow module import not at top of file
+# Allow fix for all enabled rules (when `--fix`) is provided.
+lint.fixable = [ "ALL" ]
+# Allow unused variables when underscore-prefixed.
+lint.dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+# Ignore `E402` (import violations) in all `__init__.py` files, and in selected subdirectories.
+lint.pydocstyle.convention = "google"
+
+[tool.ty]
+environment.python-version = "3.13"
+rules.unresolved-import = "ignore"
+src.exclude = []
+overrides = [
+  { include = [
+    "tests/**",
+    "**/test_*.py",
+  ], rules.invalid-argument-type = "ignore" },
+]
+
+[tool.pytest]
+ini_options.asyncio_mode = "auto"
+ini_options.asyncio_default_fixture_loop_scope = "function"
+ini_options.addopts = "-q"
+ini_options.markers = [
+  "integration: slower tests that may require network/services",
+]

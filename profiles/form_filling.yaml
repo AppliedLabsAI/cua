@@ -1,0 +1,16 @@
+name: form_filling
+description: >
+  Optimized for form-heavy workflows: checkout, registration, data entry.
+  Unblocks purchase and form submission actions while keeping account
+  deletion and message sending blocked.
+prompt_extension: |
+  ## Form Filling Mode
+  You are completing forms and data entry tasks. Follow these additional guidelines:
+  - Use execute_sequence to batch all fill + click steps on the same page.
+  - Do not pause for screenshots between form fields — batch aggressively.
+  - Verify field values after submission by checking the resulting page DOM.
+  - If a form has multiple pages/steps, complete each page before moving on.
+guardrail_overrides:
+  blocked_action_categories:
+    - account_modify
+    - send_message
