@@ -19,7 +19,7 @@ POST /runs { directive: "...", profile: "research" }
                     v
 +-- Sandbox -----------------------------------------+
 |  +-- Desktop ------------------------------------+ |
-|  |  Xvfb + openbox + noVNC (:6080)              | |
+|  |  Xvfb + openbox + noVNC (:6080)               | |
 |  |  Chromium via Patchright (stealth)            | |
 |  +-----------------------------------------------+ |
 |  +-- Agent Loop ---------------------------------+ |
@@ -28,7 +28,7 @@ POST /runs { directive: "...", profile: "research" }
 |  |  browser_dom tool (Patchright)                | |
 |  |  - goto, click, screenshot, key_press         | |
 |  |  - scroll, extract, get_dom, wait_for         | |
-|  |  - execute_sequence (batched actions)          | |
+|  |  - execute_sequence (batched actions)         | |
 |  +-----------------------------------------------+ |
 |  Status API (:8090) -- SSE action stream           |
 +----------------------------------------------------+
