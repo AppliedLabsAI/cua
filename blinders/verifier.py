@@ -39,8 +39,9 @@ class ScopeVerifier:
     ) -> None:
         self.scope = scope
         self.guardrails = guardrails
-        # When skip_llm_validation is True, rely solely on deterministic checks
-        # (domain scope, action type, SSRF, nav limits). Saves 2+ Haiku calls/step.
+        # When skip_llm_validation is True, skip the ActionValidator (task-alignment
+        # LLM call) but KEEP the guardrails destructive-click check — even trusted
+        # domains can have destructive buttons (refund, delete, etc.).
         self._validator = (
             None if skip_llm_validation else (ActionValidator(directive) if directive else None)
         )
@@ -98,10 +99,10 @@ class ScopeVerifier:
             if not nav.allowed:
                 return nav.reason
 
-        # 3. Destructive action classification — skip LLM when we have no
-        #    validator (fast mode) or when validator handles safety itself.
+        # 3. Destructive action classification — always run (catches refund/delete
+        #    buttons even on trusted domains). Skip only when validator will cover it.
         action_check = self.guardrails.check_action(
-            action, tool_input, skip_llm=(self._validator is not None or not self.guardrails._llm_enabled)
+            action, tool_input, skip_llm=bool(self._validator)
         )
         if not action_check.allowed:
             return action_check.reason

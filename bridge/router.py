@@ -102,7 +102,7 @@ class ActionRouter:
 
             self._verifier = ScopeVerifier(
                 blinders.scope, self.guardrails, directive=directive,
-                skip_llm_validation=not self.guardrails._llm_enabled,
+                skip_llm_validation=True,
             )
 
     async def execute(self, tool_name: str, tool_input: dict) -> dict:
