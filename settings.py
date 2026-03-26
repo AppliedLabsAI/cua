@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     profile: str = "default"
     credentials_json: str = ""
     guardrails_json: str = ""
+    recording_json: str = ""
 
     # Infrastructure
     modal_sandbox_id: str = "local"

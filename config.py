@@ -6,10 +6,11 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from api.models import CredentialsMap, GuardrailSettings
+from api.models import CredentialsMap, GuardrailSettings, RecordingSettings
 from exceptions import ConfigError
 from guardrails import GuardrailConfig
 from profiles.loader import apply_guardrail_overrides, load_profile
+from recording import RecordingConfig
 from settings import AGENT_MODEL, get_settings
 
 if TYPE_CHECKING:
@@ -32,6 +33,7 @@ class CUAConfig:
     profile_name: str = "default"
     credentials: CredentialsMap | None = None
     guardrail_config: GuardrailConfig = field(default_factory=GuardrailConfig)
+    recording_config: RecordingConfig = field(default_factory=RecordingConfig)
     profile: Profile | None = field(default=None, repr=False)
 
     @staticmethod
@@ -53,6 +55,14 @@ class CUAConfig:
         return normalized
 
     @staticmethod
+    def _parse_recording(raw_json: str) -> RecordingConfig:
+        if not raw_json:
+            return RecordingConfig()
+
+        settings = RecordingSettings.model_validate(json.loads(raw_json))
+        return RecordingConfig.from_dict(settings.to_dict())
+
+    @staticmethod
     def _parse_guardrails(raw_json: str) -> GuardrailConfig | None:
         if not raw_json:
             return None
@@ -70,6 +80,7 @@ class CUAConfig:
 
         credentials = cls._parse_credentials(env.credentials_json)
         guardrail_config = cls._parse_guardrails(env.guardrails_json)
+        recording_config = cls._parse_recording(env.recording_json)
         profile = load_profile(env.profile)
         guardrail_config = apply_guardrail_overrides(profile, guardrail_config)
 
@@ -85,6 +96,7 @@ class CUAConfig:
             profile_name=env.profile,
             credentials=credentials,
             guardrail_config=guardrail_config,
+            recording_config=recording_config,
             profile=profile,
         )
 
@@ -94,6 +106,10 @@ class CUAConfig:
         guardrail_config = None
         if rc.guardrails:
             guardrail_config = GuardrailConfig.from_dict(rc.guardrails.to_dict())
+
+        recording_config = RecordingConfig()
+        if rc.recording:
+            recording_config = RecordingConfig.from_dict(rc.recording.to_dict())
 
         profile = load_profile(rc.profile)
         guardrail_config = apply_guardrail_overrides(profile, guardrail_config)
@@ -110,5 +126,6 @@ class CUAConfig:
             profile_name=rc.profile,
             credentials=rc.credentials,
             guardrail_config=guardrail_config,
+            recording_config=recording_config,
             profile=profile,
         )

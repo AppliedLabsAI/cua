@@ -15,7 +15,6 @@ from patchright.async_api import Page
 from bridge import DOM_MARKER, ActionResult
 from bridge.browser import (
     _AUTO_DOM_MAX_CHARS,
-    _CAPTCHA_DETECT_INIT_JS,
     _DEFAULT_TIMEOUT,
     _DOM_MAX_CHARS,
     _DOM_SNAPSHOT_INIT_JS,
@@ -27,25 +26,40 @@ if TYPE_CHECKING:
     from bridge.browser import BrowserManager
 
 
-async def _ensure_dom_snapshot(page: Page) -> None:
-    """Re-inject __domSnapshot if the init script hasn't loaded on this page."""
-    await page.evaluate(_DOM_SNAPSHOT_INIT_JS)
+# ---------------------------------------------------------------------------
+# Self-healing JS calls — each checks for its helper, re-injects if missing,
+# and executes in a single evaluate round-trip. This avoids separate
+# "check + re-inject + call" evaluate chains that clutter Playwright traces.
+# ---------------------------------------------------------------------------
+
+_DOM_SNAPSHOT_CALL_JS = """([s, m, f, initJS]) => {
+    if (!window.__domSnapshot) new Function(initJS)();
+    return window.__domSnapshot ? window.__domSnapshot(s, m, f) : null;
+}"""
+
+_SMART_EXTRACT_CALL_JS = """(initJS) => {
+    if (!window.__smartExtract) new Function(initJS)();
+    return window.__smartExtract
+        ? window.__smartExtract()
+        : document.body.innerText;
+}"""
+
+_EXTRACT_VALUE_CALL_JS = """([sel, initJS]) => {
+    if (!window.__extractValue) new Function(initJS)();
+    return window.__extractValue
+        ? window.__extractValue(sel)
+        : '[not found]';
+}"""
+
+_CAPTCHA_DETECT_CALL_JS = """(initJS) => {
+    if (!window.__detectCaptcha) new Function(initJS)();
+    return window.__detectCaptcha ? window.__detectCaptcha() : null;
+}"""
 
 
-async def _ensure_init_scripts(page: Page) -> None:
-    """Re-inject all init scripts if they've been lost after navigation."""
-    missing = await page.evaluate(
-        "() => [!window.__domSnapshot, !window.__smartExtract, "
-        "!window.__captchaDetect, !window.__extractValue]"
-    )
-    if missing[0]:
-        await page.evaluate(_DOM_SNAPSHOT_INIT_JS)
-    if missing[1]:
-        await page.evaluate(_SMART_EXTRACT_INIT_JS)
-    if missing[2]:
-        await page.evaluate(_CAPTCHA_DETECT_INIT_JS)
-    if missing[3]:
-        await page.evaluate(_EXTRACT_VALUE_INIT_JS)
+# ---------------------------------------------------------------------------
+# DOM snapshot — single evaluate call
+# ---------------------------------------------------------------------------
 
 
 async def quick_dom_snapshot(
@@ -53,18 +67,14 @@ async def quick_dom_snapshot(
     max_chars: int = _AUTO_DOM_MAX_CHARS,
     filter_config: dict | None = None,
 ) -> str:
-    """Fast DOM snapshot using pre-loaded __domSnapshot init script."""
+    """Fast DOM snapshot — single evaluate in all cases."""
     try:
         raw = await page.evaluate(
-            "([s, m, f]) => window.__domSnapshot ? window.__domSnapshot(s, m, f) : null",
-            [None, max_chars, filter_config],
+            _DOM_SNAPSHOT_CALL_JS,
+            [None, max_chars, filter_config, _DOM_SNAPSHOT_INIT_JS],
         )
         if raw is None:
-            await _ensure_dom_snapshot(page)
-            raw = await page.evaluate(
-                "([s, m, f]) => window.__domSnapshot(s, m, f)",
-                [None, max_chars, filter_config],
-            )
+            return ""
         data = json.loads(raw)
         return f"[{data['title']}] {data['url']}\n{data['dom']}"
     except Exception:
@@ -75,6 +85,11 @@ async def page_screenshot(page: Page) -> str:
     """Capture the browser viewport as base64 JPEG via Playwright."""
     jpeg_bytes = await page.screenshot(type="jpeg", quality=55)
     return base64.standard_b64encode(jpeg_bytes).decode("ascii")
+
+
+# ---------------------------------------------------------------------------
+# Action execution
+# ---------------------------------------------------------------------------
 
 
 async def execute_dom_action(
@@ -93,7 +108,6 @@ async def execute_dom_action(
 
     try:
         page = browser.page
-        await _ensure_init_scripts(page)
 
         if action == "screenshot":
             b64, dom = await asyncio.gather(
@@ -178,14 +192,13 @@ async def execute_dom_action(
                 content = await page.inner_html(selector, timeout=_DEFAULT_TIMEOUT)
             elif mode == "value":
                 content = await page.evaluate(
-                    "(sel) => window.__extractValue(sel)",
-                    selector,
+                    _EXTRACT_VALUE_CALL_JS,
+                    [selector, _EXTRACT_VALUE_INIT_JS],
                 )
             elif is_body:
                 content = await page.evaluate(
-                    "() => window.__smartExtract"
-                    " ? window.__smartExtract()"
-                    " : document.body.innerText"
+                    _SMART_EXTRACT_CALL_JS,
+                    _SMART_EXTRACT_INIT_JS,
                 )
             else:
                 content = await page.inner_text(selector, timeout=_DEFAULT_TIMEOUT)
@@ -194,15 +207,11 @@ async def execute_dom_action(
         if action == "get_dom":
             selector = params.get("selector")
             raw = await page.evaluate(
-                "([s, m, f]) => window.__domSnapshot ? window.__domSnapshot(s, m, f) : null",
-                [selector, _DOM_MAX_CHARS, filter_config],
+                _DOM_SNAPSHOT_CALL_JS,
+                [selector, _DOM_MAX_CHARS, filter_config, _DOM_SNAPSHOT_INIT_JS],
             )
             if raw is None:
-                await _ensure_dom_snapshot(page)
-                raw = await page.evaluate(
-                    "([s, m, f]) => window.__domSnapshot(s, m, f)",
-                    [selector, _DOM_MAX_CHARS, filter_config],
-                )
+                return ActionResult(error="DOM snapshot unavailable")
             data = json.loads(raw)
             header = f"[{data['title']}] {data['url']}\n"
             return ActionResult(text=header + data["dom"])

@@ -92,6 +92,62 @@ Intermediate steps skip screenshots for speed. Only the final step captures the 
 - **CAPTCHA auto-resolution.** Patchright stealth patches + auto-wait up to 30s for Cloudflare/reCAPTCHA/hCaptcha.
 - **Stuck detection.** System hint after 4+ of the last 6 actions produce identical results.
 
+## Session Recording & Replay
+
+Every CUA session is recorded by default using Playwright's built-in tracing. After a run completes, you get a `trace.zip` that you can open in [Playwright Trace Viewer](https://trace.playwright.dev) for frame-by-frame session replay with DOM snapshots, screenshots, network requests, and console logs at each action.
+
+### Local runs
+
+Recordings are saved to the `output/` directory alongside the action log:
+
+```bash
+python scripts/run_local.py --directive "Go to example.com and find pricing"
+# After completion:
+# output/trace.zip         — Playwright trace (open in trace viewer)
+# output/screenshots/      — per-action JPEGs (when screenshots are captured)
+# output/action_log.json   — structured action log
+```
+
+Replay the session:
+
+```bash
+npx playwright show-trace output/trace.zip
+```
+
+Or drag `trace.zip` into [trace.playwright.dev](https://trace.playwright.dev) in your browser.
+
+### Modal runs
+
+Recordings are persisted to a Modal Volume (`cua-recordings`) and accessible via the API:
+
+```bash
+# List recording artifacts
+curl https://your-app--cua.modal.run/runs/{run_id}/recording/manifest
+
+# Download the trace
+curl -o trace.zip https://your-app--cua.modal.run/runs/{run_id}/recording/trace
+
+# Download a specific screenshot
+curl -o shot.jpg https://your-app--cua.modal.run/runs/{run_id}/recording/screenshots/0003_click.jpg
+```
+
+### Configuration
+
+Recording is enabled by default. To customize, pass a `recording` object in the `POST /runs` request:
+
+```json
+{
+  "directive": "...",
+  "recording": {
+    "enabled": true,
+    "screenshots": true,
+    "trace": true
+  }
+}
+```
+
+Set `"enabled": false` to disable recording entirely for a session.
+
 ## Guardrails
 
 CUA uses a layered safety architecture combining proactive observation control with traditional runtime checks.
@@ -219,6 +275,11 @@ Create a new CUA run. Requires `Authorization: Bearer <CUA_API_KEY>` header (if 
   "guardrails": {
     "allowed_domains": ["example.com", "*.example.org"],
     "max_urls_visited": 100
+  },
+  "recording": {
+    "enabled": true,
+    "screenshots": true,
+    "trace": true
   }
 }
 ```
@@ -231,6 +292,15 @@ Terminate a run early.
 
 ### GET /runs/{run_id}/stream
 SSE stream of real-time action events.
+
+### GET /runs/{run_id}/recording/manifest
+List recording artifacts (trace, screenshots) for a completed run.
+
+### GET /runs/{run_id}/recording/trace
+Download the Playwright trace ZIP. Open in [trace.playwright.dev](https://trace.playwright.dev) for frame-by-frame replay.
+
+### GET /runs/{run_id}/recording/screenshots/{filename}
+Download an individual screenshot JPEG.
 
 ```bash
 curl -N https://your-app--cua.modal.run/runs/sb-abc123/stream
@@ -254,6 +324,7 @@ curl -N https://your-app--cua.modal.run/runs/sb-abc123/stream
 | `credentials` | None | Service credentials (injected into system prompt) |
 | `proxy` | None | Proxy URL for bot avoidance |
 | `guardrails` | None | GuardrailConfig overrides (domains, actions, limits) |
+| `recording` | Enabled | Recording config (screenshots, trace). Enabled by default. |
 
 ## Security
 
@@ -289,6 +360,9 @@ cua.session                          → API request lifecycle
         cua.guardrail.check          → Safety verification
         cua.browser.action           → Patchright execution
         cua.sequence.step [×K]       → Sub-steps in execute_sequence
+    cua.recording.start              → Recording initialization
+    cua.recording.stop               → Recording finalization + manifest
+    cua.recording.upload             → Persist to volume/disk
 ```
 
 Spans include GenAI semantic convention attributes (`gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`), action details (selector, URL, success/error), guardrail decisions, and timing.
@@ -320,6 +394,7 @@ cua/
 ├── bridge/          Browser lifecycle, DOM execution helpers, CAPTCHA handling, router
 ├── api/             FastAPI servers, typed API models, run registry, status API
 ├── guardrails/      Domain/action/SSRF safety engine
+├── recording/       Session recording (Playwright tracing + screenshot persistence)
 ├── profiles/        YAML profile definitions
 ├── sandbox/         Modal image definition + entrypoint script
 ├── telemetry/       OpenTelemetry instrumentation, metrics, span helpers, logging

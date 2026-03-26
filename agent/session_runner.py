@@ -15,6 +15,7 @@ from blinders.scope import extract_task_scope
 from bridge.browser import BrowserManager
 from bridge.router import ActionRouter
 from config import CUAConfig
+from recording.manager import RecordingManager
 from telemetry import get_tracer
 from telemetry.metrics import active_sessions, session_duration, sessions_total
 from telemetry.spans import (
@@ -75,6 +76,13 @@ async def run_sandbox_session(
                     )
                 log.info("Browser launched")
 
+                # Initialize recording
+                recording: RecordingManager | None = None
+                if config.recording_config.enabled:
+                    recording = RecordingManager(config.recording_config, run_id)
+                    await recording.start(browser.context)
+                    log.info("Session recording started")
+
                 with tracer.start_as_current_span(BLINDERS_EXTRACT):
                     scope = extract_task_scope(config.directive, config.profile)
                     blinders = DOMBlinders(scope)
@@ -108,6 +116,7 @@ async def run_sandbox_session(
                 guardrail_config=config.guardrail_config,
                 blinders=blinders,
                 directive=config.directive,
+                recording=recording,
             )
             profile_prompt = config.profile.prompt_extension if config.profile else None
             result = await run_agent(
@@ -138,6 +147,18 @@ async def run_sandbox_session(
             await complete_run(error=str(exc))
             return 1
         finally:
+            if recording:
+                try:
+                    await recording.stop()
+                    if config.recording_config.upload:
+                        await recording.upload(f"/recordings/{run_id}")
+                    else:
+                        log.info(
+                            "Recordings available at %s",
+                            recording.output_dir,
+                        )
+                except Exception as rec_exc:
+                    log.warning("Recording finalization failed: %s", rec_exc)
             await browser.close()
             log.info("Browser closed")
 

@@ -17,17 +17,22 @@ from dataclasses import dataclass
 
 from patchright.async_api import Page
 
+from bridge.browser import _CAPTCHA_DETECT_INIT_JS
+
 log = logging.getLogger(__name__)
 
 _POLL_INTERVAL_MS = 500
 _DEFAULT_TIMEOUT_MS = 30_000
 
-# JS helpers pre-loaded via add_init_script in BrowserManager.launch().
-# Use window.__detectCaptcha / window.__captchaStillPresent with fallback.
-_DETECT_JS = "() => window.__detectCaptcha ? window.__detectCaptcha() : null"
-_STILL_PRESENT_JS = (
-    "() => window.__captchaStillPresent ? window.__captchaStillPresent() : false"
-)
+# Self-healing JS: re-inject if missing (isolated context may not have init scripts).
+_DETECT_JS = """(initJS) => {
+    if (!window.__detectCaptcha) new Function(initJS)();
+    return window.__detectCaptcha ? window.__detectCaptcha() : null;
+}"""
+_STILL_PRESENT_JS = """(initJS) => {
+    if (!window.__captchaStillPresent) new Function(initJS)();
+    return window.__captchaStillPresent ? window.__captchaStillPresent() : false;
+}"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +58,7 @@ class CaptchaHandleResult:
 async def detect_captcha(page: Page) -> CaptchaDetection:
     """Fast DOM check (<100ms) for known CAPTCHA patterns."""
     try:
-        result = await page.evaluate(_DETECT_JS)
+        result = await page.evaluate(_DETECT_JS, _CAPTCHA_DETECT_INIT_JS)
     except Exception as exc:
         log.debug("detect_captcha failed during page.evaluate: %s", exc)
         return CaptchaDetection(detected=False)
@@ -84,7 +89,9 @@ async def wait_for_captcha_resolution(
     while time.monotonic() < deadline:
         await asyncio.sleep(_POLL_INTERVAL_MS / 1000)
         try:
-            still_present = await page.evaluate(_STILL_PRESENT_JS)
+            still_present = await page.evaluate(
+                _STILL_PRESENT_JS, _CAPTCHA_DETECT_INIT_JS
+            )
             if not still_present:
                 return True
         except Exception:

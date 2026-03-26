@@ -15,6 +15,17 @@ RunStatusValue = Literal[
 CredentialsMap = dict[str, dict[str, str]]
 
 
+class RecordingSettings(BaseModel):
+    """API-facing representation of recording configuration."""
+
+    enabled: bool = True
+    screenshots: bool = True
+    trace: bool = True
+
+    def to_dict(self) -> dict:
+        return self.model_dump()
+
+
 class GuardrailSettings(BaseModel):
     """API-facing representation of guardrail configuration."""
 
@@ -60,6 +71,7 @@ class RunConfig(BaseModel):
     credentials: CredentialsMap | None = None
     proxy: str | None = None
     guardrails: GuardrailSettings | None = None
+    recording: RecordingSettings | None = None
 
 
 class RunResponse(BaseModel):

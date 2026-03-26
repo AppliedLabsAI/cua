@@ -37,6 +37,7 @@ from telemetry.spans import (
 
 if TYPE_CHECKING:
     from blinders.filters import DOMBlinders
+    from recording.manager import RecordingManager
 
 log = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ class ActionRouter:
         guardrail_config: GuardrailConfig | None = None,
         blinders: DOMBlinders | None = None,
         directive: str = "",
+        recording: RecordingManager | None = None,
     ) -> None:
         self.browser = browser
         self.guardrails = GuardrailEngine(guardrail_config)
@@ -108,6 +110,7 @@ class ActionRouter:
         self.action_log: list[ActionLog] = []
         self._step = 0
         self._tracer = get_tracer()
+        self._recording = recording
 
         self._verifier = None
         if blinders:
@@ -191,6 +194,11 @@ class ActionRouter:
         self.action_log.append(entry)
         await persist_action_log(entry)
 
+        if self._recording and result.screenshot_b64:
+            await self._recording.on_screenshot(
+                self._step, action, result.screenshot_b64
+            )
+
         log.info(
             "Step %d: %s.%s (%dms) %s",
             self._step,
@@ -237,6 +245,11 @@ class ActionRouter:
         )
         self.action_log.append(entry)
         await persist_action_log(entry)
+
+        if self._recording and result.screenshot_b64:
+            await self._recording.on_screenshot(
+                self._step, action, result.screenshot_b64
+            )
 
         log.info(
             "Step %d: %s.%s (parallel) %s",

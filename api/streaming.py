@@ -14,12 +14,15 @@ import asyncio
 import json
 import logging
 import time
+from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
 
 from actionlog.actions import ActionLog, format_sse_event
 from api.models import RunStatus
+from recording import DEFAULT_OUTPUT_DIR
+from recording.manager import scan_recording_artifacts
 
 log = logging.getLogger(__name__)
 
@@ -108,3 +111,38 @@ async def get_events() -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Recording retrieval endpoints
+# ---------------------------------------------------------------------------
+
+_RECORDING_DIR = Path(DEFAULT_OUTPUT_DIR)
+
+
+@app.get("/recording/manifest")
+async def get_recording_manifest() -> dict:
+    """List available recording artifacts."""
+    return {
+        "run_id": _status.run_id,
+        "artifacts": scan_recording_artifacts(_RECORDING_DIR),
+    }
+
+
+@app.get("/recording/trace")
+async def get_recording_trace() -> FileResponse:
+    """Download the Playwright trace ZIP."""
+    trace_path = _RECORDING_DIR / "trace.zip"
+    if not trace_path.exists():
+        raise HTTPException(status_code=404, detail="Trace not available")
+    return FileResponse(trace_path, media_type="application/zip", filename="trace.zip")
+
+
+@app.get("/recording/screenshots/{filename}")
+async def get_recording_screenshot(filename: str) -> FileResponse:
+    """Download an individual screenshot."""
+    safe_name = Path(filename).name
+    path = _RECORDING_DIR / "screenshots" / safe_name
+    if not path.exists() or path.suffix != ".jpg":
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+    return FileResponse(path, media_type="image/jpeg")
