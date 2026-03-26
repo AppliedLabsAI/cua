@@ -1,97 +1,257 @@
-# CUA — Computer Use Agent
+# CUA — Computer Use Agent for Internal Dashboard Automation
 
-Autonomous browser automation powered by Claude. POST a natural-language directive, get back a run ID, an SSE stream for real-time events, and structured results when done. Every session is recorded as a Playwright trace for frame-by-frame replay.
+Deterministic browser automation for internal dashboards, powered by Claude. CUA automates actions that can only be performed through a dashboard UI — replacing manual work when building external API endpoints is impractical due to linked business logic and side effects.
 
-CUA uses a DOM-first approach — Patchright for fast, precise browser interactions via CSS/text/role selectors. No pixel-hunting or screenshot-heavy loops. Each action completes in ~1-2s.
+CUA uses a **playbook-first architecture**: define workflows as YAML playbooks with selector fallback chains and step verification, then execute them deterministically via Playwright. When a playbook step fails twice, CUA hands off **all remaining steps** to the full LLM agent, which takes complete control of the browser to finish the task.
 
-```mermaid
-graph LR
-    A["POST /runs { directive }"] --> B[API Server<br/>FastAPI + Auth]
-    B --> C[Modal Sandbox<br/>or Docker]
-    C --> D[Xvfb + Chromium]
-    C --> E[Agent Loop<br/>Claude + Patchright]
-    E -->|browser_dom| D
-    C --> F[Status API :8090<br/>SSE stream]
-    C --> G[Recording<br/>Playwright Trace]
+```
+Directive → Playbook Lookup → PlaybookRunner (deterministic) → Result
+                 ↓ (miss)              ↓ (step fails 2x)
+            Full LLM Agent    LLM Agent completes remaining steps
 ```
 
 ## Quick Start
 
-**Modal** (recommended):
+### Playbook execution (deterministic, no LLM loop)
+
 ```bash
-pip install -e .
+pip install -e ".[dev]" && patchright install chromium
+Xvfb :99 -screen 0 1280x720x24 &  # Linux only
+
+python scripts/run_local.py \
+  --directive "Cancel order #12345" \
+  --playbook cancel_order \
+  --playbook-params '{"order_id": "12345"}' \
+  --credentials '{"username": "admin", "password": "secret"}'
+```
+
+### LLM agent fallback (for unknown flows)
+
+```bash
+python scripts/run_local.py \
+  --directive "Go to http://dashboard.internal/orders and find the latest order" \
+  --allow-private-networks \
+  --credentials '{"username": "admin", "password": "secret"}'
+```
+
+### API deployment
+
+```bash
 modal secret create anthropic-secret ANTHROPIC_API_KEY=sk-ant-...
 modal deploy api/server.py
 
 curl -X POST https://your-app--cua.modal.run/runs \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $CUA_API_KEY" \
-  -d '{"directive": "Go to example.com and find the contact page"}'
+  -d '{"directive": "Cancel order #12345"}'
 ```
 
-**Docker:**
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-docker compose up
-# Status: http://localhost:8090/status
+## Playbook System
+
+Playbooks define deterministic action sequences for known dashboard workflows. Each step has a selector fallback chain and post-action verification.
+
+### Defining a playbook
+
+Create a YAML file in `playbooks/definitions/`:
+
+```yaml
+id: cancel_order
+name: Cancel Order
+description: Find order by ID and cancel it
+tags: ["cancel", "cancel order"]
+auth_required: true
+guardrails:
+  allow_private_networks: true       # for localhost dashboards
+  enable_llm_action_check: false     # pre-approved flows
+  max_urls_visited: 200
+  max_consecutive_errors: 10
+parameters:
+  - name: order_id
+    type: string
+    description: The order ID to cancel
+    pattern: "#?(\\d{3,})"
+
+steps:
+  - action: goto
+    params:
+      url: "https://dashboard.internal/orders"
+    verify:
+      expect_url_contains: "/orders"
+      expect_element_visible: "table"
+    description: Navigate to orders page
+
+  - action: click
+    selector:
+      primary: "input[placeholder*='Search']"
+      fallbacks:
+        - "role=searchbox"
+        - "input[type='search']"
+    description: Click search box
+
+  - action: key_press
+    params:
+      text: "{order_id}"
+    description: Type order ID
+
+  - action: key_press
+    params:
+      key: Enter
+    verify:
+      expect_element_visible: "table tbody tr"
+    description: Submit search
+
+  - action: click
+    selector:
+      primary: "text=Cancel"
+      fallbacks:
+        - "button.cancel-btn"
+        - "role=button[name*='Cancel']"
+    verify:
+      expect_element_visible: "text=Are you sure"
+    description: Click cancel button
+
+  - action: click
+    selector:
+      primary: "text=Confirm"
+      fallbacks:
+        - "button.confirm-btn"
+        - ".modal button.primary"
+    verify:
+      expect_text_on_page: "cancelled"
+    description: Confirm cancellation
 ```
 
-**Local dev:**
-```bash
-pip install -e ".[dev]" && patchright install chromium
-git config core.hooksPath .githooks  # enable pre-commit auto-fix/format + ty
-Xvfb :99 -screen 0 1280x720x24 &  # Linux only
+### Available actions
 
-python scripts/run_local.py \
-  --directive "Go to example.com and find the contact page" \
-  --profile research \
-  --allow-private-networks  # disable SSRF protection for local testing
-```
+Playbooks support these actions (same as the LLM agent's `browser_dom` tool):
 
-## Tools
-
-CUA exposes a single `browser_dom` tool with 9 actions. The agent chooses which action to call based on the task and page state.
-
-| Action | Description | Returns |
+| Action | Description | Playbook-specific notes |
 |---|---|---|
-| `goto(url)` | Navigate to a URL | DOM snapshot |
-| `click(selector)` | Click an element (CSS, `text=`, `role=` selectors) | DOM snapshot |
-| `screenshot` | Capture the viewport | Screenshot + DOM |
-| `key_press(text, key)` | Type text and/or press a key (Enter, Tab, etc.) | Confirmation |
-| `scroll(direction, amount)` | Scroll the page | Screenshot |
-| `extract(selector, mode)` | Extract text, HTML, or form values from elements | Content string |
-| `get_dom(selector?)` | Get a compact DOM snapshot (optionally scoped) | DOM string |
-| `wait_for(selector, state)` | Wait for an element to be visible, hidden, etc. | Confirmation |
-| `execute_sequence(steps)` | **Batch multiple actions in a single tool call** | Combined results + DOM |
+| `goto(url)` | Navigate to a URL | Supports `{param}` placeholders in URL |
+| `click(selector)` | Click an element | Uses selector fallback chain |
+| `key_press(text, key)` | Type text and/or press a key | `text` supports `{param}` placeholders; if selector provided, uses `page.fill()` |
+| `scroll(direction, amount)` | Scroll the page | Direction: up/down/left/right |
+| `wait_for(selector, state)` | Wait for element state | Comma-separated selectors supported |
+| `extract(selector, mode)` | Extract text, HTML, or form values | Modes: `text` (default), `html`, `value`. Output shown in results |
+| `evaluate(script)` | Execute JavaScript on the page | For reading DOM values, navigating via JS |
+| `select(selector, value)` | Select a dropdown option | Uses selector fallback chain |
 
-### Why `execute_sequence` matters
+### Playbook features
 
-Each tool call has ~3-5s of overhead (API round-trip + thinking). Without batching, filling a 5-field form takes 5 separate calls = ~20s of pure overhead. With `execute_sequence`, it's a single call:
+- **Selector fallback chains**: Each step tries `primary` selector first, then `fallbacks` in order (800ms timeout per selector). Handles dashboard UI changes without playbook edits.
+- **Step verification**: Assert expected state after every action — `expect_url_contains`, `expect_element_visible`, `expect_element_gone`, `expect_text_on_page`. Catches failures immediately.
+- **Parameter injection**: `{param_name}` placeholders in selectors, params, descriptions, and verification are replaced at runtime.
+- **Data extraction**: `extract` steps capture text from elements and display it in the output.
+- **JavaScript evaluation**: `evaluate` steps run arbitrary JS for complex DOM interactions (e.g., reading FK select values and navigating to detail pages).
+- **Per-playbook guardrails**: Each playbook can specify its own `guardrails` config (private networks, LLM checks, URL limits). Used both during playbook execution and when falling back to the LLM agent.
+- **Failure handling**: Each step can specify `on_failure`:
+  - `llm_recover` (default) — after 2 failures, hands off ALL remaining steps to the full LLM agent
+  - `retry` — retry without LLM fallback
+  - `abort` — stop immediately
+- **Authentication**: Built-in login flow with session persistence via Playwright cookies/localStorage. Sessions saved to `~/.cua/sessions/` and reused across runs.
 
-```json
-{
-  "action": "execute_sequence",
-  "steps": [
-    {"action": "click", "selector": "#email"},
-    {"action": "key_press", "text": "user@example.com"},
-    {"action": "click", "selector": "#password"},
-    {"action": "key_press", "text": "secretpass"},
-    {"action": "click", "selector": "button[type=submit]"}
-  ]
-}
+### Execution tiers
+
+| Tier | When | LLM Calls | Latency |
+|------|------|-----------|---------|
+| Playbook hit | Known flow, selectors match | 0 | 1-5s |
+| Playbook + LLM handoff | Known flow, page changed | 5-15 | 15-30s |
+| Full LLM agent | No playbook, unknown flow | 5-15 | 30-60s |
+
+### LLM handoff on failure
+
+When a playbook step fails twice, CUA doesn't try to patch individual steps — the page state has likely diverged from what the playbook expects. Instead, it hands off the **entire remaining task** to the full LLM agent with:
+- The playbook's name, description, and guardrails config
+- What failed and the current page URL
+- Descriptions of ALL remaining steps
+
+The LLM agent takes full browser control and drives to completion, just like a normal CUA run but with a focused directive.
+
+## Authentication
+
+CUA handles dashboard login with session persistence:
+
+```bash
+python scripts/run_local.py \
+  --directive "..." \
+  --playbook my_flow \
+  --credentials '{"email": "admin@company.com", "password": "secret"}'
 ```
 
-Intermediate steps skip screenshots for speed. Only the final step captures the DOM, so the agent sees the result of the entire sequence in one response.
+The auth system:
+1. Tries restoring a previously saved session (cookies/localStorage)
+2. If expired, logs in by detecting common form patterns (email/username + password fields)
+3. Saves the new session for future runs
 
-### Design choices
+Sessions are stored at `~/.cua/sessions/` and reused across runs.
 
-- **DOM-first, not screenshot-first.** `goto` and `click` return a compact DOM snapshot (~200-500 tokens) instead of a screenshot (~1-2K image tokens). The agent only takes screenshots when it needs to *see* the page visually.
-- **Streaming execution.** Tool calls execute as they arrive from the Claude API stream, not after the full response.
-- **Adaptive thinking budget.** Full budget for planning (first 2 steps), reduced after 3+ consecutive successes, reset on errors.
-- **Aggressive context pruning.** Old screenshots, DOM snapshots, and thinking blocks are stripped every iteration. Input tokens stay flat regardless of run length.
-- **Page-change detection.** After `goto`/`click`/`execute_sequence`, remaining tool calls in the same response are skipped — they were planned on stale state.
-- **CAPTCHA auto-resolution.** Patchright stealth patches + auto-wait up to 30s for Cloudflare/reCAPTCHA/hCaptcha.
-- **Stuck detection.** System hint after 4+ of the last 6 actions produce identical results.
+## Guardrails
+
+CUA uses a layered safety architecture combining proactive observation control with runtime checks. Playbook execution bypasses most of these (pre-approved flows), but the LLM fallback path enforces all layers.
+
+### Cognitive Blinders
+
+The primary safety mechanism is **Cognitive Blinders** — a proactive observation filtering system that controls what the agent can see, rather than reactively blocking what it tries to do.
+
+**The core insight**: if the agent can't see a "delete account" button, it can't click it. If it can't see injected instructions in a sidebar ad, it can't follow them.
+
+```mermaid
+graph LR
+    A["User Directive"] --> B["Task Scope<br/>Extraction"]
+    B --> C["DOM<br/>Blinders"]
+    C --> D["Filtered<br/>DOM"]
+    D --> E["Agent"]
+    E --> F["Scope Verifier +<br/>Action Validator"]
+    F -->|Safe| G["Execute"]
+    F -->|Blocked| H["Feedback"]
+
+    style A fill:#e8f5e9
+    style D fill:#e3f2fd
+    style G fill:#e8f5e9
+    style H fill:#ffebee
+```
+
+**How it works:**
+
+**1. Task Scope Extraction** — Before the agent sees any web content, the directive is classified into a goal type that determines what the agent can see and do.
+
+| Goal Type | Forms | Dangerous Buttons | Account Controls | `key_press` | `execute_sequence` |
+|---|---|---|---|---|---|
+| `read` | Hidden | Hidden | Hidden | Blocked | Blocked |
+| `navigate` | Hidden | Hidden | Hidden | Blocked | Blocked |
+| `interact` | Visible | Visible | Hidden | Allowed | Allowed |
+| `fill_form` | Visible | Visible | Visible | Allowed | Allowed |
+| `dashboard` | Visible | Visible | Visible | Allowed | Allowed |
+
+**2. DOM Blinders** — The DOM snapshot sent to the agent is filtered at two levels:
+
+| Level | Where | What it does |
+|---|---|---|
+| **JS-side** | `dom_snapshot.js` in browser | Filters elements by category (forms, action buttons, account controls) based on task scope. Elements are removed before they leave the browser. |
+| **Python-side** | `blinders/filters.py` | Scans for prompt injection patterns (`"ignore previous instructions"`, `SYSTEM:`, `[INST]` tokens) and redacts them. Wraps content with provenance markers (`[web-content-start/end]`). |
+
+**3. Scope Verifier + Action Validator** — Multi-layer pre-execution check:
+
+| Layer | Speed | What it checks |
+|---|---|---|
+| **Deterministic** | ~25us | Action type allowed for goal? Domain in scope? SSRF? Navigation limit? |
+| **Regex fast-path** | ~5us | Is this a known-safe selector (navigation, menus, filters)? |
+| **Action Validator (Haiku)** | ~500ms | Is this action aligned with the user's task? (LLM fallback path only) |
+
+**4. Tool Schema Restriction** — The tool definition sent to Claude only includes actions allowed by the task scope. For a `read` task, `key_press` and `execute_sequence` are absent from the schema — the model cannot select them.
+
+### Runtime Guardrails
+
+Defense-in-depth checks that run alongside Cognitive Blinders. Configurable per-playbook via the `guardrails` section in YAML:
+
+| Guard | Default | Configurable |
+|---|---|---|
+| Domain blocklist | Banking, government, email, payment, social media | `allowed_domains` / `blocked_domains` |
+| Destructive action detection | Regex fast-path for safe selectors; Haiku validation for ambiguous ones | `enable_llm_action_check` |
+| SSRF protection | Private IPs blocked (override per-playbook) | `allow_private_networks` |
+| URL visit limit | 50 unique URLs per run | `max_urls_visited` |
+| Consecutive error limit | 5 errors | `max_consecutive_errors` |
+| CAPTCHA handling | Auto-detect + type-specific timeouts (Cloudflare 30s, reCAPTCHA 5s) | Skipped for dashboard goal type |
 
 ## Session Recording & Replay
 
@@ -99,14 +259,14 @@ Every CUA session is recorded by default using Playwright's built-in tracing. Af
 
 ### Local runs
 
-Recordings are saved to the `output/` directory alongside the action log:
+Recordings are saved to the `output/` directory:
 
 ```bash
-python scripts/run_local.py --directive "Go to example.com and find pricing"
+python scripts/run_local.py --directive "Cancel order #123" --playbook cancel_order
 # After completion:
 # output/trace.zip         — Playwright trace (open in trace viewer)
-# output/screenshots/      — per-action JPEGs (when screenshots are captured)
-# output/action_log.json   — structured action log
+# output/screenshots/      — per-action JPEGs
+# output/action_log.json   — structured action log (LLM path only)
 ```
 
 Replay the session:
@@ -132,251 +292,39 @@ curl -o trace.zip https://your-app--cua.modal.run/runs/{run_id}/recording/trace
 curl -o shot.jpg https://your-app--cua.modal.run/runs/{run_id}/recording/screenshots/0003_click.jpg
 ```
 
-### Configuration
-
-Recording is enabled by default. To customize, pass a `recording` object in the `POST /runs` request:
-
-```json
-{
-  "directive": "...",
-  "recording": {
-    "enabled": true,
-    "screenshots": true,
-    "trace": true
-  }
-}
-```
-
-Set `"enabled": false` to disable recording entirely for a session.
-
-## Guardrails
-
-CUA uses a layered safety architecture combining proactive observation control with traditional runtime checks.
-
-### Cognitive Blinders
-
-The primary safety mechanism is **Cognitive Blinders** — a proactive observation filtering system that controls what the agent can see, rather than reactively blocking what it tries to do.
-
-**The core insight**: if the agent can't see a "delete account" button, it can't click it. If it can't see injected instructions in a sidebar ad, it can't follow them. Research shows that filtering observations drops prompt injection attack success from 80%+ to under 2% ([FocusAgent, 2025](https://arxiv.org/html/2510.03204)), while also improving performance by reducing noise.
-
-Traditional guardrails are reactive — the agent sees everything, decides to act, then rules block bad actions. This is fragile because the agent has already been influenced by what it saw. Cognitive Blinders flips the model: control what enters the agent's observation space proactively.
-
-```mermaid
-graph LR
-    A["User Directive"] --> B["Task Scope<br/>Extraction"]
-    B --> C["DOM<br/>Blinders"]
-    C --> D["Filtered<br/>DOM"]
-    D --> E["Agent"]
-    E --> F["Scope Verifier +<br/>Action Validator"]
-    F -->|Safe| G["Execute"]
-    F -->|Blocked| H["Feedback"]
-
-    style A fill:#e8f5e9
-    style D fill:#e3f2fd
-    style G fill:#e8f5e9
-    style H fill:#ffebee
-```
-
-**How it works:**
-
-**1. Task Scope Extraction** — Before the agent sees any web content, the directive is classified into a goal type. This determines what the agent can see and do for the entire run.
-
-```mermaid
-graph LR
-    A["'Find price on apple.com'"] -->|classify| B["read"]
-    C["'Log in and find orders'"] -->|classify| D["fill_form"]
-    E["'Click download button'"] -->|classify| F["interact"]
-    G["'Go to example.com'"] -->|classify| H["navigate"]
-```
-
-- **Primary**: Haiku LLM classification (~200ms, one-time) — handles nuanced directives and sets the initial task scope
-- **Fallback**: Fast keyword matching (~25μs) — used when LLM classification is disabled or unavailable
-
-Each goal type gets adaptive defaults:
-
-| Goal Type | Forms | Dangerous Buttons | Account Controls | `key_press` | `execute_sequence` |
-|---|---|---|---|---|---|
-| `read` | Hidden | Hidden | Hidden | Blocked | Blocked |
-| `navigate` | Hidden | Hidden | Hidden | Blocked | Blocked |
-| `interact` | Visible | Visible | Hidden | Allowed | Allowed |
-| `fill_form` | Visible | Visible | Visible | Allowed | Allowed |
-
-**2. DOM Blinders** — The DOM snapshot sent to the agent is filtered at two levels:
-
-| Level | Where | What it does |
-|---|---|---|
-| **JS-side** | `dom_snapshot.js` in browser | Filters elements by category (forms, action buttons, account controls) based on task scope. Elements are removed before they leave the browser. |
-| **Python-side** | `blinders/filters.py` | Scans for prompt injection patterns (`"ignore previous instructions"`, `SYSTEM:`, `[INST]` tokens) and redacts them. Wraps content with provenance markers (`[web-content-start/end]`). |
-
-**3. Scope Verifier + Action Validator** — Optimized multi-layer pre-execution check using DAG pruning to eliminate redundant LLM calls:
-
-| Layer | Speed | What it checks |
-|---|---|---|
-| **Deterministic** | ~25μs | Action type allowed for goal? Domain in scope? SSRF? Navigation limit? |
-| **Regex fast-path** | ~5μs | Is this a known-safe selector (navigation, menus, filters, CSS selectors)? |
-| **Action Validator (Haiku)** | ~500ms | Is this action aligned with the user's task? Context-aware destructive detection. |
-
-The pipeline is optimized to minimize LLM overhead while maximizing safety:
-- **Regex fast-path** — safe selectors (navigation, menus, table rows, CSS selectors) skip Haiku entirely
-- **Context-aware safety** — the Action Validator considers the user's directive, so "click refund" is allowed when the task is "issue a refund" but blocked when the task is "check order status"
-- **DAG pruning** — redundant checks are eliminated: the Action Validator subsumes the destructive check (1 Haiku call per risky action, not 2-3)
-- **Selector caching** — once a selector is approved, future clicks skip re-validation
-- **Domain caching** — once a domain is approved for goto, future navigations skip re-validation
-- **Safe action skipping** — `extract`, `screenshot`, `scroll`, `get_dom`, `wait_for` bypass validation entirely
-- **Batched sequences** — `execute_sequence` sub-steps share a single validation pass
-- **Degraded-mode safety** — if LLM validation is unavailable, scope extraction falls back to a `read` task and ambiguous actions are blocked instead of silently failing open
-
-**4. Tool Schema Restriction** — The tool definition sent to Claude only includes actions allowed by the task scope. For a `read` task, `key_press` and `execute_sequence` are literally absent from the schema — the model cannot select them.
-
-### Runtime Guardrails
-
-Defense-in-depth checks that run alongside Cognitive Blinders:
-
-| Guard | Default | Configurable |
-|---|---|---|
-| Domain blocklist | Banking, government, email, payment, social media | `allowed_domains` / `blocked_domains` |
-| Destructive action detection | Context-aware Action Validator (Haiku) with regex fast-path for safe selectors; regex-only fallback via `enable_llm_action_check: false` | `enable_llm_action_check` |
-| SSRF protection | Private IPs, localhost, cloud metadata (169.254.x.x) | `allow_private_networks` |
-| URL visit limit | 50 unique URLs per run | `max_urls_visited` |
-| Consecutive error limit | 5 errors | `max_consecutive_errors` |
-
-## Profiles
-
-Profiles specialize the agent by bundling a prompt extension and guardrail overrides. The same tools and agent loop are used for all profiles.
-
-| Profile | Description |
-|---|---|
-| `default` | General-purpose browser automation |
-| `research` | Broader navigation (100 URLs), no destructive action blocks, citation-focused |
-| `form_filling` | Unblocks purchase/submit actions, aggressive batching for form workflows |
-
-Create custom profiles by adding a YAML file to `profiles/`. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-## API Reference
-
-### POST /runs
-
-Create a new CUA run. Requires `Authorization: Bearer <CUA_API_KEY>` header (if `CUA_API_KEY` env var is set).
-
-```json
-{
-  "directive": "Go to example.com and click the signup button",
-  "model": "claude-sonnet-4-6",
-  "max_steps": 50,
-  "timeout_seconds": 600,
-  "thinking_budget": 4096,
-  "display_width": 1280,
-  "display_height": 720,
-  "profile": "default",
-  "start_url": "https://example.com",
-  "credentials": {
-    "github": { "username": "user", "password": "pass" }
-  },
-  "proxy": "http://user:pass@proxy:8080",
-  "guardrails": {
-    "allowed_domains": ["example.com", "*.example.org"],
-    "max_urls_visited": 100
-  },
-  "recording": {
-    "enabled": true,
-    "screenshots": true,
-    "trace": true
-  }
-}
-```
-
-### GET /runs/{run_id}
-Get run status and action history.
-
-### POST /runs/{run_id}/stop
-Terminate a run early.
-
-### GET /runs/{run_id}/stream
-SSE stream of real-time action events.
-
-### GET /runs/{run_id}/recording/manifest
-List recording artifacts (trace, screenshots) for a completed run.
-
-### GET /runs/{run_id}/recording/trace
-Download the Playwright trace ZIP. Open in [trace.playwright.dev](https://trace.playwright.dev) for frame-by-frame replay.
-
-### GET /runs/{run_id}/recording/screenshots/{filename}
-Download an individual screenshot JPEG.
-
-```bash
-curl -N https://your-app--cua.modal.run/runs/sb-abc123/stream
-# data: {"step":1,"action":"goto","input_summary":"navigate to https://example.com",...}
-# event: complete
-# data: {"status":"completed"}
-```
-
-## Configuration
-
-| Parameter | Default | Description |
-|---|---|---|
-| `directive` | (required) | Natural language task for the agent |
-| `model` | `claude-sonnet-4-6` | Claude model ID |
-| `max_steps` | 50 | Maximum tool-call iterations (1-200) |
-| `timeout_seconds` | 600 | Sandbox timeout (30-3600s) |
-| `thinking_budget` | 4096 | Extended thinking token budget |
-| `display_width/height` | 1280x720 | Virtual display resolution |
-| `profile` | `default` | Agent profile name |
-| `start_url` | None | URL to open on browser launch |
-| `credentials` | None | Service credentials (injected into system prompt) |
-| `proxy` | None | Proxy URL for bot avoidance |
-| `guardrails` | None | GuardrailConfig overrides (domains, actions, limits) |
-| `recording` | Enabled | Recording config (screenshots, trace). Enabled by default. |
-
-## Security
-
-- **Credentials**: Injected as plaintext into the system prompt sent to the Anthropic API. Use service-specific tokens with minimal scope.
-- **API authentication**: Set `CUA_API_KEY` environment variable to require Bearer token auth on all endpoints.
-- **Action logs**: `key_press` text is truncated in logs but not fully redacted. Avoid typing sensitive data that shouldn't appear in logs.
-
-## Cost Estimation
-
-Per run (typical 10-20 step task with DOM-first actions):
-- **Claude API**: ~$0.02-0.15 (Sonnet, minimal screenshots)
-- **Modal Sandbox**: ~$0.01-0.02 (1-5 min, 1 core + 2GB RAM at $0.04/core/hr + $0.007/GiB/hr sandbox rates)
-- **Total**: ~$0.03-0.17 per run
-
-DOM-first actions reduce cost vs screenshot-heavy approaches — each screenshot is ~1-2K image tokens, while DOM snapshots are ~200-500 text tokens.
-
 ## Observability
 
 CUA includes built-in OpenTelemetry instrumentation for distributed tracing, metrics, and structured logging.
 
 ### Traces
 
-Every session produces a single trace linking the outer API request to every agent step inside the sandbox. The waterfall view shows:
+Every session produces a single trace linking the outer API request to every agent step inside the sandbox:
 
 ```text
-cua.session                          → API request lifecycle
-  cua.sandbox.create                 → Modal sandbox creation
-  cua.agent.run                      → Full agent run (linked via W3C Traceparent)
-    cua.agent.setup                  → Browser launch + blinders init
-    cua.agent.iteration [×N]         → One per loop iteration
-      cua.llm.call                   → Claude API call (streaming or fallback)
-      cua.tool.execute [×M]          → Each browser action
-        cua.guardrail.check          → Safety verification
-        cua.browser.action           → Patchright execution
-        cua.sequence.step [×K]       → Sub-steps in execute_sequence
-    cua.recording.start              → Recording initialization
-    cua.recording.stop               → Recording finalization + manifest
-    cua.recording.upload             → Persist to volume/disk
+cua.session                          -> API request lifecycle
+  cua.sandbox.create                 -> Modal sandbox creation
+  cua.agent.run                      -> Full agent run
+    cua.agent.setup                  -> Browser launch + blinders init
+    cua.agent.iteration [xN]         -> One per loop iteration
+      cua.llm.call                   -> Claude API call
+      cua.tool.execute [xM]          -> Each browser action
+        cua.guardrail.check          -> Safety verification
+        cua.browser.action           -> Patchright execution
+    cua.recording.start              -> Recording initialization
+    cua.recording.stop               -> Recording finalization
 ```
 
-Spans include GenAI semantic convention attributes (`gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`), action details (selector, URL, success/error), guardrail decisions, and timing.
+Spans include GenAI semantic convention attributes (`gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`), action details, guardrail decisions, and timing.
 
-### Configuration
+### Telemetry configuration
 
 | Env Var | Default | Description |
 |---|---|---|
 | `OTEL_SDK_DISABLED` | `true` | Set to `false` to enable tracing and metrics |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP gRPC collector endpoint |
-| `OTEL_EXPORTER_OTLP_INSECURE` | `false` | Set to `true` when using an insecure local collector |
+| `OTEL_EXPORTER_OTLP_INSECURE` | `false` | Set to `true` for insecure local collector |
 | `OTEL_RESOURCE_ENV` | `local` | Deployment environment label |
-| `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Sampling rate (0.0–1.0) |
+| `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Sampling rate (0.0-1.0) |
 
 Quick start with Jaeger:
 
@@ -386,24 +334,54 @@ OTEL_SDK_DISABLED=false python scripts/run_local.py --directive "..."
 # Open http://localhost:16686 to see traces
 ```
 
+## Configuration
+
+### CLI parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `--directive` | (required) | Natural language task description |
+| `--playbook` | None | Playbook ID to execute deterministically |
+| `--playbook-params` | None | JSON dict of playbook parameters |
+| `--credentials` | None | JSON dict with `username`/`email` and `password` |
+| `--model` | `claude-sonnet-4-6` | Claude model for LLM agent fallback |
+| `--max-steps` | 50 | Max tool-call iterations (LLM path only) |
+| `--allow-private-networks` | false | Allow localhost and private IPs |
+| `--start-url` | None | URL to open on browser launch |
+| `--display` | `:99` | X display (Linux) |
+
+### Playbook guardrails config
+
+Set per-playbook in the YAML `guardrails` section:
+
+```yaml
+guardrails:
+  allow_private_networks: true          # Allow localhost/internal IPs
+  enable_llm_action_check: false        # Skip Haiku safety check for pre-approved flows
+  max_urls_visited: 200                 # URL navigation limit
+  max_consecutive_errors: 10            # Error limit before aborting
+  allowed_domains: ["*.internal.com"]   # Domain allowlist (optional)
+```
+
+When omitted, safe defaults apply (private networks blocked, LLM checks enabled, standard limits).
+
 ## Project Structure
 
 ```text
 cua/
-├── agent/           Agent loop, prompts, session runner, LLM runtime helpers
-├── blinders/        Cognitive Blinders (scope, DOM filters, verifier, action validator)
-├── bridge/          Browser lifecycle, DOM execution helpers, CAPTCHA handling, router
-├── api/             FastAPI servers, typed API models, run registry, status API
+├── playbooks/       Playbook system (schema, store, runner, parser, auth)
+│   └── definitions/ YAML playbook files
+├── agent/           LLM agent loop (fallback path)
+├── blinders/        Cognitive Blinders (scope, DOM filters, verifier)
+├── bridge/          Browser lifecycle, DOM execution, CAPTCHA handling, router
+├── api/             FastAPI server, API models, run registry
 ├── guardrails/      Domain/action/SSRF safety engine
-├── recording/       Session recording (Playwright tracing + screenshot persistence)
-├── profiles/        YAML profile definitions
-├── sandbox/         Modal image definition + entrypoint script
-├── telemetry/       OpenTelemetry instrumentation, metrics, span helpers, logging
+├── recording/       Session recording (Playwright tracing + screenshots)
+├── profiles/        Agent profile configuration
+├── telemetry/       OpenTelemetry instrumentation
 ├── scripts/         Local dev runner
-├── tests/           Unit + browser integration tests
-├── config.py        Centralized CUAConfig (env vars, RunConfig, profiles)
-├── exceptions.py    Custom exception hierarchy
-└── Dockerfile       Docker-based sandbox (alternative to Modal)
+├── tests/           Unit + integration tests
+└── config.py        Centralized configuration
 ```
 
 ## License

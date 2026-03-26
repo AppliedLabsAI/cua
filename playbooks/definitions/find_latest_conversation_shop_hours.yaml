@@ -1,0 +1,58 @@
+id: find_latest_conversation_shop_hours
+name: Find Latest Conversation Shop Opening Hours
+description: >
+  Log into the admin dashboard, find the shop associated with the latest
+  conversation (sorted by creation date), and extract its opening hours.
+tags:
+  ["latest conversation", "opening hours", "shop hours", "conversation shop"]
+auth_required: true
+start_url: "http://localhost:8000/admin"
+guardrails:
+  allow_private_networks: true
+  enable_llm_action_check: false
+  max_urls_visited: 200
+  max_consecutive_errors: 10
+parameters: []
+
+steps:
+  # --- Navigate to conversations sorted by created_at descending ---
+  - action: goto
+    params:
+      url: "http://localhost:8000/admin/core/conversation/?o=-13"
+    verify:
+      expect_element_visible: "#result_list"
+    description: Navigate to conversations sorted by creation date (newest first)
+
+  # --- Click the first (latest) conversation ---
+  - action: click
+    selector:
+      primary: "#result_list tbody tr:first-child a"
+      fallbacks:
+        - "#result_list tbody tr:first-child th a"
+        - "table tbody tr:first-child a"
+    verify:
+      expect_url_contains: "/change/"
+    description: Click the latest conversation
+
+  # --- Read shop ID from FK select and navigate to its change page ---
+  - action: evaluate
+    params:
+      script: >
+        const shopId = document.querySelector('#id_shop').value;
+        window.location.href = '/admin/core/shop/' + shopId + '/change/';
+    verify:
+      expect_url_contains: "/admin/core/shop/"
+    description: Navigate to the shop detail page via its ID
+
+  # --- Extract the opening hours text ---
+  - action: extract
+    selector:
+      primary: "#id_opening_hours"
+      fallbacks:
+        - "textarea[name='opening_hours']"
+        - ".field-opening_hours textarea"
+        - ".field-opening_hours"
+    params:
+      mode: value
+    description: Extract opening hours
+    on_failure: llm_recover

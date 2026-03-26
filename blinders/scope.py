@@ -50,7 +50,8 @@ _FALLBACK_FILL_FORM_RE = re.compile(
     re.IGNORECASE,
 )
 _FALLBACK_INTERACT_RE = re.compile(
-    r"click|select\b|choose|download|upload|toggle|drag\b|drop\b",
+    r"click|select\b|choose|download|upload|toggle|drag\b|drop\b"
+    r"|add.+(?:to|into).+cart|remove.+(?:from).+cart|buy\b|purchase\b|place.+order",
     re.IGNORECASE,
 )
 _FALLBACK_READ_RE = re.compile(
@@ -170,7 +171,7 @@ def _default_visibility(goal_type: str) -> ElementVisibility:
             show_action_buttons=False,
             show_account_controls=False,
         )
-    elif goal_type == "fill_form":
+    elif goal_type in ("fill_form", "dashboard"):
         return ElementVisibility(
             show_forms=True,
             show_nav_links=True,
@@ -210,7 +211,7 @@ def _default_actions(goal_type: str) -> frozenset[str]:
                 "get_dom",
             }
         )
-    else:  # "interact" or "fill_form"
+    else:  # "interact", "fill_form", or "dashboard"
         return ALL_ACTIONS
 
 

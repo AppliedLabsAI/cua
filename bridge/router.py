@@ -113,13 +113,19 @@ class ActionRouter:
         self._recording = recording
 
         self._verifier = None
+        self._skip_captcha = False
         if blinders:
             from blinders.verifier import ScopeVerifier
+
+            # Dashboard goal type: skip LLM validation and CAPTCHA checks
+            is_dashboard = blinders.scope.goal_type == "dashboard"
+            self._skip_captcha = is_dashboard
 
             self._verifier = ScopeVerifier(
                 blinders.scope,
                 self.guardrails,
                 directive=directive,
+                skip_llm_validation=is_dashboard,
             )
 
     async def execute(self, tool_name: str, tool_input: dict) -> dict:
@@ -338,7 +344,7 @@ class ActionRouter:
                     filter_config=self._filter_config,
                 )
 
-                if action in _CAPTCHA_CHECK_ACTIONS:
+                if action in _CAPTCHA_CHECK_ACTIONS and not self._skip_captcha:
                     result = await self._handle_captcha(result)
                     final_url = self.browser.page.url
                     browser_span.set_attribute(

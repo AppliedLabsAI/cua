@@ -1,4 +1,18 @@
 name: default
-description: General-purpose browser automation agent.
-prompt_extension: null
-guardrail_overrides: {}
+description: >
+  Internal dashboard automation agent. Optimized for reliable, deterministic
+  execution of pre-approved workflows on trusted internal dashboards.
+  Skips unnecessary safety overhead (CAPTCHA, LLM action validation) for speed.
+prompt_extension: |
+  ## Dashboard Automation Mode
+  You are automating actions on a trusted internal dashboard.
+  The dashboard requires authentication — credentials are provided.
+  Be precise: verify each action succeeded before proceeding.
+  Use execute_sequence to batch related actions on the same page.
+  When clicking, prefer text-based or role-based selectors over CSS paths.
+  If an action fails, try alternative selectors before giving up.
+guardrail_overrides:
+  enable_llm_action_check: false
+  allow_private_networks: true
+  max_urls_visited: 200
+  max_consecutive_errors: 10

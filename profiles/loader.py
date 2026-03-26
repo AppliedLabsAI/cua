@@ -62,13 +62,20 @@ def apply_guardrail_overrides(
 ) -> GuardrailConfig:
     """Merge a profile's guardrail overrides into a base config.
 
-    Profile overrides take precedence over the base config values.
+    Profile provides defaults; explicit base config values take precedence.
+    This ensures env vars and API-specified guardrails override profile defaults.
     """
     if not profile.guardrail_overrides:
         return base or GuardrailConfig()
 
     from dataclasses import asdict
 
-    base_dict = asdict(base) if base else asdict(GuardrailConfig())
-    merged = {**base_dict, **profile.guardrail_overrides}
+    defaults = asdict(GuardrailConfig())
+    base_dict = asdict(base) if base else defaults
+    # Start with profile overrides, then layer explicit base values on top.
+    # Only apply base values that differ from defaults (i.e., explicitly set).
+    merged = {**defaults, **profile.guardrail_overrides}
+    if base:
+        explicit = {k: v for k, v in base_dict.items() if v != defaults.get(k)}
+        merged.update(explicit)
     return GuardrailConfig.from_dict(merged)

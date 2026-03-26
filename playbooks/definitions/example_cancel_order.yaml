@@ -1,0 +1,61 @@
+id: cancel_order
+name: Cancel Order
+description: Navigate to orders page, find order by ID, and cancel it
+tags: ["cancel", "order", "cancel order"]
+auth_required: true
+start_url: ""
+parameters:
+  - name: order_id
+    type: string
+    description: The order ID to cancel
+    inject_into: steps.2.params.text
+    pattern: "#?(\\d{3,})"
+
+steps:
+  - action: goto
+    params:
+      url: "https://dashboard.example.com/orders"
+    verify:
+      expect_url_contains: "/orders"
+      expect_element_visible: "table"
+    description: Navigate to orders page
+
+  - action: click
+    selector:
+      primary: "input[placeholder*='Search']"
+      fallbacks:
+        - "role=searchbox"
+        - "input[type='search']"
+    description: Click search box
+
+  - action: key_press
+    params:
+      text: "{order_id}"
+    description: Type order ID
+
+  - action: key_press
+    params:
+      key: Enter
+    verify:
+      expect_element_visible: "table tbody tr"
+    description: Submit search
+
+  - action: click
+    selector:
+      primary: "text=Cancel"
+      fallbacks:
+        - "button.cancel-btn"
+        - "role=button[name*='Cancel']"
+    verify:
+      expect_element_visible: "text=Are you sure"
+    description: Click cancel button
+
+  - action: click
+    selector:
+      primary: "text=Confirm"
+      fallbacks:
+        - "button.confirm-btn"
+        - ".modal button.primary"
+    verify:
+      expect_text_on_page: "cancelled"
+    description: Confirm cancellation

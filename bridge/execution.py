@@ -19,6 +19,7 @@ from bridge.browser import (
     _DOM_MAX_CHARS,
     _DOM_SNAPSHOT_INIT_JS,
     _EXTRACT_VALUE_INIT_JS,
+    _NAVIGATION_TIMEOUT,
     _SMART_EXTRACT_INIT_JS,
 )
 
@@ -120,7 +121,7 @@ async def execute_dom_action(
         if action == "goto":
             url = params["url"]
             resp = await page.goto(
-                url, wait_until="domcontentloaded", timeout=_DEFAULT_TIMEOUT
+                url, wait_until="domcontentloaded", timeout=_NAVIGATION_TIMEOUT
             )
             status = resp.status if resp else "unknown"
             if _skip_screenshot:

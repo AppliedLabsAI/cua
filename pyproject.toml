@@ -2,6 +2,8 @@
 name = "cua"
 version = "0.1.0"
 description = "Computer Use Agent — autonomous desktop automation"
+readme = "README.md"
+authors = [ { name = "Hwuiwon Kim" } ]
 requires-python = ">=3.13"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",

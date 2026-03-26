@@ -24,6 +24,14 @@ log = logging.getLogger(__name__)
 _POLL_INTERVAL_MS = 500
 _DEFAULT_TIMEOUT_MS = 30_000
 
+# Per-type timeouts: Patchright stealth auto-resolves Cloudflare, but cannot
+# solve reCAPTCHA or hCaptcha — fail fast for those instead of burning 30s.
+_TYPE_TIMEOUT_MS: dict[str, int] = {
+    "cloudflare": 30_000,
+    "recaptcha": 5_000,
+    "hcaptcha": 5_000,
+}
+
 # Self-healing JS: re-inject if missing (isolated context may not have init scripts).
 _DETECT_JS = """(initJS) => {
     if (!window.__detectCaptcha) new Function(initJS)();
@@ -118,7 +126,8 @@ async def handle_captcha_if_present(page: Page) -> CaptchaHandleResult:
     )
     start = time.monotonic()
 
-    resolved = await wait_for_captcha_resolution(page)
+    timeout = _TYPE_TIMEOUT_MS.get(detection.captcha_type or "", _DEFAULT_TIMEOUT_MS)
+    resolved = await wait_for_captcha_resolution(page, timeout_ms=timeout)
     wait_ms = int((time.monotonic() - start) * 1000)
 
     if resolved:
