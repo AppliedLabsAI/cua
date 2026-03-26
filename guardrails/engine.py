@@ -10,12 +10,31 @@ import fnmatch
 import ipaddress
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from settings import SAFETY_MODEL
 
 log = logging.getLogger(__name__)
+
+# Regex-based fast path for destructive click detection.
+# Matches against the selector text to avoid Haiku calls for obvious cases.
+_DESTRUCTIVE_RE = re.compile(
+    r"delete|remove|destroy|deactivate|close.account|terminate|cancel.subscription"
+    r"|refund|issue.refund|charge.?back"
+    r"|pay.now|buy.now|purchase|place.order|submit.order|complete.purchase|checkout"
+    r"|confirm.transfer|send.money|wire.transfer"
+    r"|send.email|send.message|publish|post.comment|submit.review"
+    r"|yes.*delete|confirm.*remov|approve.*refund",
+    re.IGNORECASE,
+)
+_SAFE_CLICK_RE = re.compile(
+    r"^(text=|role=)?(nav|menu|tab|link|filter|sort|search|view|show|open|expand"
+    r"|collapse|back|next|prev|page|details|info|settings|edit|close$"
+    r"|cancel$|dismiss|log.?in|sign.?in|submit$|save$|apply$|select|choose)",
+    re.IGNORECASE,
+)
 
 _BLOCKED_DOMAINS_DEFAULT = [
     # NOTE: *.bank.* only matches domains with literal ".bank." segment (e.g. foo.bank.example).
@@ -207,7 +226,11 @@ class GuardrailEngine:
         return self._llm_client
 
     def _check_destructive_llm(self, selector: str) -> GuardrailResult:
-        """Use Haiku to check if a click selector targets a destructive action.
+        """Check if a click selector targets a destructive action.
+
+        Uses a regex fast path for obvious cases (microseconds), falling back
+        to Haiku LLM only for ambiguous selectors. This preserves safety
+        while eliminating most LLM latency.
 
         Returns GuardrailResult(allowed=False) if destructive, allowed=True otherwise.
         Fail-open: any error results in allowed=True.
@@ -219,6 +242,18 @@ class GuardrailEngine:
         if normalized in self._approved_selectors:
             return GuardrailResult(allowed=True)
 
+        # --- Regex fast path: skip Haiku for obvious cases ---
+        if _DESTRUCTIVE_RE.search(normalized):
+            log.warning("Regex flagged destructive click: %s", selector)
+            return GuardrailResult(
+                allowed=False,
+                reason=f"Destructive action blocked (pattern match): {selector}",
+            )
+        if _SAFE_CLICK_RE.search(normalized):
+            self._approved_selectors.add(normalized)
+            return GuardrailResult(allowed=True)
+
+        # --- LLM fallback for ambiguous selectors ---
         try:
             prompt = _DESTRUCTIVE_CHECK_PROMPT.format(selector=selector)
             response = self._get_llm_client().messages.create(
