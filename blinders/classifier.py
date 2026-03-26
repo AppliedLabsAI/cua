@@ -43,10 +43,6 @@ IMPORTANT rules:
 - If the task mentions passwords, usernames, email/password fields -> "fill_form"
 - If the task is ONLY reading/finding information but requires login first -> \
 still "fill_form" (login needs typing)
-- If the directive starts with navigation ("go to", "visit") but ALSO includes \
-shopping or transactional verbs ("add to cart", "buy", "purchase", "place order"), \
-classify based on the MOST interactive action needed, not the navigation prefix.
-- Adding items to a cart or placing orders requires at minimum "interact".
 - If unsure between read and fill_form, prefer "fill_form" (safer)
 - If unsure between navigate and interact, prefer "interact" (safer)
 
