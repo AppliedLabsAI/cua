@@ -38,7 +38,7 @@ docker compose up
 **Local dev:**
 ```bash
 pip install -e ".[dev]" && patchright install chromium
-git config core.hooksPath .githooks  # enable pre-commit checks (ruff + ty)
+git config core.hooksPath .githooks  # enable pre-commit auto-fix/format + ty
 Xvfb :99 -screen 0 1280x720x24 &  # Linux only
 
 python scripts/run_local.py \
@@ -132,8 +132,8 @@ graph LR
     G["'Go to example.com'"] -->|classify| H["navigate"]
 ```
 
-- **Primary**: Fast keyword matching (~25μs) — regex-based classification that handles common directive patterns
-- **LLM fallback**: Haiku LLM call (~200ms, one-time) — available for nuanced directives when `use_llm=True` is passed
+- **Primary**: Haiku LLM classification (~200ms, one-time) — handles nuanced directives and sets the initial task scope
+- **Fallback**: Fast keyword matching (~25μs) — used when LLM classification is disabled or unavailable
 
 Each goal type gets adaptive defaults:
 
@@ -167,6 +167,7 @@ The pipeline is optimized to minimize LLM overhead while maximizing safety:
 - **Domain caching** — once a domain is approved for goto, future navigations skip re-validation
 - **Safe action skipping** — `extract`, `screenshot`, `scroll`, `get_dom`, `wait_for` bypass validation entirely
 - **Batched sequences** — `execute_sequence` sub-steps share a single validation pass
+- **Degraded-mode safety** — if LLM validation is unavailable, scope extraction falls back to a `read` task and ambiguous actions are blocked instead of silently failing open
 
 **4. Tool Schema Restriction** — The tool definition sent to Claude only includes actions allowed by the task scope. For a `read` task, `key_press` and `execute_sequence` are literally absent from the schema — the model cannot select them.
 
@@ -298,10 +299,9 @@ Spans include GenAI semantic convention attributes (`gen_ai.usage.input_tokens`,
 |---|---|---|
 | `OTEL_SDK_DISABLED` | `true` | Set to `false` to enable tracing and metrics |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP gRPC collector endpoint |
-| `OTEL_EXPORTER_OTLP_INSECURE` | `true` | Set to `false` for TLS in production |
+| `OTEL_EXPORTER_OTLP_INSECURE` | `false` | Set to `true` when using an insecure local collector |
 | `OTEL_RESOURCE_ENV` | `local` | Deployment environment label |
 | `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Sampling rate (0.0–1.0) |
-| `OTEL_PII_REDACTION` | `false` | Redact emails, phones, credit cards from logs and spans |
 
 Quick start with Jaeger:
 
@@ -315,10 +315,10 @@ OTEL_SDK_DISABLED=false python scripts/run_local.py --directive "..."
 
 ```text
 cua/
-├── agent/           Agent loop, tools, prompts, context management
+├── agent/           Agent loop, prompts, session runner, LLM runtime helpers
 ├── blinders/        Cognitive Blinders (scope, DOM filters, verifier, action validator)
-├── bridge/          Patchright executor, CAPTCHA handling, action router
-├── api/             FastAPI servers (outer API + inner status API)
+├── bridge/          Browser lifecycle, DOM execution helpers, CAPTCHA handling, router
+├── api/             FastAPI servers, typed API models, run registry, status API
 ├── guardrails/      Domain/action/SSRF safety engine
 ├── profiles/        YAML profile definitions
 ├── sandbox/         Modal image definition + entrypoint script
