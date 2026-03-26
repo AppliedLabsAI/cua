@@ -142,7 +142,9 @@ async def admin_login(request: Request):
         _logged_in_sessions.add("test-session")
         resp.set_cookie("session", "test-session")
         return resp
-    return HTMLResponse("<h1>Login Failed</h1><a href='/admin'>Try Again</a>", status_code=401)
+    return HTMLResponse(
+        "<h1>Login Failed</h1><a href='/admin'>Try Again</a>", status_code=401
+    )
 
 
 @app.get("/admin/conversations/{conv_id}", response_class=HTMLResponse)

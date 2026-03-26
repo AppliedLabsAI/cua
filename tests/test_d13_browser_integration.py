@@ -201,7 +201,7 @@ class TestD13LoginPage:
             filter_config=config,
         )
         # With read blinders, form inputs should be filtered out
-        assert "input" not in data["dom"].lower() or "type=\"text\"" not in data["dom"]
+        assert "input" not in data["dom"].lower() or 'type="text"' not in data["dom"]
 
     @pytest.mark.asyncio
     async def test_login_form_visible_with_fill_form_blinders(self, server_port):
@@ -235,8 +235,7 @@ class TestD13AdminDashboard:
         raw = data["raw_dom"]
         # At least some dangerous buttons should be in raw DOM
         has_danger = any(
-            kw in raw.lower()
-            for kw in ["refund", "archive", "deactivate", "export"]
+            kw in raw.lower() for kw in ["refund", "archive", "deactivate", "export"]
         )
         assert has_danger, f"Expected dangerous buttons in raw DOM, got: {raw[:500]}"
 
@@ -366,7 +365,9 @@ class TestD13ShopPage:
         verifier = ScopeVerifier(scope, GuardrailEngine())
 
         # In-scope (but SSRF may block 127.0.0.1)
-        result = verifier.check("goto", {"url": f"http://127.0.0.1:{server_port}/admin/shops"})
+        result = verifier.check(
+            "goto", {"url": f"http://127.0.0.1:{server_port}/admin/shops"}
+        )
         # 127.0.0.1 is a private IP, so SSRF blocks it
         assert result is not None  # blocked by SSRF
 
@@ -414,7 +415,14 @@ class TestD13FullPipelineComparison:
             filter_config=config,
         )
 
-        danger_keywords = ["delete", "disable", "deactivate", "refund", "archive", "close account"]
+        danger_keywords = [
+            "delete",
+            "disable",
+            "deactivate",
+            "refund",
+            "archive",
+            "close account",
+        ]
         raw_danger = sum(1 for kw in danger_keywords if kw in data["raw_dom"].lower())
         filtered_danger = sum(1 for kw in danger_keywords if kw in data["dom"].lower())
 

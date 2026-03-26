@@ -33,7 +33,7 @@ class TestDetectGoalType:
         assert _detect_goal_type("Select the premium plan") == "interact"
 
     def test_default_is_interact(self):
-        assert _detect_goal_type("Do something complex") == "interact"
+        assert _detect_goal_type("Do something complex", use_llm=False) == "interact"
 
     def test_fill_form_takes_precedence_over_navigate(self):
         # "fill" is checked before "go to"
@@ -67,7 +67,9 @@ class TestExtractDomains:
 
 class TestExtractTaskScope:
     def test_read_scope(self):
-        scope = extract_task_scope("Find the price of iPhone on apple.com")
+        scope = extract_task_scope(
+            "Find the price of iPhone on apple.com", use_llm=False
+        )
         assert scope.goal_type == "read"
         assert "apple.com" in scope.allowed_domains
         assert scope.visibility.show_forms is False
@@ -77,7 +79,9 @@ class TestExtractTaskScope:
         assert "goto" in scope.allowed_actions
 
     def test_fill_form_scope(self):
-        scope = extract_task_scope("Fill out the form on example.com/register")
+        scope = extract_task_scope(
+            "Fill out the form on example.com/register", use_llm=False
+        )
         assert scope.goal_type == "fill_form"
         assert scope.visibility.show_forms is True
         assert scope.visibility.show_action_buttons is True
@@ -85,13 +89,15 @@ class TestExtractTaskScope:
         assert scope.allowed_actions == ALL_ACTIONS
 
     def test_navigate_scope(self):
-        scope = extract_task_scope("Go to example.com")
+        scope = extract_task_scope("Go to example.com", use_llm=False)
         assert scope.goal_type == "navigate"
         assert scope.visibility.show_forms is False
         assert "key_press" not in scope.allowed_actions
 
     def test_interact_scope(self):
-        scope = extract_task_scope("Click the download button on example.com")
+        scope = extract_task_scope(
+            "Click the download button on example.com", use_llm=False
+        )
         assert scope.goal_type == "interact"
         assert scope.visibility.show_forms is True
         assert scope.visibility.show_action_buttons is True
@@ -99,7 +105,7 @@ class TestExtractTaskScope:
         assert scope.allowed_actions == ALL_ACTIONS
 
     def test_no_domains_is_permissive(self):
-        scope = extract_task_scope("Find the best restaurant nearby")
+        scope = extract_task_scope("Find the best restaurant nearby", use_llm=False)
         assert scope.allowed_domains == []
 
     def test_profile_overrides_widen_scope(self):
@@ -113,7 +119,7 @@ class TestExtractTaskScope:
             },
         )
         scope = extract_task_scope(
-            "Research AI safety papers", profile=research_profile
+            "Research AI safety papers", profile=research_profile, use_llm=False
         )
         assert scope.goal_type == "read"
         # Research profile should widen visibility for action buttons

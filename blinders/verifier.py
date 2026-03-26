@@ -43,7 +43,9 @@ class ScopeVerifier:
         # LLM call) but KEEP the guardrails destructive-click check — even trusted
         # domains can have destructive buttons (refund, delete, etc.).
         self._validator = (
-            None if skip_llm_validation else (ActionValidator(directive) if directive else None)
+            None
+            if skip_llm_validation
+            else (ActionValidator(directive) if directive else None)
         )
 
     def check(
@@ -77,10 +79,7 @@ class ScopeVerifier:
                 action,
                 self.scope.goal_type,
             )
-            return (
-                f"Action '{action}' not allowed for "
-                f"{self.scope.goal_type} tasks"
-            )
+            return f"Action '{action}' not allowed for {self.scope.goal_type} tasks"
 
         # 2. Domain scope (for goto actions)
         if action == "goto":
@@ -129,7 +128,8 @@ class ScopeVerifier:
         # Skipped for sub-steps inside execute_sequence (_skip_llm=True).
         if self._validator and not _skip_llm:
             llm_block = self._validator.validate(
-                action, tool_input,
+                action,
+                tool_input,
                 page_url=page_url,
                 page_title=page_title,
             )

@@ -49,6 +49,9 @@ sandbox_image = (
         "fastapi>=0.115.0",
         "uvicorn>=0.34.0",
         "httpx>=0.28.0",
+        "opentelemetry-api>=1.28",
+        "opentelemetry-sdk>=1.28",
+        "opentelemetry-exporter-otlp-proto-grpc>=1.28",
     )
     .run_commands(
         "patchright install chromium",
@@ -63,6 +66,7 @@ sandbox_image = (
     .add_local_file("exceptions.py", "/opt/cua/exceptions.py")
     .add_local_dir("blinders", "/opt/cua/blinders")
     .add_local_dir("guardrails", "/opt/cua/guardrails")
+    .add_local_dir("telemetry", "/opt/cua/telemetry")
     .env(
         {
             "DISPLAY": ":99",
@@ -79,11 +83,18 @@ PORT_NOVNC = 6080
 PORT_STATUS = 8090
 
 
-def create_cua_sandbox(config: RunConfig, app: modal.App) -> modal.Sandbox:
+def create_cua_sandbox(
+    config: RunConfig,
+    app: modal.App,
+    extra_env: dict[str, str] | None = None,
+) -> modal.Sandbox:
     """Create a Modal sandbox configured for a CUA run.
 
     Returns the sandbox immediately — startup is asynchronous.
     Use sandbox.tunnels() to get the noVNC and status API URLs.
+
+    ``extra_env`` is merged into the sandbox environment — used to propagate
+    OTel trace context (TRACEPARENT, TRACESTATE) and OTel config vars.
     """
     secrets: list[modal.Secret] = [modal.Secret.from_name("anthropic-secret")]
 
@@ -104,6 +115,25 @@ def create_cua_sandbox(config: RunConfig, app: modal.App) -> modal.Sandbox:
 
     if config.guardrails:
         env["GUARDRAILS_JSON"] = json.dumps(config.guardrails)
+
+    # Propagate OTel trace context and config into sandbox
+    if extra_env:
+        env.update(extra_env)
+
+    from settings import get_settings
+
+    settings = get_settings()
+    if not settings.otel_sdk_disabled:
+        env.setdefault("OTEL_SDK_DISABLED", "false")
+        env.setdefault(
+            "OTEL_EXPORTER_OTLP_ENDPOINT", settings.otel_exporter_otlp_endpoint
+        )
+        env.setdefault(
+            "OTEL_EXPORTER_OTLP_INSECURE",
+            str(settings.otel_exporter_otlp_insecure).lower(),
+        )
+        env.setdefault("OTEL_RESOURCE_ENV", settings.otel_resource_env)
+        env.setdefault("OTEL_TRACES_SAMPLER_ARG", str(settings.otel_traces_sampler_arg))
 
     return modal.Sandbox.create(
         "/opt/cua/sandbox/entrypoint.sh",

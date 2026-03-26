@@ -22,10 +22,11 @@ import sys
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s %(message)s",
-)
+from telemetry.logging import setup_logging
+
+setup_logging()
+# Suppress noisy HTTP request logs from httpx
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("cua.local")
 
 

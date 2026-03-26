@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     modal_sandbox_id: str = "local"
     cua_api_key: str = ""
 
+    # OpenTelemetry (standard env var names)
+    otel_sdk_disabled: bool = True
+    otel_exporter_otlp_endpoint: str = "http://localhost:4317"
+    otel_exporter_otlp_protocol: str = "grpc"
+    otel_exporter_otlp_insecure: bool = True
+    otel_resource_env: str = "local"
+    otel_traces_sampler_arg: float = 1.0
 
 
 @lru_cache

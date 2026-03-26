@@ -7,6 +7,7 @@ stealth to auto-resolve them. Enforces guardrails before every action.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -21,6 +22,22 @@ from bridge.browser import (
 )
 from bridge.captcha import handle_captcha_if_present
 from guardrails import GuardrailConfig, GuardrailEngine, GuardrailResult
+from telemetry import get_tracer
+from telemetry.metrics import guardrail_blocks_total
+from telemetry.spans import (
+    ATTR_BROWSER_ACTION,
+    ATTR_BROWSER_DOM_CHARS,
+    ATTR_BROWSER_PAGE_CHANGED,
+    ATTR_BROWSER_PAGE_URL,
+    ATTR_GUARD_ALLOWED,
+    ATTR_GUARD_CHECK_TYPE,
+    ATTR_GUARD_NEEDS_CONFIRM,
+    ATTR_GUARD_REASON,
+    BROWSER_ACTION,
+    CAPTCHA_HANDLE,
+    EVENT_CAPTCHA,
+    GUARDRAIL_CHECK,
+)
 
 if TYPE_CHECKING:
     from blinders.filters import DOMBlinders
@@ -94,14 +111,16 @@ class ActionRouter:
         self._filter_config = blinders.to_js_filter_config() if blinders else None
         self.action_log: list[ActionLog] = []
         self._step = 0
+        self._tracer = get_tracer()
 
-        # Use ScopeVerifier when blinders are active, else fall back to guardrails
         self._verifier = None
         if blinders:
             from blinders.verifier import ScopeVerifier
 
             self._verifier = ScopeVerifier(
-                blinders.scope, self.guardrails, directive=directive,
+                blinders.scope,
+                self.guardrails,
+                directive=directive,
             )
 
     async def execute(self, tool_name: str, tool_input: dict) -> dict:
@@ -113,16 +132,28 @@ class ActionRouter:
         action = tool_input.get("action", "")
         start = time.monotonic()
 
-        # --- Guardrail checks ---
-        guardrail_result = self._check_guardrails(tool_name, action, tool_input)
-        guardrail_block = (
-            guardrail_result.reason if guardrail_result and not guardrail_result.allowed else None
-        )
-        needs_confirmation = (
-            guardrail_result.needs_confirmation if guardrail_result else False
-        )
+        with self._tracer.start_as_current_span(GUARDRAIL_CHECK) as guard_span:
+            guardrail_result = self._check_guardrails(tool_name, action, tool_input)
+            guardrail_block = (
+                guardrail_result.reason
+                if guardrail_result and not guardrail_result.allowed
+                else None
+            )
+            needs_confirmation = (
+                guardrail_result.needs_confirmation if guardrail_result else False
+            )
+            check_type = "scope_verifier" if self._verifier else "legacy"
+            guard_attrs = {
+                ATTR_GUARD_ALLOWED: guardrail_block is None,
+                ATTR_GUARD_CHECK_TYPE: check_type,
+                ATTR_GUARD_NEEDS_CONFIRM: needs_confirmation,
+            }
+            if guardrail_block:
+                guard_attrs[ATTR_GUARD_REASON] = guardrail_block[:500]
+                guardrail_blocks_total().add(1, {"check_type": check_type})
+            guard_span.set_attributes(guard_attrs)
+
         if guardrail_block and needs_confirmation:
-            # Confirmation flow: return challenge as non-error so agent can confirm
             result = ActionResult(
                 text=(
                     f"⚠️ Destructive action detected: {guardrail_block}\n\n"
@@ -240,7 +271,8 @@ class ActionRouter:
             except RuntimeError:
                 pass  # browser not launched yet
             reason = self._verifier.check(
-                action, tool_input,
+                action,
+                tool_input,
                 page_url=page_url,
                 page_title=page_title,
             )
@@ -277,34 +309,57 @@ class ActionRouter:
     ) -> ActionResult:
         """Route to the correct executor."""
         if tool_name == "browser_dom":
-            result = await execute_dom_action(
-                action,
-                tool_input,
-                self.browser,
-                filter_config=self._filter_config,
-            )
-            if action in _CAPTCHA_CHECK_ACTIONS:
-                result = await self._handle_captcha(result)
-                # Check final URL after potential redirects — scope + guardrails
-                final_url = self.browser.page.url
-                if self._verifier:
-                    scope_block = self._verifier._check_domain(final_url)
-                    if scope_block:
-                        return ActionResult(error=f"Guardrail blocked: {scope_block}")
-                url_check = self.guardrails.check_url(final_url)
-                if not url_check.allowed:
-                    return ActionResult(error=f"Guardrail blocked: {url_check.reason}")
-            # Apply Python-side blinders post-filter on DOM content
-            if self.blinders and result.text and DOM_MARKER in result.text:
-                marker_idx = result.text.index(DOM_MARKER)
-                prefix = result.text[:marker_idx]
-                dom_content = result.text[marker_idx + len(DOM_MARKER) + 1 :]
-                filtered = self.blinders.filter_snapshot(dom_content)
-                result = ActionResult(
-                    screenshot_b64=result.screenshot_b64,
-                    text=f"{prefix}{DOM_MARKER}\n{filtered}",
-                    error=result.error,
+            page_url_before = ""
+            with contextlib.suppress(RuntimeError):
+                page_url_before = self.browser.page.url
+
+            with self._tracer.start_as_current_span(
+                BROWSER_ACTION,
+                attributes={
+                    ATTR_BROWSER_ACTION: action,
+                    ATTR_BROWSER_PAGE_URL: page_url_before,
+                },
+            ) as browser_span:
+                result = await execute_dom_action(
+                    action,
+                    tool_input,
+                    self.browser,
+                    filter_config=self._filter_config,
                 )
+
+                if action in _CAPTCHA_CHECK_ACTIONS:
+                    result = await self._handle_captcha(result)
+                    final_url = self.browser.page.url
+                    browser_span.set_attribute(
+                        ATTR_BROWSER_PAGE_CHANGED, final_url != page_url_before
+                    )
+                    if self._verifier:
+                        scope_block = self._verifier._check_domain(final_url)
+                        if scope_block:
+                            return ActionResult(
+                                error=f"Guardrail blocked: {scope_block}"
+                            )
+                    url_check = self.guardrails.check_url(final_url)
+                    if not url_check.allowed:
+                        return ActionResult(
+                            error=f"Guardrail blocked: {url_check.reason}"
+                        )
+
+                # Apply Python-side blinders post-filter on DOM content
+                if self.blinders and result.text and DOM_MARKER in result.text:
+                    marker_idx = result.text.index(DOM_MARKER)
+                    prefix = result.text[:marker_idx]
+                    dom_content = result.text[marker_idx + len(DOM_MARKER) + 1 :]
+                    filtered = self.blinders.filter_snapshot(dom_content)
+                    result = ActionResult(
+                        screenshot_b64=result.screenshot_b64,
+                        text=f"{prefix}{DOM_MARKER}\n{filtered}",
+                        error=result.error,
+                    )
+
+                if result.text:
+                    browser_span.set_attribute(ATTR_BROWSER_DOM_CHARS, len(result.text))
+
             return result
 
         else:
@@ -326,17 +381,27 @@ class ActionRouter:
         """Check for CAPTCHAs after navigation actions and wait for auto-resolution."""
         try:
             captcha_result = await handle_captcha_if_present(self.browser.page)
-            if captcha_result.detected and captcha_result.message:
-                text = (
-                    f"{captcha_result.message}\n{result.text}"
-                    if result.text
-                    else captcha_result.message
-                )
-                return ActionResult(
-                    screenshot_b64=result.screenshot_b64,
-                    text=text,
-                    error=result.error,
-                )
+            if captcha_result.detected:
+                with self._tracer.start_as_current_span(CAPTCHA_HANDLE) as captcha_span:
+                    captcha_span.add_event(
+                        EVENT_CAPTCHA,
+                        attributes={
+                            "captcha_type": captcha_result.captcha_type or "",
+                            "resolved": captcha_result.resolved,
+                            "wait_time_ms": captcha_result.wait_time_ms,
+                        },
+                    )
+                if captcha_result.message:
+                    text = (
+                        f"{captcha_result.message}\n{result.text}"
+                        if result.text
+                        else captcha_result.message
+                    )
+                    return ActionResult(
+                        screenshot_b64=result.screenshot_b64,
+                        text=text,
+                        error=result.error,
+                    )
         except Exception as e:
             log.warning("CAPTCHA handling failed: %s", e)
         return result
