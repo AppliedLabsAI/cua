@@ -38,6 +38,7 @@ docker compose up
 **Local dev:**
 ```bash
 pip install -e ".[dev]" && patchright install chromium
+git config core.hooksPath .githooks  # enable pre-commit checks (ruff + ty)
 Xvfb :99 -screen 0 1280x720x24 &  # Linux only
 
 python scripts/run_local.py \

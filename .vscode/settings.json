@@ -1,0 +1,36 @@
+{
+    "[python]": {
+        "editor.codeActionsOnSave": {
+            "source.fixAll": "explicit",
+            "source.organizeImports": "explicit"
+        },
+        "editor.defaultFormatter": "charliermarsh.ruff"
+    },
+    "editor.codeActionsOnSave": {
+        "source.fixAll": "explicit",
+        "source.organizeImports": "explicit"
+    },
+    "editor.formatOnSave": true,
+    "explorer.autoReveal": true,
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.git": true,
+        "**/.pytest_cache": true,
+        "**/.ruff_cache": true,
+        "**/.venv": true,
+    },
+    "files.watcherExclude": {
+        "**/__pycache__/**": true,
+        "**/.git/**": true,
+        "**/.pytest_cache/**": true,
+        "**/.ruff_cache/**": true,
+        "**/.venv/**": true,
+    },
+    "search.exclude": {
+        "**/__pycache__/**": true,
+        "**/.git/**": true,
+    },
+    "terminal.integrated.defaultProfile.linux": "zsh",
+    "terminal.integrated.defaultProfile.osx": "zsh",
+    "terminal.integrated.shellIntegration.enabled": true,
+}
