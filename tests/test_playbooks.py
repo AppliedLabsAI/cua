@@ -299,25 +299,3 @@ class TestRunnerParamInjection:
         result = runner._inject_params(step, {})
         assert result.action == "click"
         assert result.description == "Click button"
-
-
-# ---------------------------------------------------------------------------
-# Dashboard scope tests
-# ---------------------------------------------------------------------------
-
-
-class TestDashboardScope:
-    def test_dashboard_goal_type_gets_all_actions(self):
-        from blinders.scope import ALL_ACTIONS, _default_actions
-
-        actions = _default_actions("dashboard")
-        assert actions == ALL_ACTIONS
-
-    def test_dashboard_visibility_is_fully_permissive(self):
-        from blinders.scope import _default_visibility
-
-        vis = _default_visibility("dashboard")
-        assert vis.show_forms is True
-        assert vis.show_nav_links is True
-        assert vis.show_action_buttons is True
-        assert vis.show_account_controls is True

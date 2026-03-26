@@ -117,15 +117,10 @@ class ActionRouter:
         if blinders:
             from blinders.verifier import ScopeVerifier
 
-            # Dashboard goal type: skip LLM validation and CAPTCHA checks
-            is_dashboard = blinders.scope.goal_type == "dashboard"
-            self._skip_captcha = is_dashboard
-
             self._verifier = ScopeVerifier(
                 blinders.scope,
                 self.guardrails,
                 directive=directive,
-                skip_llm_validation=is_dashboard,
             )
 
     async def execute(self, tool_name: str, tool_input: dict) -> dict:

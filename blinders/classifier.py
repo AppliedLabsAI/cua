@@ -24,9 +24,7 @@ from telemetry.spans import (
 
 log = logging.getLogger(__name__)
 
-_VALID_GOAL_TYPES = frozenset(
-    {"read", "navigate", "interact", "fill_form", "dashboard"}
-)
+_VALID_GOAL_TYPES = frozenset({"read", "navigate", "interact", "fill_form"})
 
 _CLASSIFICATION_PROMPT = """\
 Classify this browser automation directive into exactly one goal type.

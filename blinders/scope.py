@@ -171,7 +171,7 @@ def _default_visibility(goal_type: str) -> ElementVisibility:
             show_action_buttons=False,
             show_account_controls=False,
         )
-    elif goal_type in ("fill_form", "dashboard"):
+    elif goal_type == "fill_form":
         return ElementVisibility(
             show_forms=True,
             show_nav_links=True,
@@ -211,7 +211,7 @@ def _default_actions(goal_type: str) -> frozenset[str]:
                 "get_dom",
             }
         )
-    else:  # "interact", "fill_form", or "dashboard"
+    else:  # "interact" or "fill_form"
         return ALL_ACTIONS
 
 

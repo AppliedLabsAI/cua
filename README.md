@@ -221,7 +221,6 @@ graph LR
 | `navigate` | Hidden | Hidden | Hidden | Blocked | Blocked |
 | `interact` | Visible | Visible | Hidden | Allowed | Allowed |
 | `fill_form` | Visible | Visible | Visible | Allowed | Allowed |
-| `dashboard` | Visible | Visible | Visible | Allowed | Allowed |
 
 **2. DOM Blinders** — The DOM snapshot sent to the agent is filtered at two levels:
 
