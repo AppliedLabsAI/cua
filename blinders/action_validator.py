@@ -62,6 +62,8 @@ class ActionValidator:
         self.directive = directive
         self._enabled = bool(os.environ.get("ANTHROPIC_API_KEY"))
         self._client = None
+        self._approved_domains: set[str] = set()  # domains already validated
+        self._approved_selectors: set[str] = set()  # click targets already validated
 
     def _get_client(self):
         if self._client is None:
@@ -89,6 +91,13 @@ class ActionValidator:
         # Safe actions skip validation entirely
         if action in _SAFE_ACTIONS:
             return None
+
+        # Domain caching: skip Haiku for goto to already-approved domains
+        if action == "goto":
+            domain = _extract_domain(tool_input.get("url", ""))
+            if domain and domain in self._approved_domains:
+                log.debug("Skipping validation for approved domain: %s", domain)
+                return None
 
         # For execute_sequence, check if any steps actually need validation
         if action == "execute_sequence":
@@ -136,12 +145,27 @@ class ActionValidator:
                 return f"Action validator blocked: {reason}"
 
             log.debug("Action validator approved: %s (%s)", action_desc, reason)
+            # Cache approval for future calls
+            if action == "goto":
+                domain = _extract_domain(tool_input.get("url", ""))
+                if domain:
+                    self._approved_domains.add(domain)
             return None
 
         except Exception as e:
             # On any error, allow the action (fail open)
             log.debug("Action validation skipped (%s), allowing action", e)
             return None
+
+
+def _extract_domain(url: str) -> str:
+    """Extract domain from a URL for caching."""
+    try:
+        from urllib.parse import urlparse
+
+        return (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
 
 
 def _describe_action(action: str, tool_input: dict) -> str:

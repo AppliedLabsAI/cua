@@ -287,8 +287,17 @@ async def execute_dom_action(
             if mode == "html":
                 content = await page.inner_html(selector, timeout=_DEFAULT_TIMEOUT)
             elif mode == "value":
+                # Use __extractValue if available, inline fallback if init script lost
                 content = await page.evaluate(
-                    "(sel) => window.__extractValue(sel)",
+                    """(sel) => {
+                        if (window.__extractValue) return window.__extractValue(sel);
+                        const el = document.querySelector(sel);
+                        if (!el) return '[not found]';
+                        const tag = el.tagName.toLowerCase();
+                        if (tag === 'select') { const o = el.options?.[el.selectedIndex]; return o ? o.text.trim() : ''; }
+                        if (tag === 'textarea' || tag === 'input') return el.value;
+                        return el.innerText || el.textContent || '';
+                    }""",
                     selector,
                 )
             elif is_body:
