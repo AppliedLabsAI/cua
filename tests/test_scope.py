@@ -108,7 +108,7 @@ class TestExtractTaskScope:
         research_profile = Profile(
             name="research",
             guardrail_overrides={
-                "blocked_action_categories": [],
+                "enable_llm_action_check": False,
                 "max_urls_visited": 100,
             },
         )

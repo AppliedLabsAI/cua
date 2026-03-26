@@ -68,7 +68,7 @@ async def run(args: argparse.Namespace) -> int:
         return 1
 
     # Set up Cognitive Blinders
-    scope = extract_task_scope(args.directive, profile)
+    scope = extract_task_scope(args.directive, profile, use_llm=False)
     blinders = DOMBlinders(scope)
     log.info(
         "Blinders: goal_type=%s, actions=%d",
@@ -132,7 +132,9 @@ async def run(args: argparse.Namespace) -> int:
 def main():
     parser = argparse.ArgumentParser(description="Run CUA agent locally (no Modal)")
     parser.add_argument("--directive", required=True, help="Task for the agent")
-    parser.add_argument("--model", default="claude-sonnet-4-6", help="Claude model ID")
+    from settings import AGENT_MODEL
+
+    parser.add_argument("--model", default=AGENT_MODEL, help="Claude model ID")
     parser.add_argument(
         "--max-steps", type=int, default=50, help="Max tool-call iterations"
     )

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+import re
+
+from settings import SAFETY_MODEL
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +25,17 @@ _SAFE_ACTIONS = frozenset({
     "get_dom",
     "wait_for",
 })
+
+# Click selectors that are obviously safe — skip Haiku validation.
+# Used as a fast-path to avoid LLM overhead for common UI patterns.
+_SAFE_SELECTOR_RE = re.compile(
+    r"(text=|role=)?(nav|menu|tab|link|filter|sort|search|view|show|open|expand"
+    r"|collapse|back|next|prev|page|details|info|settings|edit|close"
+    r"|cancel|dismiss|log.?in|sign.?in|submit|save|apply|select|choose"
+    r"|row|cell|table|column|header|pagination|arrow|chevron|icon"
+    r"|conversation|chat|thread|shop|store|order|status)",
+    re.IGNORECASE,
+)
 
 # Actions within execute_sequence that don't need individual validation
 # (typing and key presses are almost always part of a form-fill workflow)
@@ -60,7 +73,7 @@ class ActionValidator:
 
     def __init__(self, directive: str) -> None:
         self.directive = directive
-        self._enabled = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        self._enabled = True
         self._client = None
         self._approved_domains: set[str] = set()  # domains already validated
         self._approved_selectors: set[str] = set()  # click targets already validated
@@ -91,6 +104,20 @@ class ActionValidator:
         # Safe actions skip validation entirely
         if action in _SAFE_ACTIONS:
             return None
+
+        # Click fast-path: skip Haiku for obviously safe selectors and
+        # CSS/attribute selectors (programmatic DOM references, not destructive text)
+        if action == "click":
+            selector = tool_input.get("selector", "")
+            normalized = selector.strip().lower()
+            if normalized in self._approved_selectors:
+                return None
+            if _SAFE_SELECTOR_RE.search(normalized):
+                self._approved_selectors.add(normalized)
+                return None
+            if any(c in normalized for c in ".#[>:~+"):
+                self._approved_selectors.add(normalized)
+                return None
 
         # Domain caching: skip Haiku for goto to already-approved domains
         if action == "goto":
@@ -123,7 +150,7 @@ class ActionValidator:
 
         try:
             response = self._get_client().messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=SAFETY_MODEL,
                 max_tokens=100,
                 messages=[{"role": "user", "content": prompt}],
             )

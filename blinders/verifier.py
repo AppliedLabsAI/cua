@@ -34,10 +34,17 @@ class ScopeVerifier:
         scope: TaskScope,
         guardrails: GuardrailEngine,
         directive: str = "",
+        *,
+        skip_llm_validation: bool = False,
     ) -> None:
         self.scope = scope
         self.guardrails = guardrails
-        self._validator = ActionValidator(directive) if directive else None
+        # When skip_llm_validation is True, skip the ActionValidator (task-alignment
+        # LLM call) but KEEP the guardrails destructive-click check — even trusted
+        # domains can have destructive buttons (refund, delete, etc.).
+        self._validator = (
+            None if skip_llm_validation else (ActionValidator(directive) if directive else None)
+        )
 
     def check(
         self,
@@ -92,8 +99,11 @@ class ScopeVerifier:
             if not nav.allowed:
                 return nav.reason
 
-        # 3. Existing action classification (kept as defense in depth)
-        action_check = self.guardrails.check_action(action, tool_input)
+        # 3. Destructive action check — skip when ActionValidator is active
+        #    (it subsumes destructive detection with directive context).
+        action_check = self.guardrails.check_action(
+            action, tool_input, skip_llm=bool(self._validator)
+        )
         if not action_check.allowed:
             return action_check.reason
 

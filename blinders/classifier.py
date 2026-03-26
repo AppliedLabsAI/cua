@@ -13,6 +13,8 @@ from typing import Any
 
 from anthropic import Anthropic
 
+from settings import SAFETY_MODEL
+
 log = logging.getLogger(__name__)
 
 _VALID_GOAL_TYPES = frozenset({"read", "navigate", "interact", "fill_form"})
@@ -50,51 +52,46 @@ def classify_directive(
     """Classify a directive into a goal type using Haiku.
 
     Returns one of: "read", "navigate", "interact", "fill_form".
-    Falls back to "interact" (most permissive) on any error.
+    Raises on API/auth errors so the caller can fall back to keyword matching.
     """
     client = client or Anthropic()
 
-    try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=100,
-            messages=[
-                {
-                    "role": "user",
-                    "content": _CLASSIFICATION_PROMPT + directive,
-                }
-            ],
-        )
+    response = client.messages.create(
+        model=SAFETY_MODEL,
+        max_tokens=100,
+        messages=[
+            {
+                "role": "user",
+                "content": _CLASSIFICATION_PROMPT + directive,
+            }
+        ],
+    )
 
-        # Extract text from first content block (type-safe)
-        block = response.content[0]
-        text: str = _extract_text(block)
-        text = text.strip()
+    # Extract text from first content block (type-safe)
+    block = response.content[0]
+    text: str = _extract_text(block)
+    text = text.strip()
 
-        # Handle markdown code block wrapping
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    # Handle markdown code block wrapping
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
-        data = json.loads(text)
-        goal_type = data.get("goal_type", "interact")
+    data = json.loads(text)
+    goal_type = data.get("goal_type", "interact")
 
-        if goal_type not in _VALID_GOAL_TYPES:
-            log.warning(
-                "LLM returned unknown goal_type: %s, defaulting to interact",
-                goal_type,
-            )
-            return "interact"
-
-        log.info(
-            "LLM classified directive as: %s (needs_login=%s)",
+    if goal_type not in _VALID_GOAL_TYPES:
+        log.warning(
+            "LLM returned unknown goal_type: %s, defaulting to interact",
             goal_type,
-            data.get("needs_login"),
         )
-        return goal_type
-
-    except Exception as e:
-        log.warning("LLM classification failed (%s), falling back to interact", e)
         return "interact"
+
+    log.info(
+        "LLM classified directive as: %s (needs_login=%s)",
+        goal_type,
+        data.get("needs_login"),
+    )
+    return goal_type
 
 
 def _extract_text(block: Any) -> str:

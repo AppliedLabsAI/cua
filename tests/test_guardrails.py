@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from guardrails import GuardrailConfig, GuardrailEngine, _check_ssrf
 
 
@@ -111,28 +113,25 @@ class TestNavigationTracking:
 
 
 class TestActionClassification:
-    def test_blocks_destructive_click(self):
-        engine = GuardrailEngine()
-        result = engine.check_action("click", {"selector": "text=Place Order"})
-        assert not result.allowed
-        assert "purchase" in (result.reason or "").lower() or "form_submit" in (
-            result.reason or ""
-        ).lower()
-
-    def test_allows_non_destructive_click(self):
-        engine = GuardrailEngine()
-        result = engine.check_action("click", {"selector": "#next-button"})
-        assert result.allowed
-
     def test_allows_non_click_actions(self):
         engine = GuardrailEngine()
         result = engine.check_action("goto", {"url": "https://example.com"})
         assert result.allowed
 
-    def test_disabled_categories(self):
-        config = GuardrailConfig(blocked_action_categories=[])
+    def test_skip_llm_allows_all_clicks(self):
+        """skip_llm=True means no destructive check — all clicks pass."""
+        engine = GuardrailEngine()
+        result = engine.check_action(
+            "click", {"selector": "text=Delete Account"}, skip_llm=True
+        )
+        assert result.allowed
+
+    def test_disabled_llm_check(self):
+        config = GuardrailConfig(enable_llm_action_check=False)
         engine = GuardrailEngine(config)
-        result = engine.check_action("click", {"selector": "text=Delete Account"})
+        result = engine.check_action(
+            "click", {"selector": "text=Delete Account"}
+        )
         assert result.allowed
 
 
@@ -160,11 +159,11 @@ class TestGuardrailConfigFromDict:
         config = GuardrailConfig.from_dict(
             {
                 "max_urls_visited": 100,
-                "blocked_action_categories": [],
+                "enable_llm_action_check": False,
             }
         )
         assert config.max_urls_visited == 100
-        assert config.blocked_action_categories == []
+        assert config.enable_llm_action_check is False
 
     def test_ignores_unknown_keys(self):
         config = GuardrailConfig.from_dict(
@@ -179,3 +178,114 @@ class TestGuardrailConfigFromDict:
         config = GuardrailConfig.from_dict({})
         assert config.max_urls_visited == 50
         assert config.max_consecutive_errors == 5
+
+
+class TestHaikuDestructiveCheck:
+    """Tests for Haiku-based destructive action detection."""
+
+    def test_skipped_when_disabled_in_config(self):
+        """enable_llm_action_check=False disables the LLM layer."""
+        config = GuardrailConfig(enable_llm_action_check=False)
+        engine = GuardrailEngine(config)
+        result = engine.check_action("click", {"selector": "text=Confirm Deletion"})
+        assert result.allowed
+
+    def test_skip_llm_flag(self):
+        """skip_llm=True skips the Haiku check."""
+        engine = GuardrailEngine()
+        result = engine.check_action(
+            "click", {"selector": "text=Confirm Deletion"}, skip_llm=True
+        )
+        assert result.allowed
+
+    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
+    def test_flags_destructive_via_haiku_for_confirmation(self, mock_client_fn):
+        """Haiku returning destructive=true flags for confirmation."""
+        mock_response = MagicMock()
+        mock_response.content = [
+            MagicMock(
+                text='{"destructive": true, "reason": "confirms account deletion"}'
+            )
+        ]
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = mock_response
+        mock_client_fn.return_value = mock_client
+
+        engine = GuardrailEngine()
+        result = engine.check_action(
+            "click", {"selector": "text=Yes, Delete Everything"}
+        )
+        assert not result.allowed
+        assert result.needs_confirmation
+        assert "LLM" in (result.reason or "")
+
+    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
+    def test_retry_confirms_haiku_flagged_action(self, mock_client_fn):
+        """Agent retry of Haiku-flagged action confirms and allows it."""
+        mock_response = MagicMock()
+        mock_response.content = [
+            MagicMock(
+                text='{"destructive": true, "reason": "confirms deletion"}'
+            )
+        ]
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = mock_response
+        mock_client_fn.return_value = mock_client
+
+        engine = GuardrailEngine()
+        # First: flagged
+        result1 = engine.check_action(
+            "click", {"selector": "text=Yes, Delete Everything"}
+        )
+        assert not result1.allowed
+        assert result1.needs_confirmation
+        # Retry: confirmed
+        result2 = engine.check_action(
+            "click", {"selector": "text=Yes, Delete Everything"}
+        )
+        assert result2.allowed
+
+    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
+    def test_allows_safe_via_haiku(self, mock_client_fn):
+        """Haiku returning destructive=false allows the action."""
+        mock_response = MagicMock()
+        mock_response.content = [
+            MagicMock(text='{"destructive": false, "reason": "navigation link"}')
+        ]
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = mock_response
+        mock_client_fn.return_value = mock_client
+
+        engine = GuardrailEngine()
+        result = engine.check_action("click", {"selector": "text=View Details"})
+        assert result.allowed
+
+    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
+    def test_caches_approved_selectors(self, mock_client_fn):
+        """Second call with same selector uses cache, not API."""
+        mock_response = MagicMock()
+        mock_response.content = [
+            MagicMock(text='{"destructive": false, "reason": "safe"}')
+        ]
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = mock_response
+        mock_client_fn.return_value = mock_client
+
+        engine = GuardrailEngine()
+        engine.check_action("click", {"selector": "text=Next Page"})
+        engine.check_action("click", {"selector": "text=Next Page"})
+        assert mock_client.messages.create.call_count == 1
+
+    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
+    def test_fail_open_on_api_error(self, mock_client_fn):
+        """API errors result in action being allowed (fail open)."""
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = Exception("API timeout")
+        mock_client_fn.return_value = mock_client
+
+        engine = GuardrailEngine()
+        result = engine.check_action(
+            "click", {"selector": "text=Confirm Transfer"}
+        )
+        assert result.allowed
+

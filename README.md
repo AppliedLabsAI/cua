@@ -121,18 +121,18 @@ graph LR
 
 **How it works:**
 
-**1. Task Scope Extraction** — Before the agent sees any web content, Haiku classifies the directive into a goal type. This determines what the agent can see and do for the entire run.
+**1. Task Scope Extraction** — Before the agent sees any web content, the directive is classified into a goal type. This determines what the agent can see and do for the entire run.
 
 ```mermaid
 graph LR
-    A["'Find price on apple.com'"] -->|Haiku| B["read"]
-    C["'Log in and find orders'"] -->|Haiku| D["fill_form"]
-    E["'Click download button'"] -->|Haiku| F["interact"]
-    G["'Go to example.com'"] -->|Haiku| H["navigate"]
+    A["'Find price on apple.com'"] -->|classify| B["read"]
+    C["'Log in and find orders'"] -->|classify| D["fill_form"]
+    E["'Click download button'"] -->|classify| F["interact"]
+    G["'Go to example.com'"] -->|classify| H["navigate"]
 ```
 
-- **Primary**: Haiku LLM call (~200ms, one-time) — handles nuanced directives like "find info but log in first" → `fill_form`
-- **Fallback**: Fast keyword matching (~25μs) — used when no API key is available (tests, offline)
+- **Primary**: Fast keyword matching (~25μs) — regex-based classification that handles common directive patterns
+- **LLM fallback**: Haiku LLM call (~200ms, one-time) — available for nuanced directives when `use_llm=True` is passed
 
 Each goal type gets adaptive defaults:
 
@@ -150,17 +150,22 @@ Each goal type gets adaptive defaults:
 | **JS-side** | `dom_snapshot.js` in browser | Filters elements by category (forms, action buttons, account controls) based on task scope. Elements are removed before they leave the browser. |
 | **Python-side** | `blinders/filters.py` | Scans for prompt injection patterns (`"ignore previous instructions"`, `SYSTEM:`, `[INST]` tokens) and redacts them. Wraps content with provenance markers (`[web-content-start/end]`). |
 
-**3. Scope Verifier + Action Validator** — Two-layer pre-execution check:
+**3. Scope Verifier + Action Validator** — Optimized multi-layer pre-execution check using DAG pruning to eliminate redundant LLM calls:
 
 | Layer | Speed | What it checks |
 |---|---|---|
-| **Deterministic** | ~25μs | Action type allowed for goal? Domain in scope? SSRF? Destructive keywords? |
-| **Haiku LLM** | ~800ms | Does this action align with the user's task? Is it destructive or off-task? |
+| **Deterministic** | ~25μs | Action type allowed for goal? Domain in scope? SSRF? Navigation limit? |
+| **Regex fast-path** | ~5μs | Is this a known-safe selector (navigation, menus, filters, CSS selectors)? |
+| **Action Validator (Haiku)** | ~500ms | Is this action aligned with the user's task? Context-aware destructive detection. |
 
-The Haiku layer is optimized to minimize overhead:
-- **Domain caching** — once a domain is approved, future gotos skip re-validation
-- **Batched sequences** — a 5-step `execute_sequence` makes 1 Haiku call, not 6
-- **Safe action skipping** — `extract`, `screenshot`, `scroll`, `get_dom`, `wait_for` bypass LLM validation entirely
+The pipeline is optimized to minimize LLM overhead while maximizing safety:
+- **Regex fast-path** — safe selectors (navigation, menus, table rows, CSS selectors) skip Haiku entirely
+- **Context-aware safety** — the Action Validator considers the user's directive, so "click refund" is allowed when the task is "issue a refund" but blocked when the task is "check order status"
+- **DAG pruning** — redundant checks are eliminated: the Action Validator subsumes the destructive check (1 Haiku call per risky action, not 2-3)
+- **Selector caching** — once a selector is approved, future clicks skip re-validation
+- **Domain caching** — once a domain is approved for goto, future navigations skip re-validation
+- **Safe action skipping** — `extract`, `screenshot`, `scroll`, `get_dom`, `wait_for` bypass validation entirely
+- **Batched sequences** — `execute_sequence` sub-steps share a single validation pass
 
 **4. Tool Schema Restriction** — The tool definition sent to Claude only includes actions allowed by the task scope. For a `read` task, `key_press` and `execute_sequence` are literally absent from the schema — the model cannot select them.
 
@@ -171,7 +176,7 @@ Defense-in-depth checks that run alongside Cognitive Blinders:
 | Guard | Default | Configurable |
 |---|---|---|
 | Domain blocklist | Banking, government, email, payment, social media | `allowed_domains` / `blocked_domains` |
-| Destructive action detection | Purchase, account deletion, message sending keywords | `blocked_action_categories` |
+| Destructive action detection | Context-aware Action Validator (Haiku) with regex fast-path for safe selectors; regex-only fallback via `enable_llm_action_check: false` | `enable_llm_action_check` |
 | SSRF protection | Private IPs, localhost, cloud metadata (169.254.x.x) | `allow_private_networks` |
 | URL visit limit | 50 unique URLs per run | `max_urls_visited` |
 | Consecutive error limit | 5 errors | `max_consecutive_errors` |

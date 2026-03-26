@@ -48,16 +48,13 @@ class TestApplyGuardrailOverrides:
         profile = load_profile("research")
         config = apply_guardrail_overrides(profile)
         assert config.max_urls_visited == 100
-        assert config.blocked_action_categories == []
+        assert config.enable_llm_action_check is False
 
     def test_form_filling_overrides(self):
         profile = load_profile("form_filling")
         config = apply_guardrail_overrides(profile)
-        assert "account_modify" in config.blocked_action_categories
-        assert "send_message" in config.blocked_action_categories
-        # purchase and form_submit should NOT be blocked
-        assert "purchase" not in config.blocked_action_categories
-        assert "form_submit" not in config.blocked_action_categories
+        # Form filling uses default config (Haiku handles contextually)
+        assert config.enable_llm_action_check is True
 
     def test_overrides_merge_with_base(self):
         profile = load_profile("research")

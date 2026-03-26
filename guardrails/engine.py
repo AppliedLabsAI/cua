@@ -8,11 +8,33 @@ from __future__ import annotations
 
 import fnmatch
 import ipaddress
+import json
 import logging
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from settings import SAFETY_MODEL
+
 log = logging.getLogger(__name__)
+
+# Regex-based fast path for destructive click detection.
+# Matches against the selector text to avoid Haiku calls for obvious cases.
+_DESTRUCTIVE_RE = re.compile(
+    r"delete|remove|destroy|deactivate|close.account|terminate|cancel.subscription"
+    r"|refund|issue.refund|charge.?back"
+    r"|pay.now|buy.now|purchase|place.order|submit.order|complete.purchase|checkout"
+    r"|confirm.transfer|send.money|wire.transfer"
+    r"|send.email|send.message|publish|post.comment|submit.review"
+    r"|yes.*delete|confirm.*remov|approve.*refund",
+    re.IGNORECASE,
+)
+_SAFE_CLICK_RE = re.compile(
+    r"^(text=|role=)?(nav|menu|tab|link|filter|sort|search|view|show|open|expand"
+    r"|collapse|back|next|prev|page|details|info|settings|edit|close$"
+    r"|cancel$|dismiss|log.?in|sign.?in|submit$|save$|apply$|select|choose)",
+    re.IGNORECASE,
+)
 
 _BLOCKED_DOMAINS_DEFAULT = [
     # NOTE: *.bank.* only matches domains with literal ".bank." segment (e.g. foo.bank.example).
@@ -33,28 +55,28 @@ _BLOCKED_DOMAINS_DEFAULT = [
 ]
 
 
-_DESTRUCTIVE_ACTION_KEYWORDS: dict[str, list[str]] = {
-    "form_submit": [
-        "place order",
-        "submit order",
-        "submit payment",
-        "complete checkout",
-    ],
-    "purchase": [
-        "pay now",
-        "purchase now",
-        "buy now",
-        "complete order",
-        "complete purchase",
-    ],
-    "account_modify": [
-        "delete account",
-        "deactivate",
-        "close account",
-        "remove account",
-    ],
-    "send_message": ["send email", "send message", "publish post", "post comment"],
-}
+_DESTRUCTIVE_CHECK_PROMPT = """\
+You are a safety classifier for a browser automation agent. Determine whether \
+the proposed click action is DESTRUCTIVE or IRREVERSIBLE.
+
+Proposed click target: {selector}
+
+A click is DESTRUCTIVE if it would:
+- Submit a purchase, payment, or financial transaction
+- Delete, deactivate, or close an account
+- Send an email, message, or publish content
+- Confirm an irreversible operation (e.g., "Yes, delete", "Confirm transfer")
+- Submit a form that commits to an action with real-world consequences
+
+A click is NOT destructive if it:
+- Navigates to another page, opens a menu, or expands a section
+- Selects an option, filters results, or sorts data
+- Opens a modal/dialog that still requires further confirmation
+- Is part of a read-only information gathering workflow
+
+Respond with ONLY a JSON object:
+{{"destructive": true, "reason": "brief reason"}} or \
+{{"destructive": false, "reason": "brief reason"}}"""
 
 
 @dataclass
@@ -66,15 +88,10 @@ class GuardrailConfig:
         default_factory=lambda: list(_BLOCKED_DOMAINS_DEFAULT)
     )
 
-    # Action categories to block — defaults to all destructive categories.
-    # Set to [] to disable action classification.
-    blocked_action_categories: list[str] = field(
-        default_factory=lambda: list(_DESTRUCTIVE_ACTION_KEYWORDS.keys())
-    )
-
     max_urls_visited: int = 50
     max_consecutive_errors: int = 5
     allow_private_networks: bool = False
+    enable_llm_action_check: bool = True
 
     @staticmethod
     def from_dict(data: dict) -> GuardrailConfig:
@@ -126,10 +143,15 @@ def _check_ssrf(hostname: str) -> GuardrailResult | None:
 
 @dataclass
 class GuardrailResult:
-    """Outcome of a guardrail check."""
+    """Outcome of a guardrail check.
+
+    When needs_confirmation is True, the action is not hard-blocked but
+    requires the agent to retry the same action to confirm intent.
+    """
 
     allowed: bool
     reason: str | None = None
+    needs_confirmation: bool = False
 
 
 class GuardrailEngine:
@@ -137,11 +159,12 @@ class GuardrailEngine:
 
     def __init__(self, config: GuardrailConfig | None = None) -> None:
         self.config = config or GuardrailConfig()
-        self._blocked_categories: frozenset[str] = frozenset(
-            self.config.blocked_action_categories
-        )
         self.urls_visited: set[str] = set()
         self.consecutive_errors: int = 0
+        self._llm_enabled = self.config.enable_llm_action_check
+        self._llm_client = None
+        self._approved_selectors: set[str] = set()
+        self._pending_confirmations: set[str] = set()  # selectors awaiting agent retry
 
     def check_url(self, url: str) -> GuardrailResult:
         """Check if a URL is allowed to be visited."""
@@ -195,32 +218,121 @@ class GuardrailEngine:
         self.urls_visited.add(url)
         return self.check_url(url)
 
-    def check_action(self, action: str, tool_input: dict) -> GuardrailResult:
-        """Block clicks on destructive UI elements based on selector text.
+    def _get_llm_client(self):
+        if self._llm_client is None:
+            from anthropic import Anthropic
 
-        Playwright/Patchright selectors often embed button text (e.g.
-        ``text=Submit``, ``role=button[name="Place Order"]``), so matching
-        keywords against the selector string catches most destructive actions.
+            self._llm_client = Anthropic()
+        return self._llm_client
+
+    def _check_destructive_llm(self, selector: str) -> GuardrailResult:
+        """Check if a click selector targets a destructive action.
+
+        Layer 1 (always runs): Regex patterns catch obvious destructive/safe
+        selectors in microseconds. Works even when LLM is disabled.
+
+        Layer 2 (optional): Haiku LLM validates ambiguous selectors only
+        when ``_llm_enabled`` is True. When disabled, ambiguous selectors
+        are allowed (fail-open) — the regex layer still blocks known
+        destructive patterns.
+
+        Returns GuardrailResult(allowed=False) if destructive, allowed=True otherwise.
         """
-        if action != "click" or not self._blocked_categories:
+        normalized = selector.strip().lower()
+        if normalized in self._approved_selectors:
+            return GuardrailResult(allowed=True)
+
+        # --- Layer 1: Regex (always runs, even when LLM disabled) ---
+        if _DESTRUCTIVE_RE.search(normalized):
+            log.warning("Regex flagged destructive click: %s", selector)
+            return GuardrailResult(
+                allowed=False,
+                reason=f"Destructive action blocked (pattern match): {selector}",
+            )
+        if _SAFE_CLICK_RE.search(normalized):
+            self._approved_selectors.add(normalized)
+            return GuardrailResult(allowed=True)
+
+        # --- Layer 2: LLM fallback for ambiguous selectors ---
+        if not self._llm_enabled:
+            # LLM disabled — allow ambiguous selectors (regex layer above
+            # still catches known destructive patterns).
+            self._approved_selectors.add(normalized)
+            return GuardrailResult(allowed=True)
+
+        try:
+            prompt = _DESTRUCTIVE_CHECK_PROMPT.format(selector=selector)
+            response = self._get_llm_client().messages.create(
+                model=SAFETY_MODEL,
+                max_tokens=100,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            block = response.content[0]
+            text: str = str(block.text) if hasattr(block, "text") else ""
+            text = text.strip()
+
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+            data = json.loads(text)
+            is_destructive = data.get("destructive", False)
+            reason = data.get("reason", "")
+
+            if is_destructive:
+                log.warning(
+                    "Haiku flagged destructive click: %s (%s)", selector, reason
+                )
+                return GuardrailResult(
+                    allowed=False,
+                    reason=f"Destructive action blocked (LLM): {reason}",
+                )
+
+            self._approved_selectors.add(normalized)
+            log.debug("Haiku approved click: %s (%s)", selector, reason)
+            return GuardrailResult(allowed=True)
+
+        except Exception as e:
+            log.debug("Haiku destructive check skipped (%s), allowing action", e)
+            return GuardrailResult(allowed=True)
+
+    def check_action(
+        self, action: str, tool_input: dict, *, skip_llm: bool = False
+    ) -> GuardrailResult:
+        """Check clicks for destructive intent using Haiku with confirmation flow.
+
+        When a destructive action is detected, it is not hard-blocked. Instead,
+        the result has needs_confirmation=True, prompting the agent to confirm.
+        If the agent retries the same selector, the action is allowed through.
+
+        Set skip_llm=True when an outer layer (e.g. ScopeVerifier) will
+        perform its own LLM validation.
+        """
+        if action != "click":
             return GuardrailResult(allowed=True)
 
         selector = tool_input.get("selector", "").lower()
         if not selector:
             return GuardrailResult(allowed=True)
 
-        for category, keywords in _DESTRUCTIVE_ACTION_KEYWORDS.items():
-            if category not in self._blocked_categories:
-                continue
-            for kw in keywords:
-                if kw in selector:
-                    return GuardrailResult(
-                        allowed=False,
-                        reason=(
-                            f"Destructive action blocked: click selector matches "
-                            f"'{category}' (keyword '{kw}')"
-                        ),
-                    )
+        # Agent retry: selector is pending confirmation → allow (confirmed)
+        normalized = selector.strip().lower()
+        if normalized in self._pending_confirmations:
+            self._pending_confirmations.discard(normalized)
+            log.info("Agent confirmed destructive action: %s", selector)
+            return GuardrailResult(allowed=True)
+
+        # Haiku LLM check
+        if not skip_llm:
+            llm_result = self._check_destructive_llm(selector)
+            if not llm_result.allowed:
+                self._pending_confirmations.add(normalized)
+                return GuardrailResult(
+                    allowed=False,
+                    needs_confirmation=True,
+                    reason=llm_result.reason,
+                )
+            return llm_result
 
         return GuardrailResult(allowed=True)
 

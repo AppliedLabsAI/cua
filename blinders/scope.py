@@ -10,7 +10,7 @@ keyword fallback for offline/test environments.
 
 from __future__ import annotations
 
-import os
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -18,6 +18,8 @@ from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from profiles.loader import Profile
+
+log = logging.getLogger(__name__)
 
 # All available browser_dom actions
 ALL_ACTIONS = frozenset(
@@ -111,26 +113,25 @@ def _extract_domains(directive: str) -> list[str]:
     return domains
 
 
-def _detect_goal_type(directive: str, *, use_llm: bool | None = None) -> str:
+def _detect_goal_type(directive: str, *, use_llm: bool = True) -> str:
     """Classify the directive into a goal type.
 
     Primary: LLM-based classification via Haiku (accurate, handles edge cases).
     Fallback: Minimal keyword matching (fast, for offline/test environments).
 
     Args:
-        use_llm: If None (default), auto-detects by checking for ANTHROPIC_API_KEY.
-                 Set True/False to override.
+        use_llm: If True (default), attempts Haiku LLM classification.
+                 Falls back to keyword matching if the LLM call fails.
+                 Set False to skip LLM entirely.
     """
-    # Auto-detect: use LLM if API key is available
-    if use_llm is None:
-        use_llm = bool(os.environ.get("ANTHROPIC_API_KEY"))
-
     if use_llm:
-        from blinders.classifier import classify_directive
+        try:
+            from blinders.classifier import classify_directive
 
-        return classify_directive(directive)
+            return classify_directive(directive)
+        except Exception:
+            log.debug("LLM classification unavailable, using keyword fallback")
 
-    # Offline fallback: minimal keyword matching
     return _detect_goal_type_fallback(directive)
 
 
@@ -212,13 +213,12 @@ def extract_task_scope(
     directive: str,
     profile: Profile | None = None,
     *,
-    use_llm: bool | None = None,
+    use_llm: bool = True,
 ) -> TaskScope:
     """Analyze directive to determine task scope.
 
-    Uses Haiku LLM for accurate classification when an API key is available.
-    Falls back to minimal keyword matching for offline/test environments.
-    Set use_llm=False to force offline mode.
+    Uses Haiku LLM for accurate classification by default.
+    Falls back to keyword matching if the LLM call fails.
 
     The scope defines:
     - What goal type the task is (read, navigate, interact, fill_form)
@@ -234,8 +234,8 @@ def extract_task_scope(
     # Profile overrides can widen scope
     if profile and profile.guardrail_overrides:
         overrides = profile.guardrail_overrides
-        # Research profile disables action blocks → widen visibility
-        if overrides.get("blocked_action_categories") == []:
+        # Research profile disables LLM action check → widen visibility
+        if overrides.get("enable_llm_action_check") is False:
             visibility.show_action_buttons = True
         # Higher URL limits suggest broader navigation needs
         if overrides.get("max_urls_visited", 50) > 50:

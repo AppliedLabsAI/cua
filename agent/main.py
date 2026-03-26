@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import sys
 
 logging.basicConfig(
@@ -37,8 +36,10 @@ async def main() -> int:
         log.error("Configuration error: %s", exc)
         return 1
 
+    from settings import get_settings
+
     # Use sandbox object ID as run ID (set by Modal)
-    run_id = os.environ.get("MODAL_SANDBOX_ID", "local")
+    run_id = get_settings().modal_sandbox_id
 
     log.info(
         "Starting CUA agent: model=%s, max_steps=%d, %dx%d, profile=%s",

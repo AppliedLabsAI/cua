@@ -4,17 +4,18 @@ import pytest
 
 from config import CUAConfig
 from exceptions import ConfigError
+from settings import AGENT_MODEL
 
 
 class TestCUAConfigFromEnv:
     def test_basic_config_from_env(self, monkeypatch):
         monkeypatch.setenv("DIRECTIVE", "Go to example.com")
-        monkeypatch.setenv("MODEL", "claude-sonnet-4-6")
+        monkeypatch.setenv("MODEL", AGENT_MODEL)
         monkeypatch.setenv("MAX_STEPS", "25")
         monkeypatch.setenv("PROFILE", "default")
         config = CUAConfig.from_env()
         assert config.directive == "Go to example.com"
-        assert config.model == "claude-sonnet-4-6"
+        assert config.model == AGENT_MODEL
         assert config.max_steps == 25
         assert config.profile_name == "default"
         assert config.profile is not None
@@ -53,7 +54,7 @@ class TestCUAConfigFromEnv:
         ):
             monkeypatch.delenv(var, raising=False)
         config = CUAConfig.from_env()
-        assert config.model == "claude-sonnet-4-6"
+        assert config.model == AGENT_MODEL
         assert config.max_steps == 50
         assert config.thinking_budget == 4096
         assert config.start_url is None
