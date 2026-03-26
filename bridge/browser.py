@@ -384,13 +384,13 @@ async def _execute_sequence(
     for i, raw_step in enumerate(steps):
         if not isinstance(raw_step, dict):
             return ActionResult(
-                error=f"Step {i + 1}: missing 'action'",
+                error=f"Step {i + 1}: invalid step format (expected object)",
                 text="\n".join(results) if results else None,
             )
 
         step = cast(dict[str, Any], raw_step)
         action = step.get("action")
-        if not isinstance(action, str) or not action:
+        if not isinstance(action, str) or not action or not action.strip():
             return ActionResult(
                 error=f"Step {i + 1}: missing 'action'",
                 text="\n".join(results) if results else None,

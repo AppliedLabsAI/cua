@@ -147,7 +147,7 @@ class GuardrailEngine:
         """Check if a URL is allowed to be visited."""
         try:
             parsed = urlparse(url)
-            domain = parsed.netloc.lower()
+            domain = (parsed.hostname or "").lower()
         except Exception:
             return GuardrailResult(allowed=False, reason=f"Invalid URL: {url}")
 

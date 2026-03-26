@@ -97,7 +97,7 @@ def get_tools(allowed_actions: frozenset[str] | None = None) -> list[dict]:
     Cache control is pre-applied to the last tool definition.
     """
     tools = copy.deepcopy(_STATIC_TOOLS)
-    if allowed_actions:
+    if allowed_actions is not None:
         schema = tools[0]["input_schema"]
         schema["properties"]["action"]["enum"] = sorted(allowed_actions)
     tools[-1]["cache_control"] = {"type": "ephemeral"}

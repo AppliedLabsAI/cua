@@ -117,7 +117,7 @@ class TestActionClassification:
         assert not result.allowed
         assert "purchase" in (result.reason or "").lower() or "form_submit" in (
             result.reason or ""
-        )
+        ).lower()
 
     def test_allows_non_destructive_click(self):
         engine = GuardrailEngine()

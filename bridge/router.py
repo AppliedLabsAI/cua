@@ -266,7 +266,13 @@ class ActionRouter:
             )
             if action in _CAPTCHA_CHECK_ACTIONS:
                 result = await self._handle_captcha(result)
-                url_check = self.guardrails.check_url(self.browser.page.url)
+                # Check final URL after potential redirects — scope + guardrails
+                final_url = self.browser.page.url
+                if self._verifier:
+                    scope_block = self._verifier._check_domain(final_url)
+                    if scope_block:
+                        return ActionResult(error=f"Guardrail blocked: {scope_block}")
+                url_check = self.guardrails.check_url(final_url)
                 if not url_check.allowed:
                     return ActionResult(error=f"Guardrail blocked: {url_check.reason}")
             # Apply Python-side blinders post-filter on DOM content

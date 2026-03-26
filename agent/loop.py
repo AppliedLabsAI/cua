@@ -92,7 +92,10 @@ async def run_agent(
     if page_url and page_url != "about:blank":
         from bridge.browser import quick_dom_snapshot
 
-        dom = await quick_dom_snapshot(bridge.browser.page)
+        dom = await quick_dom_snapshot(
+            bridge.browser.page,
+            filter_config=getattr(bridge, "_filter_config", None),
+        )
         if dom:
             initial_content = [
                 {

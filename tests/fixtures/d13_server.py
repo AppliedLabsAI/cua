@@ -62,7 +62,7 @@ ADMIN_DASHBOARD = """\
     </table>
     <h2>Shops Overview</h2>
     <a href="/admin/shops/downtown">Downtown Branch</a> |
-    <a href="/admin/shops/uptown">Uptown Branch</a>
+    Uptown Branch
   </main>
 </body></html>
 """
