@@ -23,10 +23,6 @@ sandbox_image = (
         "xvfb",
         "openbox",
         "tint2",
-        "x11vnc",
-        # noVNC for browser-based observation
-        "novnc",
-        "websockify",
         # Browsers
         "chromium-browser",
         "firefox",
@@ -83,8 +79,7 @@ sandbox_image = (
     )
 )
 
-# Ports exposed by the sandbox
-PORT_NOVNC = 6080
+# Port exposed by the sandbox
 PORT_STATUS = 8090
 
 
@@ -96,7 +91,7 @@ def create_cua_sandbox(
     """Create a Modal sandbox configured for a CUA run.
 
     Returns the sandbox immediately — startup is asynchronous.
-    Use sandbox.tunnels() to get the noVNC and status API URLs.
+    Use sandbox.tunnels() to get the status API URL.
 
     ``extra_env`` is merged into the sandbox environment — used to propagate
     OTel trace context (TRACEPARENT, TRACESTATE) and OTel config vars.
@@ -148,7 +143,7 @@ def create_cua_sandbox(
         app=app,
         image=sandbox_image,
         secrets=secrets,
-        encrypted_ports=[PORT_NOVNC, PORT_STATUS],
+        encrypted_ports=[PORT_STATUS],
         timeout=config.timeout_seconds,
         env=env,
         volumes={"/recordings": recording_volume},

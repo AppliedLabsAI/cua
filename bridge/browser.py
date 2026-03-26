@@ -1,8 +1,8 @@
 """DOM-based browser executor using Patchright.
 
-Manages a Patchright Chromium instance running headful on Xvfb (DISPLAY=:99),
-visible in the noVNC stream. Provides precise, fast browser interactions via
-CSS/text/role selectors — no pixel-hunting needed.
+Manages a Patchright Chromium instance running headful on Xvfb (DISPLAY=:99).
+Provides precise, fast browser interactions via CSS/text/role selectors — no
+pixel-hunting needed. Sessions are recorded via Playwright tracing for replay.
 
 Patchright handles bot detection evasion natively. Do NOT add extra stealth
 flags — they can conflict with its internal CDP patches.

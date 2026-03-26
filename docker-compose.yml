@@ -9,5 +9,4 @@ services:
       - THINKING_BUDGET=${THINKING_BUDGET:-4096}
       - PROFILE=${PROFILE:-default}
     ports:
-      - "6080:6080"   # noVNC — watch the agent in your browser
       - "8090:8090"   # Status API — GET /status, GET /events (SSE)

@@ -4,8 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Display + WM
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    xvfb openbox tint2 x11vnc \
-    novnc websockify \
+    xvfb openbox tint2 \
     # Browsers
     chromium-browser firefox \
     # Desktop apps
@@ -44,6 +43,6 @@ ENV DISPLAY=:99 \
 
 WORKDIR /opt/cua
 
-EXPOSE 6080 8090
+EXPOSE 8090
 
 ENTRYPOINT ["/opt/cua/sandbox/entrypoint.sh"]

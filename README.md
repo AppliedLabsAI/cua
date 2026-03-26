@@ -1,6 +1,6 @@
 # CUA — Computer Use Agent
 
-Autonomous browser automation powered by Claude. POST a natural-language directive, get back a run ID, a noVNC URL for real-time observation, and structured results when done.
+Autonomous browser automation powered by Claude. POST a natural-language directive, get back a run ID, an SSE stream for real-time events, and structured results when done. Every session is recorded as a Playwright trace for frame-by-frame replay.
 
 CUA uses a DOM-first approach — Patchright for fast, precise browser interactions via CSS/text/role selectors. No pixel-hunting or screenshot-heavy loops. Each action completes in ~1-2s.
 
@@ -8,10 +8,11 @@ CUA uses a DOM-first approach — Patchright for fast, precise browser interacti
 graph LR
     A["POST /runs { directive }"] --> B[API Server<br/>FastAPI + Auth]
     B --> C[Modal Sandbox<br/>or Docker]
-    C --> D[Xvfb + Chromium<br/>noVNC :6080]
+    C --> D[Xvfb + Chromium]
     C --> E[Agent Loop<br/>Claude + Patchright]
     E -->|browser_dom| D
     C --> F[Status API :8090<br/>SSE stream]
+    C --> G[Recording<br/>Playwright Trace]
 ```
 
 ## Quick Start
@@ -32,7 +33,7 @@ curl -X POST https://your-app--cua.modal.run/runs \
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 docker compose up
-# noVNC: http://localhost:6080 | Status: http://localhost:8090/status
+# Status: http://localhost:8090/status
 ```
 
 **Local dev:**
