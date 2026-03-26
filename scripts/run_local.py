@@ -38,6 +38,8 @@ async def run(args: argparse.Namespace) -> int:
     from bridge.browser import BrowserManager
     from bridge.router import ActionRouter
     from profiles.loader import apply_guardrail_overrides, load_profile
+    from recording import RecordingConfig
+    from recording.manager import RecordingManager
 
     width = args.width
     height = args.height
@@ -77,11 +79,21 @@ async def run(args: argparse.Namespace) -> int:
         len(scope.allowed_actions),
     )
 
+    # Initialize recording (always on for local runs) — save to output/
+    local_output_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output"
+    )
+    recording_config = RecordingConfig(output_dir=local_output_dir, upload=False)
+    recording = RecordingManager(recording_config, run_id="local")
+    await recording.start(browser.context)
+    log.info("Session recording started: %s", local_output_dir)
+
     bridge = ActionRouter(
         browser=browser,
         guardrail_config=guardrail_config,
         blinders=blinders,
         directive=args.directive,
+        recording=recording,
     )
 
     credentials = None
@@ -104,6 +116,18 @@ async def run(args: argparse.Namespace) -> int:
             allowed_actions=scope.allowed_actions,
         )
     finally:
+        try:
+            manifest = await recording.stop()
+            log.info(
+                "Recording saved: %d artifacts at %s",
+                len(manifest.artifacts),
+                recording_config.output_dir,
+            )
+            trace_path = os.path.join(local_output_dir, "trace.zip")
+            if os.path.exists(trace_path):
+                log.info("View trace: npx playwright show-trace %s", trace_path)
+        except Exception as rec_exc:
+            log.warning("Recording finalization failed: %s", rec_exc)
         await browser.close()
         log.info("Browser closed")
 

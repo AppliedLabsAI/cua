@@ -21,6 +21,9 @@ GUARDRAIL_CHECK = "cua.guardrail.check"
 GUARDRAIL_LLM = "cua.guardrail.llm"
 BROWSER_ACTION = "cua.browser.action"
 CAPTCHA_HANDLE = "cua.captcha.handle"
+RECORDING_START = "cua.recording.start"
+RECORDING_STOP = "cua.recording.stop"
+RECORDING_UPLOAD = "cua.recording.upload"
 
 # ---------------------------------------------------------------------------
 # Attribute keys — session / resource

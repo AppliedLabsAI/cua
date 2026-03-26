@@ -12,6 +12,10 @@ import modal
 
 from api.models import RunConfig
 
+recording_volume = modal.Volume.from_name(
+    "cua-recordings", create_if_missing=True, version=2
+)
+
 sandbox_image = (
     modal.Image.from_registry("ubuntu:24.04")
     .apt_install(
@@ -67,6 +71,7 @@ sandbox_image = (
     .add_local_dir("blinders", "/opt/cua/blinders")
     .add_local_dir("guardrails", "/opt/cua/guardrails")
     .add_local_dir("telemetry", "/opt/cua/telemetry")
+    .add_local_dir("recording", "/opt/cua/recording")
     .env(
         {
             "DISPLAY": ":99",
@@ -116,6 +121,9 @@ def create_cua_sandbox(
     if config.guardrails:
         env["GUARDRAILS_JSON"] = json.dumps(config.guardrails.to_dict())
 
+    if config.recording:
+        env["RECORDING_JSON"] = json.dumps(config.recording.to_dict())
+
     # Propagate OTel trace context and config into sandbox
     if extra_env:
         env.update(extra_env)
@@ -143,4 +151,5 @@ def create_cua_sandbox(
         encrypted_ports=[PORT_NOVNC, PORT_STATUS],
         timeout=config.timeout_seconds,
         env=env,
+        volumes={"/recordings": recording_volume},
     )
