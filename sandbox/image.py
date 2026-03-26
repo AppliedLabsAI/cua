@@ -59,7 +59,9 @@ sandbox_image = (
     .add_local_dir("actionlog", "/opt/cua/actionlog")
     .add_local_dir("sandbox", "/opt/cua/sandbox")
     .add_local_dir("profiles", "/opt/cua/profiles")
-    .add_local_file("guardrails.py", "/opt/cua/guardrails.py")
+    .add_local_file("config.py", "/opt/cua/config.py")
+    .add_local_file("exceptions.py", "/opt/cua/exceptions.py")
+    .add_local_dir("guardrails", "/opt/cua/guardrails")
     .env(
         {
             "DISPLAY": ":99",

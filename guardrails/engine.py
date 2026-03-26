@@ -61,7 +61,7 @@ class GuardrailConfig:
     @staticmethod
     def from_dict(data: dict) -> GuardrailConfig:
         """Create a GuardrailConfig from a dict (e.g. parsed from JSON)."""
-        known_fields = {f for f in GuardrailConfig.__dataclass_fields__}
+        known_fields = set(GuardrailConfig.__dataclass_fields__)
         filtered = {k: v for k, v in data.items() if k in known_fields}
         return GuardrailConfig(**filtered)
 

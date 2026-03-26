@@ -8,7 +8,6 @@ to the in-sandbox status API.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import sys
@@ -27,49 +26,13 @@ async def main() -> int:
     from api.streaming import complete_run, init_status, push_action
     from bridge.browser import BrowserManager
     from bridge.router import ActionRouter
-    from guardrails import GuardrailConfig
-    from profiles.loader import apply_guardrail_overrides, load_profile
+    from config import CUAConfig
 
-    # Read config from environment
-    directive = os.environ.get("DIRECTIVE", "")
-    if not directive:
-        log.error("DIRECTIVE env var is required")
-        return 1
-
-    model = os.environ.get("MODEL", "claude-sonnet-4-6")
-    max_steps = int(os.environ.get("MAX_STEPS", "50"))
-    thinking_budget = int(os.environ.get("THINKING_BUDGET", "4096"))
-    width = int(os.environ.get("WIDTH", "1920"))
-    height = int(os.environ.get("HEIGHT", "1080"))
-    start_url = os.environ.get("START_URL") or None
-    proxy_url = os.environ.get("PROXY_URL") or None
-
-    credentials = None
-    creds_json = os.environ.get("CREDENTIALS_JSON")
-    if creds_json:
-        try:
-            credentials = json.loads(creds_json)
-        except (json.JSONDecodeError, ValueError) as exc:
-            log.error("Invalid CREDENTIALS_JSON env var: %s", exc)
-            return 1
-
-    guardrail_config = None
-    guardrails_json = os.environ.get("GUARDRAILS_JSON")
-    if guardrails_json:
-        try:
-            guardrail_config = GuardrailConfig.from_dict(json.loads(guardrails_json))
-        except (json.JSONDecodeError, ValueError) as exc:
-            log.error("Invalid GUARDRAILS_JSON env var: %s", exc)
-            return 1
-
-    # Load profile
-    profile_name = os.environ.get("PROFILE", "default")
+    # Load all configuration from environment
     try:
-        profile = load_profile(profile_name)
-        guardrail_config = apply_guardrail_overrides(profile, guardrail_config)
-        log.info("Loaded profile: %s", profile_name)
-    except ValueError as exc:
-        log.error("Failed to load profile: %s", exc)
+        config = CUAConfig.from_env()
+    except (ValueError, Exception) as exc:
+        log.error("Configuration error: %s", exc)
         return 1
 
     # Use sandbox object ID as run ID (set by Modal)
@@ -77,13 +40,13 @@ async def main() -> int:
 
     log.info(
         "Starting CUA agent: model=%s, max_steps=%d, %dx%d, profile=%s",
-        model,
-        max_steps,
-        width,
-        height,
-        profile_name,
+        config.model,
+        config.max_steps,
+        config.width,
+        config.height,
+        config.profile_name,
     )
-    log.info("Directive: %s", directive[:200])
+    log.info("Directive: %s", config.directive[:200])
 
     # Initialize status API
     init_status(run_id)
@@ -92,10 +55,10 @@ async def main() -> int:
     browser = BrowserManager()
     try:
         await browser.launch(
-            width=width,
-            height=height,
-            start_url=start_url,
-            proxy=proxy_url,
+            width=config.width,
+            height=config.height,
+            start_url=config.start_url,
+            proxy=config.proxy_url,
         )
         log.info("Browser launched")
     except Exception as e:
@@ -103,19 +66,20 @@ async def main() -> int:
         await complete_run(error=f"Browser launch failed: {e}")
         return 1
 
-    bridge = ActionRouter(browser=browser, guardrail_config=guardrail_config)
+    bridge = ActionRouter(browser=browser, guardrail_config=config.guardrail_config)
 
     # Run the agent
     try:
+        profile_prompt = config.profile.prompt_extension if config.profile else None
         result = await run_agent(
-            directive=directive,
+            directive=config.directive,
             bridge=bridge,
-            model=model,
-            max_steps=max_steps,
-            thinking_budget=thinking_budget,
-            credentials=credentials,
+            model=config.model,
+            max_steps=config.max_steps,
+            thinking_budget=config.thinking_budget,
+            credentials=config.credentials,
             on_action=push_action,
-            profile_prompt=profile.prompt_extension,
+            profile_prompt=profile_prompt,
         )
 
         if result.success:

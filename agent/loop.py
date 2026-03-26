@@ -13,13 +13,16 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any
 
 from anthropic import APIError, AsyncAnthropic
 
 from actionlog.actions import ActionLog
+from agent.context import prune_old_context, truncate_tool_result
 from agent.prompts import build_system_prompt
+from agent.result import AgentResult, make_error_result
+from agent.stuck import StuckDetector
+from agent.thinking import AdaptiveThinking
 from agent.tools import get_tools
 from bridge import DOM_MARKER
 from bridge.router import ActionRouter
@@ -28,10 +31,7 @@ log = logging.getLogger(__name__)
 
 _BETA_FLAGS = ["interleaved-thinking-2025-05-14"]
 _MAX_TOKENS = 2048
-# Tool result text longer than this is truncated before sending back to Claude.
-_MAX_RESULT_CHARS = 2000
 
-MAX_RECENT = 6  # check last N actions for repetition
 PAGE_CHANGE_ACTIONS = {"goto", "click", "execute_sequence"}
 READ_ONLY = {
     "extract",
@@ -39,184 +39,6 @@ READ_ONLY = {
     "get_dom",
     "screenshot",
 }
-
-
-@dataclass(slots=True)
-class AgentResult:
-    """Outcome of a complete agent run."""
-
-    success: bool
-    summary: str
-    action_count: int
-    action_log: list[ActionLog] = field(default_factory=list)
-    total_duration_ms: int = 0
-    total_input_tokens: int = 0
-    total_output_tokens: int = 0
-    error: str | None = None
-
-
-class _AdaptiveThinking:
-    """Scale thinking budget based on consecutive successes and step count.
-
-    Early steps get full budget for planning. After consecutive successes,
-    budget drops since the agent is in a known-good execution flow.
-    Errors reset to full budget for recovery reasoning.
-    """
-
-    def __init__(self, base: int = 1024, reduced: int = 1024) -> None:
-        self.base = base
-        self.reduced = reduced
-        self._successes = 0
-        self._step = 0
-
-    @property
-    def budget(self) -> int:
-        self._step += 1
-        # First 2 steps: full budget for task planning
-        if self._step <= 2:
-            return self.base
-        # After 3+ consecutive successes: reduced budget
-        if self._successes >= 3:
-            return self.reduced
-        return self.base
-
-    def record(self, success: bool) -> None:
-        if success:
-            self._successes = min(self._successes + 1, 5)
-        else:
-            self._successes = 0
-
-
-def _prune_old_context(messages: list[dict[str, Any]], keep_last: int = 2) -> None:
-    """Aggressively prune old messages to reduce input tokens.
-
-    - Removes all but the last `keep_last` screenshots.
-    - Truncates DOM snapshots in old tool results.
-    - Removes thinking blocks from old assistant messages.
-    """
-    # Find all message indices that contain screenshots
-    screenshot_indices: list[tuple[int, int]] = []  # (msg_idx, content_idx)
-    for msg_idx, msg in enumerate(messages):
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        for item_idx, item in enumerate(content):
-            d = cast(dict[str, Any], item) if isinstance(item, dict) else None
-            if d is not None and d.get("type") == "image":
-                screenshot_indices.append((msg_idx, item_idx))
-
-    # Remove all but the last `keep_last` screenshots
-    to_remove = (
-        screenshot_indices[:-keep_last] if len(screenshot_indices) > keep_last else []
-    )
-    for msg_idx, item_idx in to_remove:
-        messages[msg_idx]["content"][item_idx] = {
-            "type": "text",
-            "text": "[old screenshot removed]",
-        }
-
-    # Truncate DOM snapshots in old tool results (keep only last 2 messages with DOM)
-    dom_msg_indices: list[tuple[int, int]] = []
-    for msg_idx, msg in enumerate(messages):
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        for item_idx, item in enumerate(content):
-            d = cast(dict[str, Any], item) if isinstance(item, dict) else None
-            if (
-                d is not None
-                and d.get("type") == "text"
-                and DOM_MARKER in (d.get("text") or "")
-            ):
-                dom_msg_indices.append((msg_idx, item_idx))
-
-    to_trim = dom_msg_indices[:-keep_last] if len(dom_msg_indices) > keep_last else []
-    for msg_idx, item_idx in to_trim:
-        text = messages[msg_idx]["content"][item_idx]["text"]
-        # Keep text before the DOM marker, drop the DOM itself
-        cut_idx = text.index(DOM_MARKER)
-        messages[msg_idx]["content"][item_idx]["text"] = (
-            text[:cut_idx].rstrip() + "\n[DOM removed]"
-        )
-
-    # Truncate text in old user messages (tool results) to save tokens
-    # Keep only the first line (action summary) from old tool results
-    user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
-    old_users = user_indices[:-keep_last] if len(user_indices) > keep_last else []
-    for msg_idx in old_users:
-        content = messages[msg_idx].get("content")
-        if not isinstance(content, list):
-            continue
-        for item_idx, item in enumerate(content):
-            d = cast(dict[str, Any], item) if isinstance(item, dict) else None
-            if d is not None and d.get("type") == "text":
-                text = str(d.get("text", ""))
-                if len(text) > 80:
-                    # Keep only the first line (e.g. "Navigated to ..." or "Clicked")
-                    first_line = text.split("\n", 1)[0][:80]
-                    messages[msg_idx]["content"][item_idx] = {
-                        "type": "text",
-                        "text": first_line,
-                    }
-
-    # Strip thinking + text from older assistant messages (keep tool_use blocks only)
-    assistant_indices = [
-        i for i, m in enumerate(messages) if m.get("role") == "assistant"
-    ]
-    old_assistants = (
-        assistant_indices[:-keep_last] if len(assistant_indices) > keep_last else []
-    )
-    for msg_idx in old_assistants:
-        content = messages[msg_idx].get("content")
-        if not isinstance(content, list):
-            continue
-        messages[msg_idx]["content"] = [
-            block
-            for block in content
-            if not (hasattr(block, "type") and block.type in ("thinking", "text"))
-        ]
-
-
-def _truncate_tool_result(tool_result: dict[str, Any], action: str) -> dict[str, Any]:
-    """Truncate text content in tool results to prevent context bloat."""
-    content = tool_result.get("content")
-    if not content or not isinstance(content, list):
-        return tool_result
-    mutated = False
-    truncated = []
-    for item in content:
-        if item.get("type") == "text":
-            text = item.get("text", "")
-            if len(text) > _MAX_RESULT_CHARS:
-                item = {
-                    "type": "text",
-                    "text": text[:_MAX_RESULT_CHARS]
-                    + f"\n... [truncated, {len(text)} chars total]",
-                }
-                mutated = True
-        truncated.append(item)
-    return {**tool_result, "content": truncated} if mutated else tool_result
-
-
-def _make_error_result(
-    error_msg: str,
-    *,
-    step: int,
-    run_start: float,
-    bridge: ActionRouter,
-    total_input_tokens: int,
-    total_output_tokens: int,
-) -> AgentResult:
-    return AgentResult(
-        success=False,
-        summary="",
-        action_count=step,
-        action_log=bridge.action_log,
-        total_duration_ms=int((time.monotonic() - run_start) * 1000),
-        total_input_tokens=total_input_tokens,
-        total_output_tokens=total_output_tokens,
-        error=error_msg,
-    )
 
 
 def _are_parallelizable(blocks: list) -> bool:
@@ -243,9 +65,10 @@ async def run_agent(
     """Run the CUA agent loop with streaming, context management, and adaptive thinking."""
     run_start = time.monotonic()
     client = client or AsyncAnthropic()
-    thinking = _AdaptiveThinking(
+    thinking = AdaptiveThinking(
         base=thinking_budget, reduced=max(1024, thinking_budget // 4)
     )
+    stuck_detector = StuckDetector()
 
     system_prompt = build_system_prompt(
         directive=directive,
@@ -287,8 +110,6 @@ async def run_agent(
     total_output_tokens = 0
     text_parts: list[str] = []
     step = 0
-    # Stuck detection: track recent actions to detect loops
-    _recent_actions: list[str] = []
 
     # Shared API call kwargs (used by both streaming and fallback)
     def _api_kwargs() -> dict:
@@ -308,7 +129,7 @@ async def run_agent(
     try:
         while step < max_steps:
             # Prune old screenshots and DOM snapshots to keep input tokens down
-            _prune_old_context(messages, keep_last=1)
+            prune_old_context(messages, keep_last=1)
 
             tool_results: list[dict] = []
             response_content = []
@@ -365,7 +186,7 @@ async def run_agent(
                                     tool_result = await bridge.execute(
                                         block_name, block_input
                                     )
-                                    tool_result = _truncate_tool_result(
+                                    tool_result = truncate_tool_result(
                                         tool_result, action
                                     )
                                     # Mark skip if this action changes the page
@@ -443,7 +264,7 @@ async def run_agent(
                         tr = await bridge.build_tool_result_from_raw(
                             block.name, action, block.input, raw
                         )
-                        tr = _truncate_tool_result(tr, action)
+                        tr = truncate_tool_result(tr, action)
                         thinking.record(not tr.get("is_error", False))
                         if on_action and bridge.action_log:
                             on_action(bridge.action_log[-1])
@@ -455,7 +276,7 @@ async def run_agent(
                         step += 1
                         action = (block.input or {}).get("action", "")
                         tool_result = await bridge.execute(block.name, block.input)
-                        tool_result = _truncate_tool_result(tool_result, action)
+                        tool_result = truncate_tool_result(tool_result, action)
                         thinking.record(not tool_result.get("is_error", False))
                         if on_action and bridge.action_log:
                             on_action(bridge.action_log[-1])
@@ -482,39 +303,20 @@ async def run_agent(
                 break
 
             # --- Stuck detection ---
-            for tr in tool_results:
-                content = tr.get("content", [])
-                for item in content:
+            stuck_detector.record(tool_results)
+            hint = stuck_detector.get_hint()
+            if hint and tool_results:
+                # Append to the last tool_result's text content
+                last_tr = tool_results[-1]
+                last_content = last_tr.get("content", [])
+                appended = False
+                for item in reversed(last_content):
                     if isinstance(item, dict) and item.get("type") == "text":
-                        sig = item.get("text", "")[:80]
-                        _recent_actions.append(sig)
-            if len(_recent_actions) > MAX_RECENT:
-                _recent_actions[:] = _recent_actions[-MAX_RECENT:]
-            # If 4+ of the last 6 actions have the same signature, inject hint
-            # Appended to the last tool_result's text to avoid mixed content types
-            if len(_recent_actions) >= 4 and tool_results:
-                from collections import Counter
-
-                counts = Counter(_recent_actions[-MAX_RECENT:])
-                top_count = counts.most_common(1)[0][1]
-                if top_count >= 4:
-                    log.warning("Stuck detected: %d repeated actions", top_count)
-                    stuck_hint = (
-                        "\n\n[System] You appear stuck repeating the same action. "
-                        "Try a different approach: use a different selector, "
-                        "navigate to a different URL, or re-read the DOM."
-                    )
-                    # Append to the last tool_result's text content
-                    last_tr = tool_results[-1]
-                    last_content = last_tr.get("content", [])
-                    appended = False
-                    for item in reversed(last_content):
-                        if isinstance(item, dict) and item.get("type") == "text":
-                            item["text"] = item["text"] + stuck_hint
-                            appended = True
-                            break
-                    if not appended:
-                        last_content.append({"type": "text", "text": stuck_hint})
+                        item["text"] = item["text"] + hint
+                        appended = True
+                        break
+                if not appended:
+                    last_content.append({"type": "text", "text": hint})
 
             messages.append({"role": "user", "content": tool_results})
 
@@ -523,7 +325,7 @@ async def run_agent(
 
     except APIError as e:
         log.error("Anthropic API error: %s", e)
-        return _make_error_result(
+        return make_error_result(
             f"API error: {e.message}",
             step=step,
             run_start=run_start,
@@ -533,7 +335,7 @@ async def run_agent(
         )
     except Exception as e:
         log.error("Agent loop error: %s", e, exc_info=True)
-        return _make_error_result(
+        return make_error_result(
             str(e),
             step=step,
             run_start=run_start,
