@@ -11,22 +11,20 @@ import re
 
 from blinders.scope import TaskScope
 
+# Single combined regex for injection detection — one search per line instead of 9.
 # Patterns that suggest prompt injection attempts in web content.
-# These are heuristic — not foolproof, but catch common injection vectors.
-_INJECTION_PATTERNS = [
-    re.compile(
-        r"ignore\s+(previous|above|all|prior)\s+(instructions?|prompts?|rules?)",
-        re.IGNORECASE,
-    ),
-    re.compile(r"you\s+are\s+(now|a|an)\s+", re.IGNORECASE),
-    re.compile(r"system\s*prompt", re.IGNORECASE),
-    re.compile(r"new\s+instructions?\s*:", re.IGNORECASE),
-    re.compile(r"</?system", re.IGNORECASE),
-    re.compile(r"IMPORTANT\s*:.*override", re.IGNORECASE),
-    re.compile(r"disregard\s+(all|any|previous)", re.IGNORECASE),
-    re.compile(r"forget\s+(everything|all|previous)", re.IGNORECASE),
-    re.compile(r"\[INST\]|\[/INST\]|<\|im_start\|>|<\|im_end\|>", re.IGNORECASE),
-]
+_INJECTION_RE = re.compile(
+    r"ignore\s+(?:previous|above|all|prior)\s+(?:instructions?|prompts?|rules?)"
+    r"|you\s+are\s+(?:now|a|an)\s+"
+    r"|system\s*prompt"
+    r"|new\s+instructions?\s*:"
+    r"|</?system"
+    r"|IMPORTANT\s*:.*override"
+    r"|disregard\s+(?:all|any|previous)"
+    r"|forget\s+(?:everything|all|previous)"
+    r"|\[INST\]|\[/INST\]|<\|im_start\|>|<\|im_end\|>",
+    re.IGNORECASE,
+)
 
 # Default dangerous action text patterns (used when action buttons are hidden)
 _DANGEROUS_TEXT_PATTERNS = [
@@ -107,7 +105,7 @@ class DOMBlinders:
 
 def _contains_injection(text: str) -> bool:
     """Check if a line of text contains potential injection patterns."""
-    return any(pattern.search(text) for pattern in _INJECTION_PATTERNS)
+    return _INJECTION_RE.search(text) is not None
 
 
 def _get_dangerous_text_patterns(scope: TaskScope) -> list[str]:
