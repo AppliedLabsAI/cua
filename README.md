@@ -109,7 +109,7 @@ graph LR
     B --> C["DOM<br/>Blinders"]
     C --> D["Filtered<br/>DOM"]
     D --> E["Agent"]
-    E --> F["Scope Verifier +<br/>Regex Safety"]
+    E --> F["Scope Verifier +<br/>Action Validator"]
     F -->|Safe| G["Execute"]
     F -->|Blocked| H["Feedback"]
 
@@ -150,17 +150,20 @@ Each goal type gets adaptive defaults:
 | **JS-side** | `dom_snapshot.js` in browser | Filters elements by category (forms, action buttons, account controls) based on task scope. Elements are removed before they leave the browser. |
 | **Python-side** | `blinders/filters.py` | Scans for prompt injection patterns (`"ignore previous instructions"`, `SYSTEM:`, `[INST]` tokens) and redacts them. Wraps content with provenance markers (`[web-content-start/end]`). |
 
-**3. Scope Verifier + Destructive Action Detection** — Two-layer pre-execution check:
+**3. Scope Verifier + Action Validator** — Optimized multi-layer pre-execution check using DAG pruning to eliminate redundant LLM calls:
 
 | Layer | Speed | What it checks |
 |---|---|---|
 | **Deterministic** | ~25μs | Action type allowed for goal? Domain in scope? SSRF? Navigation limit? |
-| **Regex patterns** | ~5μs | Does this click target a destructive action (delete, refund, purchase, send)? |
+| **Regex fast-path** | ~5μs | Is this a known-safe selector (navigation, menus, filters, CSS selectors)? |
+| **Action Validator (Haiku)** | ~500ms | Is this action aligned with the user's task? Context-aware destructive detection. |
 
-The destructive action detection uses comprehensive regex patterns that run on every click:
-- **`_DESTRUCTIVE_RE`** — blocks known dangerous patterns (delete, refund, purchase, send money, etc.)
-- **`_SAFE_CLICK_RE`** — fast-paths known safe patterns (navigation, menus, filters, login, etc.)
+The pipeline is optimized to minimize LLM overhead while maximizing safety:
+- **Regex fast-path** — safe selectors (navigation, menus, table rows, CSS selectors) skip Haiku entirely
+- **Context-aware safety** — the Action Validator considers the user's directive, so "click refund" is allowed when the task is "issue a refund" but blocked when the task is "check order status"
+- **DAG pruning** — redundant checks are eliminated: the Action Validator subsumes the destructive check (1 Haiku call per risky action, not 2-3)
 - **Selector caching** — once a selector is approved, future clicks skip re-validation
+- **Domain caching** — once a domain is approved for goto, future navigations skip re-validation
 - **Safe action skipping** — `extract`, `screenshot`, `scroll`, `get_dom`, `wait_for` bypass validation entirely
 - **Batched sequences** — `execute_sequence` sub-steps share a single validation pass
 
@@ -173,7 +176,7 @@ Defense-in-depth checks that run alongside Cognitive Blinders:
 | Guard | Default | Configurable |
 |---|---|---|
 | Domain blocklist | Banking, government, email, payment, social media | `allowed_domains` / `blocked_domains` |
-| Destructive action detection | Regex patterns block known destructive clicks (delete, refund, purchase, send); LLM fallback available via `enable_llm_action_check` | `enable_llm_action_check` |
+| Destructive action detection | Context-aware Action Validator (Haiku) with regex fast-path for safe selectors; regex-only fallback via `enable_llm_action_check: false` | `enable_llm_action_check` |
 | SSRF protection | Private IPs, localhost, cloud metadata (169.254.x.x) | `allow_private_networks` |
 | URL visit limit | 50 unique URLs per run | `max_urls_visited` |
 | Consecutive error limit | 5 errors | `max_consecutive_errors` |
@@ -270,7 +273,7 @@ DOM-first actions reduce cost vs screenshot-heavy approaches — each screenshot
 ```text
 cua/
 ├── agent/           Agent loop, tools, prompts, context management
-├── blinders/        Cognitive Blinders (scope, DOM filters, verifier)
+├── blinders/        Cognitive Blinders (scope, DOM filters, verifier, action validator)
 ├── bridge/          Patchright executor, CAPTCHA handling, action router
 ├── api/             FastAPI servers (outer API + inner status API)
 ├── guardrails/      Domain/action/SSRF safety engine
