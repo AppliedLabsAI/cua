@@ -100,9 +100,7 @@ def record_thinking_block(block: Any, llm_span: Span) -> None:
     thinking_text = getattr(block, "thinking", "") or ""
     if thinking_text:
         log.debug("Thinking: %s", thinking_text)
-        llm_span.add_event(
-            EVENT_THINKING, attributes={"thinking_text": thinking_text}
-        )
+        llm_span.add_event(EVENT_THINKING, attributes={"thinking_text": thinking_text})
 
 
 async def execute_tool_with_span(

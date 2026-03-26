@@ -71,6 +71,16 @@ def errors_total():
     )
 
 
+@lru_cache(maxsize=1)
+def safety_degraded_total():
+    """Total times safety fell back to deterministic degraded mode."""
+    return _meter().create_counter(
+        "cua.safety.degraded.total",
+        unit="1",
+        description="Total safety degraded-mode activations",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Histograms
 # ---------------------------------------------------------------------------

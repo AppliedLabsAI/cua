@@ -27,9 +27,11 @@ class TestCUAConfigFromEnv:
 
     def test_credentials_from_env(self, monkeypatch):
         monkeypatch.setenv("DIRECTIVE", "test")
-        monkeypatch.setenv("CREDENTIALS_JSON", '{"user": "admin"}')
+        monkeypatch.setenv(
+            "CREDENTIALS_JSON", '{"github": {"username": "admin", "password": "pw"}}'
+        )
         config = CUAConfig.from_env()
-        assert config.credentials == {"user": "admin"}
+        assert config.credentials == {"github": {"username": "admin", "password": "pw"}}
 
     def test_guardrails_from_env(self, monkeypatch):
         monkeypatch.setenv("DIRECTIVE", "test")

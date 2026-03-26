@@ -1,4 +1,4 @@
-"""Pydantic request/response models for the CUA API."""
+"""Typed request/response models for the CUA API."""
 
 from __future__ import annotations
 
@@ -11,6 +11,38 @@ from settings import AGENT_MODEL
 RunStatusValue = Literal[
     "starting", "running", "completed", "failed", "timeout", "terminated"
 ]
+
+CredentialsMap = dict[str, dict[str, str]]
+
+
+class GuardrailSettings(BaseModel):
+    """API-facing representation of guardrail configuration."""
+
+    allowed_domains: list[str] | None = None
+    blocked_domains: list[str] | None = None
+    max_urls_visited: int = 50
+    max_consecutive_errors: int = 5
+    allow_private_networks: bool = False
+    enable_llm_action_check: bool = True
+
+    def to_dict(self) -> dict:
+        """Return a JSON-serializable representation without null overrides."""
+        return self.model_dump(exclude_none=True)
+
+
+class ActionEvent(BaseModel):
+    """Serializable action event returned by the status API."""
+
+    step: int
+    timestamp: str
+    tool: str
+    action: str
+    input_summary: str
+    duration_ms: int
+    success: bool
+    result_text: str | None = None
+    has_screenshot: bool = False
+    error: str | None = None
 
 
 class RunConfig(BaseModel):
@@ -25,9 +57,9 @@ class RunConfig(BaseModel):
     display_height: int = 720
     profile: str = "default"
     start_url: str | None = None
-    credentials: dict | None = None
+    credentials: CredentialsMap | None = None
     proxy: str | None = None
-    guardrails: dict | None = None  # GuardrailConfig as dict, or None for defaults
+    guardrails: GuardrailSettings | None = None
 
 
 class RunResponse(BaseModel):
@@ -45,7 +77,7 @@ class RunStatus(BaseModel):
     run_id: str
     status: RunStatusValue
     action_count: int = 0
-    actions: list[dict] = Field(default_factory=list)
+    actions: list[ActionEvent] = Field(default_factory=list)
     result: str | None = None
     error: str | None = None
     duration_ms: int | None = None

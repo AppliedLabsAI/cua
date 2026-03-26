@@ -75,3 +75,14 @@ class TestSanitizeToolInput:
         inp = {"action": "goto", "url": "x" * 1000}
         result = _sanitize_tool_input(inp)
         assert result["url"] == "x" * 1000
+
+    def test_truncates_nested_execute_sequence_text(self):
+        inp = {
+            "action": "execute_sequence",
+            "steps": [
+                {"action": "key_press", "text": "x" * 1000},
+            ],
+        }
+        result = _sanitize_tool_input(inp)
+        assert len(result["steps"][0]["text"]) < 1000
+        assert "chars total" in result["steps"][0]["text"]

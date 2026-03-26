@@ -441,15 +441,15 @@ class TestScopeEdgeCases:
         )
         assert scope.goal_type == "fill_form"
 
-    def test_pure_url_defaults_to_interact(self):
+    def test_pure_url_defaults_to_read(self):
         scope = extract_task_scope("https://example.com", use_llm=False)
-        # Keyword fallback with no action keywords defaults to "interact"
-        assert scope.goal_type == "interact"
+        # Degraded keyword fallback now defaults to "read" for safety.
+        assert scope.goal_type == "read"
 
-    def test_empty_directive_defaults_to_interact(self):
+    def test_empty_directive_defaults_to_read(self):
         scope = extract_task_scope("", use_llm=False)
-        # Keyword fallback with no matching keywords defaults to "interact"
-        assert scope.goal_type == "interact"
+        # Degraded keyword fallback now defaults to "read" for safety.
+        assert scope.goal_type == "read"
 
     def test_download_is_interact(self):
         scope = extract_task_scope("Download the PDF from example.com", use_llm=False)

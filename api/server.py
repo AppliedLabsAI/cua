@@ -18,6 +18,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from opentelemetry import trace as otel_trace  # StatusCode used below
 
 from api.models import RunConfig, RunResponse, RunStatus
+from api.run_registry import InMemoryRunRegistry, RunHandle
 from sandbox.image import PORT_NOVNC, PORT_STATUS, create_cua_sandbox
 from settings import get_settings
 from telemetry import get_tracer, setup_telemetry
@@ -56,16 +57,13 @@ async def _verify_api_key(
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
-# In-memory store of active sandbox references
-_sandboxes: dict[str, modal.Sandbox] = {}
-_sandbox_status_urls: dict[str, str] = {}
+_run_registry = InMemoryRunRegistry()
 
 _http_client: httpx.AsyncClient | None = None
 
 
 def _remove_run_registry(run_id: str) -> None:
-    _sandboxes.pop(run_id, None)
-    _sandbox_status_urls.pop(run_id, None)
+    _run_registry.remove(run_id)
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -75,12 +73,12 @@ def _get_http_client() -> httpx.AsyncClient:
 
 
 def _cleanup_finished_sandbox(run_id: str) -> bool:
-    sandbox = _sandboxes.get(run_id)
-    if sandbox is None:
+    handle = _run_registry.get(run_id)
+    if handle is None:
         return False
 
     try:
-        exit_code = sandbox.poll()
+        exit_code = handle.sandbox.poll()
     except Exception:
         log.exception("Failed to poll sandbox for run %s", run_id)
         return False
@@ -163,8 +161,9 @@ async def create_run(config: RunConfig) -> RunResponse:
             ) from exc
 
         assert sandbox is not None
-        _sandboxes[run_id] = sandbox
-        _sandbox_status_urls[run_id] = status_base
+        _run_registry.add(
+            RunHandle(run_id=run_id, sandbox=sandbox, status_base_url=status_base)
+        )
 
         log.info("Created run %s, noVNC: %s", run_id, novnc_url)
 
@@ -186,13 +185,13 @@ async def get_run_status(run_id: str) -> RunStatus:
             error="Sandbox has already exited",
         )
 
-    status_base = _sandbox_status_urls.get(run_id)
-    if not status_base:
+    handle = _run_registry.get(run_id)
+    if not handle:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     client = _get_http_client()
     try:
-        resp = await client.get(f"{status_base}/status")
+        resp = await client.get(f"{handle.status_base_url}/status")
         resp.raise_for_status()
         data = resp.json()
         return RunStatus(**data)
@@ -209,11 +208,11 @@ async def get_run_status(run_id: str) -> RunStatus:
 @app.post("/runs/{run_id}/stop")
 async def stop_run(run_id: str) -> dict:
     """Terminate a CUA run early."""
-    sandbox = _sandboxes.get(run_id)
-    if not sandbox:
+    handle = _run_registry.get(run_id)
+    if not handle:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
-    sandbox.terminate()
+    handle.sandbox.terminate()
     _remove_run_registry(run_id)
     log.info("Terminated run %s", run_id)
     return {"status": "terminated", "run_id": run_id}
@@ -225,8 +224,8 @@ async def stream_run(run_id: str) -> StreamingResponse:
     if _cleanup_finished_sandbox(run_id):
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
-    status_base = _sandbox_status_urls.get(run_id)
-    if not status_base:
+    handle = _run_registry.get(run_id)
+    if not handle:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     client = _get_http_client()
@@ -234,7 +233,7 @@ async def stream_run(run_id: str) -> StreamingResponse:
     async def proxy_events():
         try:
             async with client.stream(
-                "GET", f"{status_base}/events", timeout=None
+                "GET", f"{handle.status_base_url}/events", timeout=None
             ) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():

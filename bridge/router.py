@@ -14,13 +14,9 @@ from typing import TYPE_CHECKING
 
 from actionlog.actions import ActionLog, persist_action_log
 from bridge import DOM_MARKER, ActionResult
-from bridge.browser import (
-    BrowserManager,
-    execute_dom_action,
-    page_screenshot,
-    quick_dom_snapshot,
-)
+from bridge.browser import BrowserManager
 from bridge.captcha import handle_captcha_if_present
+from bridge.execution import execute_dom_action, page_screenshot, quick_dom_snapshot
 from guardrails import GuardrailConfig, GuardrailEngine, GuardrailResult
 from telemetry import get_tracer
 from telemetry.metrics import guardrail_blocks_total
@@ -212,6 +208,8 @@ class ActionRouter:
         action: str,
         tool_input: dict,
         result: ActionResult,
+        *,
+        duration_ms: int = 0,
     ) -> dict:
         """Convert a pre-executed ActionResult into a tool_result with logging.
 
@@ -231,7 +229,7 @@ class ActionRouter:
             tool=tool_name,
             action=action,
             tool_input=tool_input,
-            duration_ms=0,  # not tracked for parallel execution
+            duration_ms=duration_ms,
             success=result.error is None,
             result_text=result.text,
             has_screenshot=result.screenshot_b64 is not None,

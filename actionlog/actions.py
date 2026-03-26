@@ -12,6 +12,8 @@ import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
+from api.models import ActionEvent
+
 _LOG_DIR = "/tmp/cua-actions"
 os.makedirs(_LOG_DIR, exist_ok=True)
 
@@ -65,6 +67,21 @@ class ActionLog:
             has_screenshot=has_screenshot,
             error=error,
             thinking=thinking,
+        )
+
+    def to_event(self) -> ActionEvent:
+        """Convert the log entry to the API event shape."""
+        return ActionEvent(
+            step=self.step,
+            timestamp=self.timestamp,
+            tool=self.tool,
+            action=self.action,
+            input_summary=self.input_summary,
+            duration_ms=self.duration_ms,
+            success=self.success,
+            result_text=self.result_text,
+            has_screenshot=self.has_screenshot,
+            error=self.error,
         )
 
 
@@ -121,14 +138,26 @@ def summarize_action(tool: str, action: str, params: dict) -> str:
 
 
 def _sanitize_tool_input(tool_input: dict) -> dict:
-    """Truncate large string fields to avoid unbounded memory in logs."""
-    result = {}
-    for k, v in tool_input.items():
-        if k in _LARGE_FIELDS and isinstance(v, str) and len(v) > _MAX_FIELD_LEN:
-            result[k] = v[:_MAX_FIELD_LEN] + f"... [{len(v)} chars total]"
-        else:
-            result[k] = v
-    return result
+    """Truncate large string fields recursively to avoid unbounded log growth."""
+    return _sanitize_value(tool_input)
+
+
+def _sanitize_value(value):
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if (
+                key in _LARGE_FIELDS
+                and isinstance(item, str)
+                and len(item) > _MAX_FIELD_LEN
+            ):
+                result[key] = item[:_MAX_FIELD_LEN] + f"... [{len(item)} chars total]"
+            else:
+                result[key] = _sanitize_value(item)
+        return result
+    if isinstance(value, list):
+        return [_sanitize_value(item) for item in value]
+    return value
 
 
 def _sanitize_filename(s: str, max_len: int = 30) -> str:
@@ -173,5 +202,5 @@ def format_sse_event(action: ActionLog) -> str:
     Excludes tool_input and thinking (too large for streaming).
     Returns "data: {json}\\n\\n".
     """
-    payload = {k: v for k, v in asdict(action).items() if k not in SSE_EXCLUDED_FIELDS}
+    payload = action.to_event().model_dump()
     return f"data: {json.dumps(payload)}\n\n"
