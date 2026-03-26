@@ -86,6 +86,7 @@ class ActionRouter:
         browser: BrowserManager,
         guardrail_config: GuardrailConfig | None = None,
         blinders: DOMBlinders | None = None,
+        directive: str = "",
     ) -> None:
         self.browser = browser
         self.guardrails = GuardrailEngine(guardrail_config)
@@ -99,7 +100,9 @@ class ActionRouter:
         if blinders:
             from blinders.verifier import ScopeVerifier
 
-            self._verifier = ScopeVerifier(blinders.scope, self.guardrails)
+            self._verifier = ScopeVerifier(
+                blinders.scope, self.guardrails, directive=directive
+            )
 
     async def execute(self, tool_name: str, tool_input: dict) -> dict:
         """Route a tool call from Claude to the appropriate executor.
@@ -211,9 +214,20 @@ class ActionRouter:
         if tool_name != "browser_dom":
             return None
 
-        # Use ScopeVerifier when blinders are active (structural + legacy checks)
+        # Use ScopeVerifier when blinders are active (structural + LLM checks)
         if self._verifier:
-            return self._verifier.check(action, tool_input)
+            page_url = ""
+            page_title = ""
+            try:
+                page_url = self.browser.page.url
+                page_title = ""  # title requires async; URL is sufficient context
+            except RuntimeError:
+                pass  # browser not launched yet
+            return self._verifier.check(
+                action, tool_input,
+                page_url=page_url,
+                page_title=page_title,
+            )
 
         # Fallback: legacy guardrail checks when no blinders configured
         action_check = self.guardrails.check_action(action, tool_input)

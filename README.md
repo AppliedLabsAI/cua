@@ -198,7 +198,79 @@ curl -N https://your-app--cua.modal.run/runs/sb-abc123/stream
 
 ## Guardrails
 
-CUA includes a safety guardrail system that runs before every action:
+CUA uses a layered safety architecture combining proactive observation control with traditional runtime checks.
+
+### Cognitive Blinders
+
+The primary safety mechanism is **Cognitive Blinders** — a proactive observation filtering system that controls what the agent can see, rather than reactively blocking what it tries to do. If the agent can't see a "delete account" button, it can't click it. If it can't see injected instructions in a sidebar ad, it can't follow them.
+
+The blinders pipeline runs automatically on every task:
+
+```text
+User Directive (trusted)
+        │
+        ▼
+┌──────────────────────┐
+│  Task Scope          │  Extracts goal type, allowed domains,
+│  Extraction          │  allowed actions from the directive.
+│  (blinders/scope.py) │  No LLM call — deterministic keyword analysis.
+└──────────┬───────────┘
+           │  TaskScope { goal_type, allowed_domains,
+           │    allowed_actions, element_visibility }
+           ▼
+┌──────────────────────┐
+│  DOM Blinders        │  JS-side: filters DOM elements by category
+│  (dom_snapshot.js +  │  Python-side: redacts injection patterns,
+│   blinders/filters)  │  adds content provenance markers
+└──────────┬───────────┘
+           │  Filtered DOM (task-relevant elements only)
+           ▼
+┌──────────────────────┐
+│  Scope Verifier      │  Deterministic pre-execution check:
+│  (blinders/verifier) │  action type + domain + existing guardrails
+└──────────┬───────────┘
+           │
+           ▼
+      Execute action
+```
+
+**How it works:**
+
+1. **Task Scope Extraction** — Before the agent sees any web content, the directive is analyzed to determine the goal type (`read`, `navigate`, `interact`, `fill_form`). This uses a two-tier approach:
+   - **Fast keyword matching** (~25μs) handles clear-cut directives ("find the price" → `read`, "fill out the form" → `fill_form`)
+   - **Haiku LLM validation** (~200ms, one-time) activates automatically when the keyword result is ambiguous — e.g., a directive says "find" (read keyword) but also mentions "login" or "password" (needs form interaction). This prevents misclassification that would block required actions.
+
+   The LLM layer auto-detects: if `ANTHROPIC_API_KEY` is set, ambiguous cases get validated; otherwise, keyword matching is used alone.
+
+   Each goal type gets adaptive visibility and action defaults:
+
+   | Goal Type | Forms | Action Buttons | Account Controls | Key Press |
+   |-----------|-------|----------------|------------------|-----------|
+   | `read` | Hidden | Hidden | Hidden | Blocked |
+   | `navigate` | Hidden | Hidden | Hidden | Blocked |
+   | `interact` | Visible | Visible | Hidden | Allowed |
+   | `fill_form` | Visible | Visible | Visible | Allowed |
+
+2. **DOM Blinders** — The DOM snapshot sent to the agent is filtered at two levels:
+   - **JS-side** (`dom_snapshot.js`): Elements are filtered by category before leaving the browser. Form inputs, dangerous buttons, and account controls are excluded based on the task scope.
+   - **Python-side** (`blinders/filters.py`): The snapshot is scanned for prompt injection patterns (e.g., "ignore previous instructions", `<system>` tags, `[INST]` tokens) and suspicious lines are redacted. Content is wrapped with provenance markers (`[web-content-start/end]`) so the model can distinguish web content from system instructions.
+
+3. **Scope Verifier** — Before every action executes, a deterministic check validates:
+   - Is this action type allowed for this goal? (structural — not prompt-based)
+   - Is the target URL within the allowed domains? (extracted from the directive)
+   - Does the existing SSRF/guardrail check pass? (defense in depth)
+
+4. **Tool Schema Restriction** — The tool definition sent to Claude only includes actions allowed by the task scope. For a `read` task, `key_press` and `execute_sequence` are literally absent from the schema — the model cannot select them.
+
+**Why this approach:**
+- **Proactive, not reactive** — the agent never sees out-of-scope elements, so it can't be influenced by them
+- **Structural, not behavioral** — architecture enforces safety, not prompts that can be bypassed
+- **Dual-purpose** — every safety filter also improves performance (fewer tokens, less noise, better focus)
+- **~25μs overhead** — the full pipeline adds negligible latency to each action
+
+### Runtime Guardrails
+
+In addition to Cognitive Blinders, CUA maintains traditional runtime guardrails as defense in depth:
 
 - **Domain blocklist**: Blocks navigation to banking, government, email, payment, and social media sites by default. Configurable via `allowed_domains` (allowlist) or `blocked_domains` (blocklist).
 - **Destructive action detection**: Blocks clicks on selectors matching purchase, account deletion, or message sending keywords.
@@ -225,15 +297,18 @@ DOM-first actions drastically reduce cost vs screenshot-heavy approaches — eac
 
 ```text
 cua/
-├── agent/           Agent loop, tool definitions, system prompt
+├── agent/           Agent loop, tool definitions, system prompt, context management
+├── blinders/        Cognitive Blinders — task scope, DOM filtering, scope verification
 ├── bridge/          Patchright browser executor, CAPTCHA handling, action router
 ├── api/             FastAPI server (outer) + streaming server (inner sandbox)
 ├── actionlog/       Action log dataclass, persistence, SSE formatting
+├── guardrails/      Domain/action/SSRF safety engine
 ├── profiles/        YAML profile definitions (prompt + guardrails)
 ├── sandbox/         Modal image definition + entrypoint script
 ├── scripts/         Local dev runner
-├── tests/           Unit tests
-├── guardrails.py    Domain/action/SSRF safety engine
+├── tests/           Unit + integration tests
+├── config.py        Centralized CUAConfig (env vars, RunConfig, profiles)
+├── exceptions.py    Custom exception hierarchy
 ├── Dockerfile       Docker-based sandbox (alternative to Modal)
 └── docs/            Archived design documents
 ```

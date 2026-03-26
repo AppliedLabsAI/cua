@@ -3,10 +3,14 @@
 Analyzes the user directive to determine what the agent should be allowed
 to see and do. Runs BEFORE any web content is observed — operates only
 on trusted user input.
+
+Classification uses a Haiku LLM call for accuracy, with a lightweight
+keyword fallback for offline/test environments.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -30,69 +34,28 @@ ALL_ACTIONS = frozenset(
     }
 )
 
-# Keyword groups for goal type detection
-_READ_KEYWORDS = [
-    "find",
-    "search",
-    "look up",
-    "lookup",
-    "what is",
-    "what are",
-    "tell me",
-    "summarize",
-    "research",
-    "check",
-    "compare",
-    "how much",
-    "how many",
-    "price of",
-    "list of",
-    "show me",
-    "get info",
-    "get information",
-    "read",
-    "review",
-]
-
-_FILL_FORM_KEYWORDS = [
-    "fill",
-    "fill out",
-    "fill in",
-    "submit",
-    "register",
-    "sign up",
-    "signup",
-    "apply",
-    "book",
-    "reserve",
-    "create account",
-    "create an account",
-]
-
-_NAVIGATE_KEYWORDS = [
-    "go to",
-    "navigate to",
-    "open",
-    "visit",
-    "load",
-]
-
-_INTERACT_KEYWORDS = [
-    "click",
-    "type",
-    "enter",
-    "select",
-    "choose",
-    "toggle",
-    "download",
-    "upload",
-    "drag",
-    "drop",
-]
-
 # Patterns for extracting URLs from directives
 _URL_PATTERN = re.compile(
     r"https?://[^\s,\"'<>]+|(?:www\.)?[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:/[^\s,\"'<>]*)?"
+)
+
+# Minimal keyword sets used ONLY as offline fallback when no API key is available.
+# The LLM classifier is the primary classification method.
+_FALLBACK_FILL_FORM_RE = re.compile(
+    r"fill\b|submit|register|sign.?up|log.?in|sign.?in|book\b|reserve|create.+account",
+    re.IGNORECASE,
+)
+_FALLBACK_INTERACT_RE = re.compile(
+    r"click|select\b|choose|download|upload|toggle|drag\b|drop\b",
+    re.IGNORECASE,
+)
+_FALLBACK_READ_RE = re.compile(
+    r"find\b|search|tell me|summarize|research|check\b|compare|price|show me|read\b|review|what|how",
+    re.IGNORECASE,
+)
+_FALLBACK_NAVIGATE_RE = re.compile(
+    r"go to|navigate to|open\b|visit\b|load\b",
+    re.IGNORECASE,
 )
 
 
@@ -148,27 +111,43 @@ def _extract_domains(directive: str) -> list[str]:
     return domains
 
 
-def _detect_goal_type(directive: str) -> str:
-    """Classify the directive into a goal type based on keywords."""
-    lower = directive.lower()
+def _detect_goal_type(directive: str, *, use_llm: bool | None = None) -> str:
+    """Classify the directive into a goal type.
 
-    # Check most specific patterns first
-    for kw in _FILL_FORM_KEYWORDS:
-        if kw in lower:
-            return "fill_form"
+    Primary: LLM-based classification via Haiku (accurate, handles edge cases).
+    Fallback: Minimal keyword matching (fast, for offline/test environments).
 
-    for kw in _INTERACT_KEYWORDS:
-        if kw in lower:
-            return "interact"
+    Args:
+        use_llm: If None (default), auto-detects by checking for ANTHROPIC_API_KEY.
+                 Set True/False to override.
+    """
+    # Auto-detect: use LLM if API key is available
+    if use_llm is None:
+        use_llm = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
-    for kw in _READ_KEYWORDS:
-        if kw in lower:
-            return "read"
+    if use_llm:
+        from blinders.classifier import classify_directive
 
-    for kw in _NAVIGATE_KEYWORDS:
-        if kw in lower:
-            return "navigate"
+        return classify_directive(directive)
 
+    # Offline fallback: minimal keyword matching
+    return _detect_goal_type_fallback(directive)
+
+
+def _detect_goal_type_fallback(directive: str) -> str:
+    """Offline fallback: classify directive using minimal keyword regex.
+
+    Used only when no API key is available (tests, offline mode).
+    Intentionally simple — the LLM classifier handles nuance.
+    """
+    if _FALLBACK_FILL_FORM_RE.search(directive):
+        return "fill_form"
+    if _FALLBACK_INTERACT_RE.search(directive):
+        return "interact"
+    if _FALLBACK_READ_RE.search(directive):
+        return "read"
+    if _FALLBACK_NAVIGATE_RE.search(directive):
+        return "navigate"
     # Default: interact (most permissive)
     return "interact"
 
@@ -232,8 +211,14 @@ def _default_actions(goal_type: str) -> frozenset[str]:
 def extract_task_scope(
     directive: str,
     profile: Profile | None = None,
+    *,
+    use_llm: bool | None = None,
 ) -> TaskScope:
-    """Analyze directive to determine task scope. Pure function, no LLM call.
+    """Analyze directive to determine task scope.
+
+    Uses Haiku LLM for accurate classification when an API key is available.
+    Falls back to minimal keyword matching for offline/test environments.
+    Set use_llm=False to force offline mode.
 
     The scope defines:
     - What goal type the task is (read, navigate, interact, fill_form)
@@ -241,7 +226,7 @@ def extract_task_scope(
     - Which actions are available (narrowed by goal type)
     - What DOM elements are visible (adaptive by goal type)
     """
-    goal_type = _detect_goal_type(directive)
+    goal_type = _detect_goal_type(directive, use_llm=use_llm)
     allowed_domains = _extract_domains(directive)
     visibility = _default_visibility(goal_type)
     allowed_actions = _default_actions(goal_type)

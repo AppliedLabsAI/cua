@@ -15,6 +15,7 @@ import base64
 import contextlib
 import json
 from pathlib import Path
+from typing import Any, cast
 
 from patchright.async_api import (
     Browser,
@@ -355,9 +356,16 @@ async def _execute_sequence(
 
     results: list[str] = []
     last_step = len(steps) - 1
-    for i, step in enumerate(steps):
-        action = step.get("action", "")  # ty:ignore[unresolved-attribute]
-        if not action:
+    for i, raw_step in enumerate(steps):
+        if not isinstance(raw_step, dict):
+            return ActionResult(
+                error=f"Step {i + 1}: missing 'action'",
+                text="\n".join(results) if results else None,
+            )
+
+        step = cast(dict[str, Any], raw_step)
+        action = step.get("action")
+        if not isinstance(action, str) or not action:
             return ActionResult(
                 error=f"Step {i + 1}: missing 'action'",
                 text="\n".join(results) if results else None,
@@ -377,7 +385,7 @@ async def _execute_sequence(
             browser,
             _skip_screenshot=not is_last,
             filter_config=filter_config,
-        )  # ty:ignore[invalid-argument-type]
+        )
 
         if result.error:
             # On error, take a screenshot so the agent can see what went wrong

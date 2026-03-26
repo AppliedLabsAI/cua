@@ -77,7 +77,10 @@ async def run(args: argparse.Namespace) -> int:
     )
 
     bridge = ActionRouter(
-        browser=browser, guardrail_config=guardrail_config, blinders=blinders
+        browser=browser,
+        guardrail_config=guardrail_config,
+        blinders=blinders,
+        directive=args.directive,
     )
 
     credentials = None

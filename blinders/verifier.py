@@ -1,8 +1,9 @@
 """Scope Verifier — deterministic pre-execution check against TaskScope.
 
-Replaces reactive keyword-matching with structural verification:
-the action must be within the task's allowed actions and domains.
-Preserves existing SSRF and navigation limit checks from GuardrailEngine.
+Combines structural verification (action types, domain scope) with
+LLM-based action validation for risky actions. The deterministic checks
+run first (fast, non-bypassable), then Haiku validates alignment for
+actions that could be destructive.
 """
 
 from __future__ import annotations
@@ -11,33 +12,68 @@ import fnmatch
 import logging
 from urllib.parse import urlparse
 
+from blinders.action_validator import ActionValidator
 from blinders.scope import TaskScope
 from guardrails import GuardrailEngine
 
 log = logging.getLogger(__name__)
 
+# Max recursion depth for execute_sequence validation
+_MAX_SEQUENCE_DEPTH = 10
+
 
 class ScopeVerifier:
-    """Deterministic pre-execution check against TaskScope.
+    """Pre-execution check combining deterministic scope checks with LLM validation.
 
-    Non-bypassable by prompt injection because it operates on the
-    TaskScope derived from trusted user input, not from web content.
+    Layer 1 (deterministic): Action type restriction, domain scope, SSRF, guardrails.
+    Layer 2 (LLM): Haiku validates whether the action aligns with the task directive.
     """
 
-    def __init__(self, scope: TaskScope, guardrails: GuardrailEngine) -> None:
+    def __init__(
+        self,
+        scope: TaskScope,
+        guardrails: GuardrailEngine,
+        directive: str = "",
+    ) -> None:
         self.scope = scope
         self.guardrails = guardrails
+        self._validator = ActionValidator(directive) if directive else None
 
-    def check(self, action: str, tool_input: dict) -> str | None:
-        """Check if an action is allowed. Returns reason if blocked, None if allowed."""
-        # 1. Action type restriction — structural, not behavioral
+    def check(
+        self,
+        action: str,
+        tool_input: dict,
+        *,
+        page_url: str = "",
+        page_title: str = "",
+        _depth: int = 0,
+        _skip_llm: bool = False,
+    ) -> str | None:
+        """Check if an action is allowed.
+
+        Returns reason string if blocked, None if allowed.
+        Runs deterministic checks first, then LLM validation for risky actions.
+
+        For execute_sequence: deterministic checks run on each sub-step,
+        but LLM validation runs ONCE on the whole sequence (batched).
+        """
+        # Guard against deeply nested sequences
+        if _depth > _MAX_SEQUENCE_DEPTH:
+            return "Sequence nesting too deep"
+
+        # --- Layer 1: Deterministic checks (fast, non-bypassable) ---
+
+        # 1. Action type restriction — structural
         if action not in self.scope.allowed_actions:
             log.info(
                 "Scope blocked action '%s' (goal_type=%s)",
                 action,
                 self.scope.goal_type,
             )
-            return f"Action '{action}' not allowed for {self.scope.goal_type} tasks"
+            return (
+                f"Action '{action}' not allowed for "
+                f"{self.scope.goal_type} tasks"
+            )
 
         # 2. Domain scope (for goto actions)
         if action == "goto":
@@ -61,13 +97,34 @@ class ScopeVerifier:
         if not action_check.allowed:
             return action_check.reason
 
-        # 4. execute_sequence: verify each step recursively
+        # 4. execute_sequence: deterministic checks on each step,
+        #    but skip LLM on sub-steps (validated once for whole sequence)
         if action == "execute_sequence":
             for step in tool_input.get("steps", []):
-                step_action = step.get("action", "")
-                result = self.check(step_action, step)
-                if result:
-                    return result
+                if isinstance(step, dict):
+                    step_action = step.get("action", "")
+                    result = self.check(
+                        step_action,
+                        step,
+                        page_url=page_url,
+                        page_title=page_title,
+                        _depth=_depth + 1,
+                        _skip_llm=True,  # LLM validates the sequence as a whole
+                    )
+                    if result:
+                        return result
+
+        # --- Layer 2: LLM validation (Haiku) ---
+        # Validates the top-level action (or whole sequence) in ONE call.
+        # Skipped for sub-steps inside execute_sequence (_skip_llm=True).
+        if self._validator and not _skip_llm:
+            llm_block = self._validator.validate(
+                action, tool_input,
+                page_url=page_url,
+                page_title=page_title,
+            )
+            if llm_block:
+                return llm_block
 
         return None
 

@@ -82,6 +82,7 @@ async def main() -> int:
         browser=browser,
         guardrail_config=config.guardrail_config,
         blinders=blinders,
+        directive=config.directive,
     )
 
     # Run the agent
