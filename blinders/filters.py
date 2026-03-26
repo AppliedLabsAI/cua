@@ -54,22 +54,21 @@ class DOMBlinders:
 
     def __init__(self, scope: TaskScope) -> None:
         self.scope = scope
-
-    def to_js_filter_config(self) -> dict:
-        """Convert TaskScope visibility into the JS filterConfig format.
-
-        This dict is passed as the 3rd argument to window.__domSnapshot().
-        """
-        vis = self.scope.visibility
-        return {
+        # Pre-compute JS filter config (scope is immutable after creation)
+        vis = scope.visibility
+        self._js_config = {
             "showForms": vis.show_forms,
             "showNavLinks": vis.show_nav_links,
             "showActionButtons": vis.show_action_buttons,
             "showAccountControls": vis.show_account_controls,
             "excludeSelectors": vis.exclude_selectors,
             "includeSelectors": vis.include_selectors,
-            "excludeTextPatterns": _get_dangerous_text_patterns(self.scope),
+            "excludeTextPatterns": _get_dangerous_text_patterns(scope),
         }
+
+    def to_js_filter_config(self) -> dict:
+        """Return pre-computed JS filterConfig for window.__domSnapshot()."""
+        return self._js_config
 
     def filter_snapshot(self, dom_text: str) -> str:
         """Apply Python-side filtering to a DOM snapshot string.
