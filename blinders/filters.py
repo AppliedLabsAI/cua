@@ -15,15 +15,17 @@ from blinders.scope import TaskScope
 # Patterns that suggest prompt injection attempts in web content.
 _INJECTION_RE = re.compile(
     r"ignore\s+(?:previous|above|all|prior)\s+(?:instructions?|prompts?|rules?)"
+    r"|ignore\s+the\s+user"
     r"|you\s+are\s+(?:now|a|an)\s+"
     r"|system\s*prompt"
+    r"|^SYSTEM\s*:"
     r"|new\s+instructions?\s*:"
     r"|</?system"
     r"|IMPORTANT\s*:.*override"
     r"|disregard\s+(?:all|any|previous)"
     r"|forget\s+(?:everything|all|previous)"
     r"|\[INST\]|\[/INST\]|<\|im_start\|>|<\|im_end\|>",
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,
 )
 
 # Default dangerous action text patterns (used when action buttons are hidden)
