@@ -228,21 +228,21 @@ class GuardrailEngine:
     def _check_destructive_llm(self, selector: str) -> GuardrailResult:
         """Check if a click selector targets a destructive action.
 
-        Uses a regex fast path for obvious cases (microseconds), falling back
-        to Haiku LLM only for ambiguous selectors. This preserves safety
-        while eliminating most LLM latency.
+        Layer 1 (always runs): Regex patterns catch obvious destructive/safe
+        selectors in microseconds. Works even when LLM is disabled.
+
+        Layer 2 (optional): Haiku LLM validates ambiguous selectors only
+        when ``_llm_enabled`` is True. When disabled, ambiguous selectors
+        are allowed (fail-open) — the regex layer still blocks known
+        destructive patterns.
 
         Returns GuardrailResult(allowed=False) if destructive, allowed=True otherwise.
-        Fail-open: any error results in allowed=True.
         """
-        if not self._llm_enabled:
-            return GuardrailResult(allowed=True)
-
         normalized = selector.strip().lower()
         if normalized in self._approved_selectors:
             return GuardrailResult(allowed=True)
 
-        # --- Regex fast path: skip Haiku for obvious cases ---
+        # --- Layer 1: Regex (always runs, even when LLM disabled) ---
         if _DESTRUCTIVE_RE.search(normalized):
             log.warning("Regex flagged destructive click: %s", selector)
             return GuardrailResult(
@@ -253,7 +253,13 @@ class GuardrailEngine:
             self._approved_selectors.add(normalized)
             return GuardrailResult(allowed=True)
 
-        # --- LLM fallback for ambiguous selectors ---
+        # --- Layer 2: LLM fallback for ambiguous selectors ---
+        if not self._llm_enabled:
+            # LLM disabled — allow ambiguous selectors (regex layer above
+            # still catches known destructive patterns).
+            self._approved_selectors.add(normalized)
+            return GuardrailResult(allowed=True)
+
         try:
             prompt = _DESTRUCTIVE_CHECK_PROMPT.format(selector=selector)
             response = self._get_llm_client().messages.create(
