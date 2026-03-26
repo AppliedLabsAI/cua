@@ -1,22 +1,28 @@
 #!/usr/bin/env bash
-# Pre-commit hook: runs ruff lint, ruff format check, and ty type check.
-# Operates only on staged Python files for speed.
+# Pre-commit hook: autofix Ruff issues, format staged Python files, then run
+# final lint and type checks.
 #
 # Setup: git config core.hooksPath .githooks
 
-set -e
+set -euo pipefail
 
-STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
+mapfile -t STAGED_PY < <(git diff --cached --name-only --diff-filter=ACM -- '*.py')
 
-if [ -z "$STAGED_PY" ]; then
+if [ ${#STAGED_PY[@]} -eq 0 ]; then
     exit 0
 fi
 
-echo "pre-commit: ruff check"
-uv run ruff check $STAGED_PY
+echo "pre-commit: ruff check --fix"
+uv run ruff check --fix "${STAGED_PY[@]}"
 
-echo "pre-commit: ruff format --check"
-uv run ruff format --check $STAGED_PY
+echo "pre-commit: ruff format"
+uv run ruff format "${STAGED_PY[@]}"
+
+echo "pre-commit: git add"
+git add "${STAGED_PY[@]}"
+
+echo "pre-commit: ruff check"
+uv run ruff check "${STAGED_PY[@]}"
 
 echo "pre-commit: ty check"
 uv run ty check
