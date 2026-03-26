@@ -61,6 +61,7 @@ sandbox_image = (
     .add_local_dir("profiles", "/opt/cua/profiles")
     .add_local_file("config.py", "/opt/cua/config.py")
     .add_local_file("exceptions.py", "/opt/cua/exceptions.py")
+    .add_local_dir("blinders", "/opt/cua/blinders")
     .add_local_dir("guardrails", "/opt/cua/guardrails")
     .env(
         {

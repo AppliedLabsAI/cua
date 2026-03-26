@@ -24,6 +24,8 @@ async def main() -> int:
     # Import here to avoid import errors when checking syntax outside sandbox
     from agent.loop import run_agent
     from api.streaming import complete_run, init_status, push_action
+    from blinders.filters import DOMBlinders
+    from blinders.scope import extract_task_scope
     from bridge.browser import BrowserManager
     from bridge.router import ActionRouter
     from config import CUAConfig
@@ -66,10 +68,24 @@ async def main() -> int:
         await complete_run(error=f"Browser launch failed: {e}")
         return 1
 
-    bridge = ActionRouter(browser=browser, guardrail_config=config.guardrail_config)
-
-    # Run the agent
+    # Run the agent (blinders + router init inside try so errors trigger cleanup)
     try:
+        # Set up Cognitive Blinders
+        scope = extract_task_scope(config.directive, config.profile)
+        blinders = DOMBlinders(scope)
+        log.info(
+            "Blinders: goal_type=%s, allowed_actions=%d, domains=%s",
+            scope.goal_type,
+            len(scope.allowed_actions),
+            scope.allowed_domains[:3],
+        )
+
+        bridge = ActionRouter(
+            browser=browser,
+            guardrail_config=config.guardrail_config,
+            blinders=blinders,
+            directive=config.directive,
+        )
         profile_prompt = config.profile.prompt_extension if config.profile else None
         result = await run_agent(
             directive=config.directive,
@@ -80,6 +96,7 @@ async def main() -> int:
             credentials=config.credentials,
             on_action=push_action,
             profile_prompt=profile_prompt,
+            allowed_actions=scope.allowed_actions,
         )
 
         if result.success:

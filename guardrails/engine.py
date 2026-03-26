@@ -34,9 +34,25 @@ _BLOCKED_DOMAINS_DEFAULT = [
 
 
 _DESTRUCTIVE_ACTION_KEYWORDS: dict[str, list[str]] = {
-    "form_submit": ["place order", "submit order", "submit payment", "complete checkout"],
-    "purchase": ["pay now", "purchase now", "buy now", "complete order", "complete purchase"],
-    "account_modify": ["delete account", "deactivate", "close account", "remove account"],
+    "form_submit": [
+        "place order",
+        "submit order",
+        "submit payment",
+        "complete checkout",
+    ],
+    "purchase": [
+        "pay now",
+        "purchase now",
+        "buy now",
+        "complete order",
+        "complete purchase",
+    ],
+    "account_modify": [
+        "delete account",
+        "deactivate",
+        "close account",
+        "remove account",
+    ],
     "send_message": ["send email", "send message", "publish post", "post comment"],
 }
 
@@ -46,7 +62,9 @@ class GuardrailConfig:
     """Configuration for CUA safety guardrails."""
 
     allowed_domains: list[str] | None = None
-    blocked_domains: list[str] = field(default_factory=lambda: list(_BLOCKED_DOMAINS_DEFAULT))
+    blocked_domains: list[str] = field(
+        default_factory=lambda: list(_BLOCKED_DOMAINS_DEFAULT)
+    )
 
     # Action categories to block — defaults to all destructive categories.
     # Set to [] to disable action classification.
@@ -86,7 +104,9 @@ def _check_ssrf(hostname: str) -> GuardrailResult | None:
     IP range, or None if the hostname is safe.
     """
     if hostname in ("localhost", "localhost.localdomain"):
-        return GuardrailResult(allowed=False, reason="Blocked: localhost (SSRF protection)")
+        return GuardrailResult(
+            allowed=False, reason="Blocked: localhost (SSRF protection)"
+        )
 
     try:
         addr = ipaddress.ip_address(hostname)
@@ -117,7 +137,9 @@ class GuardrailEngine:
 
     def __init__(self, config: GuardrailConfig | None = None) -> None:
         self.config = config or GuardrailConfig()
-        self._blocked_categories: frozenset[str] = frozenset(self.config.blocked_action_categories)
+        self._blocked_categories: frozenset[str] = frozenset(
+            self.config.blocked_action_categories
+        )
         self.urls_visited: set[str] = set()
         self.consecutive_errors: int = 0
 
@@ -125,7 +147,7 @@ class GuardrailEngine:
         """Check if a URL is allowed to be visited."""
         try:
             parsed = urlparse(url)
-            domain = parsed.netloc.lower()
+            domain = (parsed.hostname or "").lower()
         except Exception:
             return GuardrailResult(allowed=False, reason=f"Invalid URL: {url}")
 
@@ -141,7 +163,9 @@ class GuardrailEngine:
 
         # Allowlist takes precedence
         if self.config.allowed_domains is not None:
-            if not any(fnmatch.fnmatch(domain, pat) for pat in self.config.allowed_domains):
+            if not any(
+                fnmatch.fnmatch(domain, pat) for pat in self.config.allowed_domains
+            ):
                 return GuardrailResult(
                     allowed=False,
                     reason=f"Domain {domain} not in allowed list",
@@ -160,7 +184,10 @@ class GuardrailEngine:
 
     def check_navigation(self, url: str) -> GuardrailResult:
         """Check URL + track visit count."""
-        if url not in self.urls_visited and len(self.urls_visited) >= self.config.max_urls_visited:
+        if (
+            url not in self.urls_visited
+            and len(self.urls_visited) >= self.config.max_urls_visited
+        ):
             return GuardrailResult(
                 allowed=False,
                 reason=f"Max URL limit reached ({self.config.max_urls_visited})",

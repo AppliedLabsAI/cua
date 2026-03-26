@@ -25,7 +25,9 @@ _DEFAULT_TIMEOUT_MS = 30_000
 # JS helpers pre-loaded via add_init_script in BrowserManager.launch().
 # Use window.__detectCaptcha / window.__captchaStillPresent with fallback.
 _DETECT_JS = "() => window.__detectCaptcha ? window.__detectCaptcha() : null"
-_STILL_PRESENT_JS = "() => window.__captchaStillPresent ? window.__captchaStillPresent() : false"
+_STILL_PRESENT_JS = (
+    "() => window.__captchaStillPresent ? window.__captchaStillPresent() : false"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +104,11 @@ async def handle_captcha_if_present(page: Page) -> CaptchaHandleResult:
     if not detection.detected:
         return CaptchaHandleResult(detected=False, message="")
 
-    log.info("CAPTCHA detected: %s (blocking=%s)", detection.captcha_type, detection.is_blocking)
+    log.info(
+        "CAPTCHA detected: %s (blocking=%s)",
+        detection.captcha_type,
+        detection.is_blocking,
+    )
     start = time.monotonic()
 
     resolved = await wait_for_captcha_resolution(page)

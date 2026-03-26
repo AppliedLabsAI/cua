@@ -32,6 +32,8 @@ log = logging.getLogger("cua.local")
 async def run(args: argparse.Namespace) -> int:
     from actionlog.actions import save_action_log
     from agent.loop import run_agent
+    from blinders.filters import DOMBlinders
+    from blinders.scope import extract_task_scope
     from bridge.browser import BrowserManager
     from bridge.router import ActionRouter
     from profiles.loader import apply_guardrail_overrides, load_profile
@@ -65,7 +67,21 @@ async def run(args: argparse.Namespace) -> int:
         log.error("Failed to launch browser: %s", e)
         return 1
 
-    bridge = ActionRouter(browser=browser, guardrail_config=guardrail_config)
+    # Set up Cognitive Blinders
+    scope = extract_task_scope(args.directive, profile)
+    blinders = DOMBlinders(scope)
+    log.info(
+        "Blinders: goal_type=%s, actions=%d",
+        scope.goal_type,
+        len(scope.allowed_actions),
+    )
+
+    bridge = ActionRouter(
+        browser=browser,
+        guardrail_config=guardrail_config,
+        blinders=blinders,
+        directive=args.directive,
+    )
 
     credentials = None
     if args.credentials:
@@ -84,6 +100,7 @@ async def run(args: argparse.Namespace) -> int:
             on_action=lambda a: log.info(
                 "  Step %d: %s (%dms)", a.step, a.input_summary, a.duration_ms
             ),
+            allowed_actions=scope.allowed_actions,
         )
     finally:
         await browser.close()
@@ -101,7 +118,9 @@ async def run(args: argparse.Namespace) -> int:
     print("=" * 60)
 
     # Save action log
-    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+    output_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output"
+    )
     os.makedirs(output_dir, exist_ok=True)
     log_path = os.path.join(output_dir, "action_log.json")
     await save_action_log(result.action_log, log_path)
@@ -114,15 +133,21 @@ def main():
     parser = argparse.ArgumentParser(description="Run CUA agent locally (no Modal)")
     parser.add_argument("--directive", required=True, help="Task for the agent")
     parser.add_argument("--model", default="claude-sonnet-4-6", help="Claude model ID")
-    parser.add_argument("--max-steps", type=int, default=50, help="Max tool-call iterations")
+    parser.add_argument(
+        "--max-steps", type=int, default=50, help="Max tool-call iterations"
+    )
     parser.add_argument(
         "--thinking-budget", type=int, default=4096, help="Extended thinking tokens"
     )
     parser.add_argument("--width", type=int, default=1280, help="Display width")
     parser.add_argument("--height", type=int, default=720, help="Display height")
     parser.add_argument("--display", default=":99", help="X display (default: :99)")
-    parser.add_argument("--start-url", default=None, help="URL to open on browser launch")
-    parser.add_argument("--proxy", default=None, help="Proxy URL (http://user:pass@host:port)")
+    parser.add_argument(
+        "--start-url", default=None, help="URL to open on browser launch"
+    )
+    parser.add_argument(
+        "--proxy", default=None, help="Proxy URL (http://user:pass@host:port)"
+    )
     parser.add_argument("--credentials", default=None, help="JSON credentials dict")
     parser.add_argument(
         "--profile",

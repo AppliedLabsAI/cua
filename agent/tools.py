@@ -36,7 +36,10 @@ _STATIC_TOOLS: list[dict] = [
                 },
                 "selector": {"type": "string"},
                 "text": {"type": "string", "description": "key_press: text to type."},
-                "key": {"type": "string", "description": "key_press: key (Enter, Tab, etc)."},
+                "key": {
+                    "type": "string",
+                    "description": "key_press: key (Enter, Tab, etc).",
+                },
                 "url": {"type": "string"},
                 "direction": {
                     "type": "string",
@@ -83,12 +86,19 @@ _STATIC_TOOLS: list[dict] = [
 ]
 
 
-def get_tools() -> list[dict]:
+def get_tools(allowed_actions: frozenset[str] | None = None) -> list[dict]:
     """Return tool definitions for the browser_dom agent API call.
+
+    When allowed_actions is provided (from Cognitive Blinders TaskScope),
+    the action enum is restricted to only those actions — the model
+    literally doesn't know about actions it can't use.
 
     Returns a deep copy to prevent callers from mutating shared state.
     Cache control is pre-applied to the last tool definition.
     """
     tools = copy.deepcopy(_STATIC_TOOLS)
+    if allowed_actions is not None:
+        schema = tools[0]["input_schema"]
+        schema["properties"]["action"]["enum"] = sorted(allowed_actions)
     tools[-1]["cache_control"] = {"type": "ephemeral"}
     return tools

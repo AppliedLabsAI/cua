@@ -61,6 +61,7 @@ async def run_agent(
     on_action: Callable[[ActionLog], None] | None = None,
     client: AsyncAnthropic | None = None,
     profile_prompt: str | None = None,
+    allowed_actions: frozenset[str] | None = None,
 ) -> AgentResult:
     """Run the CUA agent loop with streaming, context management, and adaptive thinking."""
     run_start = time.monotonic()
@@ -75,7 +76,7 @@ async def run_agent(
         credentials=credentials,
         profile_prompt=profile_prompt,
     )
-    tools = get_tools()  # Returns a deep copy with cache_control pre-applied
+    tools = get_tools(allowed_actions=allowed_actions)
     system = [
         {
             "type": "text",
@@ -91,7 +92,10 @@ async def run_agent(
     if page_url and page_url != "about:blank":
         from bridge.browser import quick_dom_snapshot
 
-        dom = await quick_dom_snapshot(bridge.browser.page)
+        dom = await quick_dom_snapshot(
+            bridge.browser.page,
+            filter_config=getattr(bridge, "_filter_config", None),
+        )
         if dom:
             initial_content = [
                 {

@@ -40,8 +40,17 @@ class TestCUAConfigFromEnv:
     def test_defaults(self, monkeypatch):
         monkeypatch.setenv("DIRECTIVE", "test")
         # Clear optional vars
-        for var in ("MODEL", "MAX_STEPS", "THINKING_BUDGET", "WIDTH", "HEIGHT",
-                     "START_URL", "PROXY_URL", "CREDENTIALS_JSON", "GUARDRAILS_JSON"):
+        for var in (
+            "MODEL",
+            "MAX_STEPS",
+            "THINKING_BUDGET",
+            "WIDTH",
+            "HEIGHT",
+            "START_URL",
+            "PROXY_URL",
+            "CREDENTIALS_JSON",
+            "GUARDRAILS_JSON",
+        ):
             monkeypatch.delenv(var, raising=False)
         config = CUAConfig.from_env()
         assert config.model == "claude-sonnet-4-6"

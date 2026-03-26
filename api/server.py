@@ -71,7 +71,9 @@ def _cleanup_finished_sandbox(run_id: str) -> bool:
     if exit_code is None:
         return False
 
-    log.info("Cleaning up finished sandbox for run %s (exit code %s)", run_id, exit_code)
+    log.info(
+        "Cleaning up finished sandbox for run %s (exit code %s)", run_id, exit_code
+    )
     _remove_run_registry(run_id)
     return True
 
@@ -187,7 +189,9 @@ async def stream_run(run_id: str) -> StreamingResponse:
 
     async def proxy_events():
         try:
-            async with client.stream("GET", f"{status_base}/events", timeout=None) as resp:
+            async with client.stream(
+                "GET", f"{status_base}/events", timeout=None
+            ) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     yield line + "\n"
