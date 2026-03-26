@@ -78,7 +78,6 @@ class RunResponse(BaseModel):
     """POST /runs response."""
 
     run_id: str
-    novnc_url: str
     status_url: str
     stream_url: str
 

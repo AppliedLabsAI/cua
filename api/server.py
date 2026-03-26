@@ -22,7 +22,7 @@ from starlette.responses import Response
 from api.models import RunConfig, RunResponse, RunStatus
 from api.run_registry import InMemoryRunRegistry, RunHandle
 from recording.manager import scan_recording_artifacts
-from sandbox.image import PORT_NOVNC, PORT_STATUS, create_cua_sandbox
+from sandbox.image import PORT_STATUS, create_cua_sandbox
 from settings import get_settings
 from telemetry import get_tracer, setup_telemetry
 from telemetry.metrics import active_sessions, sessions_total
@@ -146,7 +146,6 @@ async def create_run(config: RunConfig) -> RunResponse:
             session_span.set_attribute(ATTR_SESSION_ID, run_id)
 
             tunnels = sandbox.tunnels()
-            novnc_url = tunnels[PORT_NOVNC].url
             status_base = tunnels[PORT_STATUS].url
         except Exception as exc:
             log.exception("Failed to create sandbox for run %s", run_id or "unknown")
@@ -168,11 +167,10 @@ async def create_run(config: RunConfig) -> RunResponse:
             RunHandle(run_id=run_id, sandbox=sandbox, status_base_url=status_base)
         )
 
-        log.info("Created run %s, noVNC: %s", run_id, novnc_url)
+        log.info("Created run %s", run_id)
 
         return RunResponse(
             run_id=run_id,
-            novnc_url=novnc_url,
             status_url=f"/runs/{run_id}",
             stream_url=f"/runs/{run_id}/stream",
         )

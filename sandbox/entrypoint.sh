@@ -24,8 +24,6 @@ export DISPLAY=":${DISPLAY_NUM}"
 XVFB_PID=""
 OPENBOX_PID=""
 TINT2_PID=""
-X11VNC_PID=""
-NOVNC_PID=""
 STATUS_PID=""
 AGENT_PID=""
 
@@ -36,7 +34,7 @@ die() {
 }
 cleanup() {
 	log "Received termination signal, cleaning up background processes"
-	for pid in "$AGENT_PID" "$STATUS_PID" "$NOVNC_PID" "$X11VNC_PID" "$TINT2_PID" "$OPENBOX_PID" "$XVFB_PID"; do
+	for pid in "$AGENT_PID" "$STATUS_PID" "$TINT2_PID" "$OPENBOX_PID" "$XVFB_PID"; do
 		if [ -n "${pid:-}" ]; then
 			kill "$pid" 2>/dev/null || true
 		fi
@@ -65,22 +63,7 @@ TINT2_PID=$!
 sleep 0.5
 
 # ---------------------------------------------------------------------------
-# 3. VNC server (x11vnc → noVNC via websockify)
-# ---------------------------------------------------------------------------
-log "Starting x11vnc on port 5900"
-x11vnc -display ":${DISPLAY_NUM}" -forever -nopw -shared -rfbport 5900 -quiet &
-X11VNC_PID=$!
-sleep 0.5
-kill -0 "$X11VNC_PID" 2>/dev/null || die "x11vnc failed to start"
-
-log "Starting noVNC proxy on port 6080"
-websockify --web /usr/share/novnc 6080 localhost:5900 &
-NOVNC_PID=$!
-sleep 0.5
-kill -0 "$NOVNC_PID" 2>/dev/null || die "noVNC/websockify failed to start"
-
-# ---------------------------------------------------------------------------
-# 4. Internal status API (port 8090)
+# 3. Internal status API (port 8090)
 # ---------------------------------------------------------------------------
 log "Starting status API on port 8090"
 if ! cd /opt/cua; then
@@ -92,7 +75,7 @@ sleep 1
 kill -0 "$STATUS_PID" 2>/dev/null || die "Status API failed to start"
 
 # ---------------------------------------------------------------------------
-# 5. Agent loop
+# 4. Agent loop
 # ---------------------------------------------------------------------------
 log "Starting agent loop"
 log "  Directive: ${DIRECTIVE:0:100}"
@@ -113,9 +96,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Keep sandbox alive for observation
+# 5. Keep sandbox alive briefly for recording upload
 # ---------------------------------------------------------------------------
-log "Keeping sandbox alive for 60s (view final state via noVNC)"
-sleep 60
+log "Keeping sandbox alive for 10s (recording upload)"
+sleep 10
 
 log "Shutting down"
