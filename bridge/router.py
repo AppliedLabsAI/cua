@@ -20,7 +20,7 @@ from bridge.browser import (
     quick_dom_snapshot,
 )
 from bridge.captcha import handle_captcha_if_present
-from guardrails import GuardrailConfig, GuardrailEngine
+from guardrails import GuardrailConfig, GuardrailEngine, GuardrailResult
 
 if TYPE_CHECKING:
     from blinders.filters import DOMBlinders
@@ -114,8 +114,24 @@ class ActionRouter:
         start = time.monotonic()
 
         # --- Guardrail checks ---
-        guardrail_block = self._check_guardrails(tool_name, action, tool_input)
-        if guardrail_block:
+        guardrail_result = self._check_guardrails(tool_name, action, tool_input)
+        guardrail_block = (
+            guardrail_result.reason if guardrail_result and not guardrail_result.allowed else None
+        )
+        needs_confirmation = (
+            guardrail_result.needs_confirmation if guardrail_result else False
+        )
+        if guardrail_block and needs_confirmation:
+            # Confirmation flow: return challenge as non-error so agent can confirm
+            result = ActionResult(
+                text=(
+                    f"⚠️ Destructive action detected: {guardrail_block}\n\n"
+                    "If this is the action you intend to perform for the task, "
+                    "retry the same click action to confirm. "
+                    "Otherwise, find an alternative approach."
+                )
+            )
+        elif guardrail_block:
             result = ActionResult(error=f"Guardrail blocked: {guardrail_block}")
         else:
             try:
@@ -205,8 +221,8 @@ class ActionRouter:
 
     def _check_guardrails(
         self, tool_name: str, action: str, tool_input: dict
-    ) -> str | None:
-        """Run guardrail checks. Returns reason string if blocked, None if allowed.
+    ) -> GuardrailResult | None:
+        """Run guardrail checks. Returns GuardrailResult if blocked, None if allowed.
 
         When Cognitive Blinders are active, delegates to ScopeVerifier which
         combines structural scope checks with existing guardrail protections.
@@ -223,33 +239,36 @@ class ActionRouter:
                 page_title = ""  # title requires async; URL is sufficient context
             except RuntimeError:
                 pass  # browser not launched yet
-            return self._verifier.check(
+            reason = self._verifier.check(
                 action, tool_input,
                 page_url=page_url,
                 page_title=page_title,
             )
+            if reason:
+                return GuardrailResult(allowed=False, reason=reason)
+            return None
 
         # Fallback: legacy guardrail checks when no blinders configured
         action_check = self.guardrails.check_action(action, tool_input)
         if not action_check.allowed:
-            return action_check.reason
+            return action_check
 
         if action == "goto":
             url = tool_input.get("url", "")
             check = self.guardrails.check_navigation(url)
             if not check.allowed:
-                return check.reason
+                return check
         elif action == "execute_sequence":
             for step in tool_input.get("steps", []):
                 step_action = step.get("action", "")
                 step_check = self.guardrails.check_action(step_action, step)
                 if not step_check.allowed:
-                    return step_check.reason
+                    return step_check
                 if step_action == "goto":
                     url = step.get("url", "")
                     check = self.guardrails.check_navigation(url)
                     if not check.allowed:
-                        return check.reason
+                        return check
 
         return None
 

@@ -92,7 +92,7 @@ class ScopeVerifier:
             if not nav.allowed:
                 return nav.reason
 
-        # 3. Existing action classification (kept as defense in depth)
+        # 3. Destructive action classification via Haiku LLM
         action_check = self.guardrails.check_action(action, tool_input)
         if not action_check.allowed:
             return action_check.reason

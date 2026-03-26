@@ -8,11 +8,27 @@ verification work correctly end-to-end.
 from __future__ import annotations
 
 import time
+from unittest.mock import MagicMock
 
 from blinders.filters import DOMBlinders, _contains_injection
 from blinders.scope import ALL_ACTIONS, extract_task_scope
 from blinders.verifier import ScopeVerifier
 from guardrails import GuardrailEngine
+
+
+def _mock_destructive_engine():
+    """Create a GuardrailEngine with a mocked Haiku client that flags destructive actions."""
+    mock_response = MagicMock()
+    mock_response.content = [
+        MagicMock(text='{"destructive": true, "reason": "account deletion"}')
+    ]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_response
+
+    engine = GuardrailEngine()
+    engine._llm_enabled = True
+    engine._llm_client = mock_client
+    return engine
 
 # ---------------------------------------------------------------------------
 # Simulated DOM content for test scenarios
@@ -280,8 +296,8 @@ class TestScenarioA3FillFormWithLogin:
 
     def test_delete_account_still_blocked_by_verifier(self):
         scope = extract_task_scope(self.DIRECTIVE)
-        verifier = ScopeVerifier(scope, GuardrailEngine())
-        # Even fill_form scope should block destructive clicks via existing guardrails
+        verifier = ScopeVerifier(scope, _mock_destructive_engine())
+        # Even fill_form scope should block destructive clicks via Haiku
         result = verifier.check("click", {"selector": "text=delete account"})
         assert result is not None
 
@@ -839,10 +855,9 @@ class TestScenarioC9ReadTaskForbiddenClick:
 
     def test_destructive_click_blocked_by_guardrails(self):
         scope = extract_task_scope(self.DIRECTIVE)
-        verifier = ScopeVerifier(scope, GuardrailEngine())
+        verifier = ScopeVerifier(scope, _mock_destructive_engine())
         result = verifier.check("click", {"selector": "text=delete account"})
         assert result is not None
-        assert "Destructive" in result or "blocked" in result.lower()
 
 
 class TestScenarioC10OutOfScopeDomainRedirect:
@@ -935,7 +950,25 @@ class TestScenarioC11ExecuteSequenceIllegalStep:
 
     def test_sequence_with_destructive_click_blocked(self):
         scope = extract_task_scope("Click the reports button on https://reports.example.com")
-        verifier = ScopeVerifier(scope, GuardrailEngine())
+
+        def _selective_response(*, model, max_tokens, messages):
+            """Return destructive=true only for 'delete account' selectors."""
+            prompt_text = messages[0]["content"]
+            is_destructive = "delete account" in prompt_text.lower()
+            mock_resp = MagicMock()
+            mock_resp.content = [MagicMock(
+                text=f'{{"destructive": {str(is_destructive).lower()}, "reason": "test"}}'
+            )]
+            return mock_resp
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = _selective_response
+
+        engine = GuardrailEngine()
+        engine._llm_enabled = True
+        engine._llm_client = mock_client
+
+        verifier = ScopeVerifier(scope, engine)
         result = verifier.check("execute_sequence", {
             "steps": [
                 {"action": "click", "selector": "#view-report"},
@@ -943,7 +976,6 @@ class TestScenarioC11ExecuteSequenceIllegalStep:
             ]
         })
         assert result is not None
-        assert "Destructive" in result or "blocked" in result.lower()
 
     def test_sequence_all_legal_steps_allowed(self):
         scope = extract_task_scope("Click the reports button on https://reports.example.com")
@@ -1048,7 +1080,7 @@ class TestPerformanceBenchmark:
         directive = "Go to http://localhost:8000/products/sku-123 and tell me the product dimensions."
         start = time.perf_counter_ns()
         for _ in range(1000):
-            extract_task_scope(directive)
+            extract_task_scope(directive, use_llm=False)
         elapsed_ns = time.perf_counter_ns() - start
         per_call_us = elapsed_ns / 1000 / 1000  # microseconds
         assert per_call_us < 1000, f"Scope extraction took {per_call_us:.0f}us (>1ms)"
@@ -1088,7 +1120,7 @@ class TestPerformanceBenchmark:
         directive = "Find the price of Widget on http://localhost:8000/products"
         start = time.perf_counter_ns()
         for _ in range(1000):
-            scope = extract_task_scope(directive)
+            scope = extract_task_scope(directive, use_llm=False)
             blinders = DOMBlinders(scope)
             blinders.filter_snapshot(_DOM_PRODUCT_PAGE)
             _ = blinders.to_js_filter_config()

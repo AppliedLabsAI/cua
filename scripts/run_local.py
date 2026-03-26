@@ -132,7 +132,9 @@ async def run(args: argparse.Namespace) -> int:
 def main():
     parser = argparse.ArgumentParser(description="Run CUA agent locally (no Modal)")
     parser.add_argument("--directive", required=True, help="Task for the agent")
-    parser.add_argument("--model", default="claude-sonnet-4-6", help="Claude model ID")
+    from settings import AGENT_MODEL
+
+    parser.add_argument("--model", default=AGENT_MODEL, help="Claude model ID")
     parser.add_argument(
         "--max-steps", type=int, default=50, help="Max tool-call iterations"
     )

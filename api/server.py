@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from contextlib import asynccontextmanager
 
 import httpx
@@ -19,13 +18,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.models import RunConfig, RunResponse, RunStatus
 from sandbox.image import PORT_NOVNC, PORT_STATUS, create_cua_sandbox
+from settings import get_settings
 
 log = logging.getLogger(__name__)
 
 modal_app = modal.App("cua")
 
 # --- API key authentication ---
-_API_KEY = os.environ.get("CUA_API_KEY")
+_API_KEY = get_settings().cua_api_key or None
 _security = HTTPBearer(auto_error=False)
 
 

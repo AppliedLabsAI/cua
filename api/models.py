@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from settings import AGENT_MODEL
+
 RunStatusValue = Literal[
     "starting", "running", "completed", "failed", "timeout", "terminated"
 ]
@@ -15,7 +17,7 @@ class RunConfig(BaseModel):
     """POST /runs request body."""
 
     directive: str
-    model: str = "claude-sonnet-4-6"
+    model: str = AGENT_MODEL
     max_steps: int = Field(default=50, ge=1, le=200)
     timeout_seconds: int = Field(default=600, ge=30, le=3600)
     thinking_budget: int = Field(default=4096, ge=0, le=32768)

@@ -171,7 +171,7 @@ Defense-in-depth checks that run alongside Cognitive Blinders:
 | Guard | Default | Configurable |
 |---|---|---|
 | Domain blocklist | Banking, government, email, payment, social media | `allowed_domains` / `blocked_domains` |
-| Destructive action detection | Purchase, account deletion, message sending keywords | `blocked_action_categories` |
+| Destructive action detection | Haiku LLM classifies clicks for destructive intent with confirmation flow | `enable_llm_action_check` |
 | SSRF protection | Private IPs, localhost, cloud metadata (169.254.x.x) | `allow_private_networks` |
 | URL visit limit | 50 unique URLs per run | `max_urls_visited` |
 | Consecutive error limit | 5 errors | `max_consecutive_errors` |

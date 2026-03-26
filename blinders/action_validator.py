@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+
+from settings import SAFETY_MODEL
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class ActionValidator:
 
     def __init__(self, directive: str) -> None:
         self.directive = directive
-        self._enabled = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        self._enabled = True
         self._client = None
         self._approved_domains: set[str] = set()  # domains already validated
         self._approved_selectors: set[str] = set()  # click targets already validated
@@ -123,7 +124,7 @@ class ActionValidator:
 
         try:
             response = self._get_client().messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=SAFETY_MODEL,
                 max_tokens=100,
                 messages=[{"role": "user", "content": prompt}],
             )

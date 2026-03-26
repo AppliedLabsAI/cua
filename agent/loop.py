@@ -26,6 +26,7 @@ from agent.thinking import AdaptiveThinking
 from agent.tools import get_tools
 from bridge import DOM_MARKER
 from bridge.router import ActionRouter
+from settings import AGENT_MODEL
 
 log = logging.getLogger(__name__)
 
@@ -43,10 +44,9 @@ READ_ONLY = {
 
 def _are_parallelizable(blocks: list) -> bool:
     """Check if all tool_use blocks are read-only DOM actions (safe to parallelize)."""
-    read_only = {"extract", "screenshot", "wait_for"}
     return len(blocks) > 1 and all(
         getattr(b, "name", None) == "browser_dom"
-        and (getattr(b, "input", None) or {}).get("action") in read_only
+        and (getattr(b, "input", None) or {}).get("action") in READ_ONLY
         for b in blocks
     )
 
@@ -54,7 +54,7 @@ def _are_parallelizable(blocks: list) -> bool:
 async def run_agent(
     directive: str,
     bridge: ActionRouter,
-    model: str = "claude-sonnet-4-6",
+    model: str = AGENT_MODEL,
     max_steps: int = 50,
     thinking_budget: int = 4096,
     credentials: dict | None = None,

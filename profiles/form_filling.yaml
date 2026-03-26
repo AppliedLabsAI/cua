@@ -10,7 +10,4 @@ prompt_extension: |
   - Do not pause for screenshots between form fields — batch aggressively.
   - Verify field values after submission by checking the resulting page DOM.
   - If a form has multiple pages/steps, complete each page before moving on.
-guardrail_overrides:
-  blocked_action_categories:
-    - account_modify
-    - send_message
+guardrail_overrides: {}

@@ -1,5 +1,7 @@
 """Tests for blinders — DOM filtering, injection detection, and scope verification."""
 
+from unittest.mock import MagicMock
+
 from blinders.filters import (
     DOMBlinders,
     _contains_injection,
@@ -207,8 +209,18 @@ class TestScopeVerifier:
         )
 
     def test_preserves_existing_action_classification(self):
-        v = self._verifier("Click things on example.com")
-        # Even with interact scope, destructive click keywords should be blocked
+        mock_response = MagicMock()
+        mock_response.content = [
+            MagicMock(text='{"destructive": true, "reason": "account deletion"}')
+        ]
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = mock_response
+
+        scope = extract_task_scope("Click things on example.com")
+        engine = GuardrailEngine()
+        engine._llm_enabled = True
+        engine._llm_client = mock_client
+        v = ScopeVerifier(scope, engine)
+        # Haiku flags destructive clicks for confirmation
         result = v.check("click", {"selector": "text=delete account"})
         assert result is not None
-        assert "Destructive" in result or "blocked" in result.lower()
