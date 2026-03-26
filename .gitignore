@@ -1,12 +1,25 @@
-.venv/
+# Python
 __pycache__/
 *.pyc
 *.pyo
-output/
-.ruff_cache/
-.omc/
 *.egg-info/
 dist/
 build/
+
+# Virtual environments
+.venv/
+
+# Environment variables
 .env
 .env.*
+
+# IDE / OS
+.DS_Store
+.vscode/
+
+# Tools
+.ruff_cache/
+.omc/
+
+# Output
+output/
