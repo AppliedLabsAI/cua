@@ -135,18 +135,26 @@ async def _ensure_dom_snapshot(page: Page) -> None:
     await page.evaluate(_DOM_SNAPSHOT_INIT_JS)
 
 
-async def quick_dom_snapshot(page: Page, max_chars: int = _AUTO_DOM_MAX_CHARS) -> str:
-    """Fast DOM snapshot using pre-loaded __domSnapshot init script."""
+async def quick_dom_snapshot(
+    page: Page,
+    max_chars: int = _AUTO_DOM_MAX_CHARS,
+    filter_config: dict | None = None,
+) -> str:
+    """Fast DOM snapshot using pre-loaded __domSnapshot init script.
+
+    When filter_config is provided (from Cognitive Blinders), it is passed
+    as the 3rd argument to window.__domSnapshot for JS-side filtering.
+    """
     try:
         raw = await page.evaluate(
-            "([s, m]) => window.__domSnapshot ? window.__domSnapshot(s, m) : null",
-            [None, max_chars],
+            "([s, m, f]) => window.__domSnapshot ? window.__domSnapshot(s, m, f) : null",
+            [None, max_chars, filter_config],
         )
         if raw is None:
             await _ensure_dom_snapshot(page)
             raw = await page.evaluate(
-                "([s, m]) => window.__domSnapshot(s, m)",
-                [None, max_chars],
+                "([s, m, f]) => window.__domSnapshot(s, m, f)",
+                [None, max_chars, filter_config],
             )
         data = json.loads(raw)
         return f"[{data['title']}] {data['url']}\n{data['dom']}"
@@ -170,6 +178,7 @@ async def execute_dom_action(
     browser: BrowserManager,
     *,
     _skip_screenshot: bool = False,
+    filter_config: dict | None = None,
 ) -> ActionResult:
     """Execute a browser_dom tool action via Patchright.
 
@@ -186,7 +195,10 @@ async def execute_dom_action(
         page = browser.page
 
         if action == "screenshot":
-            b64, dom = await asyncio.gather(page_screenshot(page), quick_dom_snapshot(page))
+            b64, dom = await asyncio.gather(
+                page_screenshot(page),
+                quick_dom_snapshot(page, filter_config=filter_config),
+            )
             text = None
             if dom:
                 text = f"{DOM_MARKER}\n{dom}"
@@ -194,14 +206,16 @@ async def execute_dom_action(
 
         elif action == "goto":
             url = params["url"]
-            resp = await page.goto(url, wait_until="domcontentloaded", timeout=_DEFAULT_TIMEOUT)
+            resp = await page.goto(
+                url, wait_until="domcontentloaded", timeout=_DEFAULT_TIMEOUT
+            )
             status = resp.status if resp else "unknown"
             if _skip_screenshot:
                 return ActionResult(text=f"Navigated to {url} (status {status})")
             nav_text = f"Navigated to {url} (status {status})"
             # Default to DOM-only for goto — saves ~1500 image tokens per navigation.
             # Agent can use screenshot action when visual context is needed.
-            dom = await quick_dom_snapshot(page)
+            dom = await quick_dom_snapshot(page, filter_config=filter_config)
             if dom:
                 nav_text += f"\n\n{DOM_MARKER}\n{dom}"
             return ActionResult(text=nav_text)
@@ -219,7 +233,7 @@ async def execute_dom_action(
             # Default to DOM-only — saves ~1500 image tokens per click.
             # Agent can use screenshot action when visual context is needed.
             click_text = "Clicked"
-            dom = await quick_dom_snapshot(page)
+            dom = await quick_dom_snapshot(page, filter_config=filter_config)
             if dom:
                 click_text += f"\n\n{DOM_MARKER}\n{dom}"
             return ActionResult(text=click_text)
@@ -290,14 +304,14 @@ async def execute_dom_action(
         elif action == "get_dom":
             selector = params.get("selector")
             raw = await page.evaluate(
-                "([s, m]) => window.__domSnapshot ? window.__domSnapshot(s, m) : null",
-                [selector, _DOM_MAX_CHARS],
+                "([s, m, f]) => window.__domSnapshot ? window.__domSnapshot(s, m, f) : null",
+                [selector, _DOM_MAX_CHARS, filter_config],
             )
             if raw is None:
                 await _ensure_dom_snapshot(page)
                 raw = await page.evaluate(
-                    "([s, m]) => window.__domSnapshot(s, m)",
-                    [selector, _DOM_MAX_CHARS],
+                    "([s, m, f]) => window.__domSnapshot(s, m, f)",
+                    [selector, _DOM_MAX_CHARS, filter_config],
                 )
             data = json.loads(raw)
             header = f"[{data['title']}] {data['url']}\n"
@@ -306,17 +320,21 @@ async def execute_dom_action(
         elif action == "wait_for":
             selector = params["selector"]
             state = params.get("state", "visible")
-            await page.wait_for_selector(selector, state=state, timeout=_DEFAULT_TIMEOUT)
+            await page.wait_for_selector(
+                selector, state=state, timeout=_DEFAULT_TIMEOUT
+            )
             return ActionResult(text=f"Element {selector} is {state}")
 
         elif action == "execute_sequence":
-            return await _execute_sequence(params, browser)
+            return await _execute_sequence(params, browser, filter_config=filter_config)
 
         else:
             return ActionResult(error=f"Unknown browser_dom action: {action}")
 
     except TimeoutError:
-        return ActionResult(error=f"{action} timed out after {_DEFAULT_TIMEOUT // 1000}s")
+        return ActionResult(
+            error=f"{action} timed out after {_DEFAULT_TIMEOUT // 1000}s"
+        )
     except Exception as e:
         return ActionResult(error=f"browser_dom.{action} failed: {e}")
 
@@ -324,6 +342,7 @@ async def execute_dom_action(
 async def _execute_sequence(
     params: dict,
     browser: BrowserManager,
+    filter_config: dict | None = None,
 ) -> ActionResult:
     """Execute a sequence of browser actions in one tool call.
 
@@ -352,7 +371,13 @@ async def _execute_sequence(
         # Intermediate steps skip screenshots for speed; last step runs normally.
         # goto/click always return DOM-only, so intermediate nav still has context.
         is_last = i == last_step
-        result = await execute_dom_action(action, step, browser, _skip_screenshot=not is_last)  # ty:ignore[invalid-argument-type]
+        result = await execute_dom_action(
+            action,
+            step,
+            browser,
+            _skip_screenshot=not is_last,
+            filter_config=filter_config,
+        )  # ty:ignore[invalid-argument-type]
 
         if result.error:
             # On error, take a screenshot so the agent can see what went wrong
@@ -372,7 +397,7 @@ async def _execute_sequence(
     # Only attach DOM if the last step didn't already include it.
     combined_text = "\n".join(results)
     if DOM_MARKER not in (result.text or ""):
-        dom = await quick_dom_snapshot(browser.page)
+        dom = await quick_dom_snapshot(browser.page, filter_config=filter_config)
         if dom:
             combined_text += f"\n\n{DOM_MARKER}\n{dom}"
     return ActionResult(

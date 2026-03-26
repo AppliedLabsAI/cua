@@ -17,7 +17,9 @@ class TestSummarizeAction:
         assert "#btn" in result
 
     def test_key_press_text_and_key(self):
-        result = summarize_action("browser_dom", "key_press", {"text": "hello", "key": "Enter"})
+        result = summarize_action(
+            "browser_dom", "key_press", {"text": "hello", "key": "Enter"}
+        )
         assert "type" in result
         assert "hello" in result
         assert "Enter" in result
@@ -28,7 +30,9 @@ class TestSummarizeAction:
         assert "Tab" in result
 
     def test_scroll(self):
-        result = summarize_action("browser_dom", "scroll", {"direction": "down", "amount": 5})
+        result = summarize_action(
+            "browser_dom", "scroll", {"direction": "down", "amount": 5}
+        )
         assert "scroll" in result
         assert "down" in result
 

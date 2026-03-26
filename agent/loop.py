@@ -61,6 +61,7 @@ async def run_agent(
     on_action: Callable[[ActionLog], None] | None = None,
     client: AsyncAnthropic | None = None,
     profile_prompt: str | None = None,
+    allowed_actions: frozenset[str] | None = None,
 ) -> AgentResult:
     """Run the CUA agent loop with streaming, context management, and adaptive thinking."""
     run_start = time.monotonic()
@@ -75,7 +76,7 @@ async def run_agent(
         credentials=credentials,
         profile_prompt=profile_prompt,
     )
-    tools = get_tools()  # Returns a deep copy with cache_control pre-applied
+    tools = get_tools(allowed_actions=allowed_actions)
     system = [
         {
             "type": "text",

@@ -12,6 +12,10 @@
  *   - Pre-built nav Set instead of closest() per element (O(1) lookup)
  *   - renderElement hoisted to module scope (avoids per-call allocation)
  *
+ * Cognitive Blinders support:
+ *   Optional filterConfig parameter controls which elements pass through.
+ *   When absent, all elements are shown (backward compatible).
+ *
  * Registered as window.__domSnapshot via add_init_script.
  */
 
@@ -53,13 +57,67 @@ function __renderElement(el) {
   return `${line}\n`;
 }
 
+// --- Cognitive Blinders: element visibility filter ---
+function __shouldShow(el, filterConfig) {
+  if (!filterConfig) return true; // no filter = show all (backward compat)
+
+  // Check exclude selectors — always hide matching elements
+  const excludeSels = filterConfig.excludeSelectors || [];
+  for (let i = 0; i < excludeSels.length; i++) {
+    try {
+      if (el.matches(excludeSels[i]) || el.closest(excludeSels[i])) return false;
+    } catch { /* invalid selector — skip */ }
+  }
+
+  // Check include selectors — always show matching elements
+  const includeSels = filterConfig.includeSelectors || [];
+  for (let i = 0; i < includeSels.length; i++) {
+    try {
+      if (el.matches(includeSels[i]) || el.closest(includeSels[i])) return true;
+    } catch { /* invalid selector — skip */ }
+  }
+
+  const tag = el.tagName.toLowerCase();
+  const text = (el.innerText || '').toLowerCase().trim();
+
+  // Forms filter
+  if (filterConfig.showForms === false) {
+    if (tag === 'input' || tag === 'select' || tag === 'textarea') return false;
+    if (tag === 'button' && el.type === 'submit') return false;
+  }
+
+  // Action buttons filter — check dangerous text patterns
+  if (filterConfig.showActionButtons === false) {
+    const patterns = filterConfig.excludeTextPatterns || [];
+    for (let i = 0; i < patterns.length; i++) {
+      if (text.includes(patterns[i])) return false;
+    }
+  }
+
+  // Account controls filter
+  if (filterConfig.showAccountControls === false) {
+    if (/\b(sign.?out|log.?out|my.?account|settings|profile|account)\b/i.test(text)) {
+      return false;
+    }
+  }
+
+  // Nav links filter
+  if (filterConfig.showNavLinks === false) {
+    if (tag === 'a' && el.closest('nav, [role=navigation], .sidebar, #nav-sidebar')) {
+      return false;
+    }
+  }
+
+  return true; // default: show
+}
+
 // --- Nav selector constant ---
 const __NAV_SELECTOR = 'nav, #nav-sidebar, .sidebar, [role=navigation]';
 const __INTERACTIVE_SELECTOR =
   'a, button, input, select, textarea, ' +
   '[role=button], [role=link], [onclick], [tabindex]';
 
-window.__domSnapshot = (rootSelector, maxChars) => {
+window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
   const MAX = maxChars || 3500;
   const parts = [];
   let len = 0;
@@ -69,9 +127,10 @@ window.__domSnapshot = (rootSelector, maxChars) => {
     if (s) root = s;
   }
 
-  // Phase 1: Labeled form field values
+  // Phase 1: Labeled form field values (skip if forms hidden by blinders)
+  const showForms = !filterConfig || filterConfig.showForms !== false;
   const labels = root.querySelectorAll('label');
-  if (labels.length > 0) {
+  if (showForms && labels.length > 0) {
     let fieldCount = 0;
     for (const label of labels) {
       if (len >= MAX) break;
@@ -190,6 +249,7 @@ window.__domSnapshot = (rootSelector, maxChars) => {
   }
 
   // Phase 4: Interactive elements — main content first, nav backfill
+  // Apply Cognitive Blinders filter to each element
   if (len < MAX) {
     parts.push('--- Interactive ---\n');
     len += 19;
@@ -221,6 +281,8 @@ window.__domSnapshot = (rootSelector, maxChars) => {
       navEls.push(el);
       continue;
     }
+    // Cognitive Blinders filter
+    if (!__shouldShow(el, filterConfig)) continue;
     const elHref = el.getAttribute('href');
     if (el.tagName === 'A' && elHref) {
       if (seenHrefs.has(elHref)) continue;
@@ -235,6 +297,8 @@ window.__domSnapshot = (rootSelector, maxChars) => {
   // Pass 2: backfill nav elements
   for (const el of navEls) {
     if (len >= MAX || elCount >= MAX_ELEMENTS) break;
+    // Cognitive Blinders filter
+    if (!__shouldShow(el, filterConfig)) continue;
     const elHref = el.getAttribute('href');
     if (el.tagName === 'A' && elHref) {
       if (seenHrefs.has(elHref)) continue;

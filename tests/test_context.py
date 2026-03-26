@@ -23,8 +23,14 @@ class TestPruneOldContext:
 
     def test_truncates_old_dom_snapshots(self):
         messages = [
-            self._msg("user", [{"type": "text", "text": f"Page 1\n{DOM_MARKER}\n<div>old</div>"}]),
-            self._msg("user", [{"type": "text", "text": f"Page 2\n{DOM_MARKER}\n<div>new</div>"}]),
+            self._msg(
+                "user",
+                [{"type": "text", "text": f"Page 1\n{DOM_MARKER}\n<div>old</div>"}],
+            ),
+            self._msg(
+                "user",
+                [{"type": "text", "text": f"Page 2\n{DOM_MARKER}\n<div>new</div>"}],
+            ),
         ]
         prune_old_context(messages, keep_last=1)
         # First DOM should be truncated

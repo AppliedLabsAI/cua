@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import TYPE_CHECKING
 
 from actionlog.actions import ActionLog, persist_action_log
 from bridge import DOM_MARKER, ActionResult
@@ -20,6 +21,9 @@ from bridge.browser import (
 )
 from bridge.captcha import handle_captcha_if_present
 from guardrails import GuardrailConfig, GuardrailEngine
+
+if TYPE_CHECKING:
+    from blinders.filters import DOMBlinders
 
 log = logging.getLogger(__name__)
 
@@ -81,11 +85,21 @@ class ActionRouter:
         self,
         browser: BrowserManager,
         guardrail_config: GuardrailConfig | None = None,
+        blinders: DOMBlinders | None = None,
     ) -> None:
         self.browser = browser
         self.guardrails = GuardrailEngine(guardrail_config)
+        self.blinders = blinders
+        self._filter_config = blinders.to_js_filter_config() if blinders else None
         self.action_log: list[ActionLog] = []
         self._step = 0
+
+        # Use ScopeVerifier when blinders are active, else fall back to guardrails
+        self._verifier = None
+        if blinders:
+            from blinders.verifier import ScopeVerifier
+
+            self._verifier = ScopeVerifier(blinders.scope, self.guardrails)
 
     async def execute(self, tool_name: str, tool_input: dict) -> dict:
         """Route a tool call from Claude to the appropriate executor.
@@ -189,11 +203,19 @@ class ActionRouter:
     def _check_guardrails(
         self, tool_name: str, action: str, tool_input: dict
     ) -> str | None:
-        """Run guardrail checks. Returns reason string if blocked, None if allowed."""
+        """Run guardrail checks. Returns reason string if blocked, None if allowed.
+
+        When Cognitive Blinders are active, delegates to ScopeVerifier which
+        combines structural scope checks with existing guardrail protections.
+        """
         if tool_name != "browser_dom":
             return None
 
-        # Action classification — block destructive clicks
+        # Use ScopeVerifier when blinders are active (structural + legacy checks)
+        if self._verifier:
+            return self._verifier.check(action, tool_input)
+
+        # Fallback: legacy guardrail checks when no blinders configured
         action_check = self.guardrails.check_action(action, tool_input)
         if not action_check.allowed:
             return action_check.reason
@@ -204,14 +226,11 @@ class ActionRouter:
             if not check.allowed:
                 return check.reason
         elif action == "execute_sequence":
-            # Scan all steps for guardrail violations
             for step in tool_input.get("steps", []):
                 step_action = step.get("action", "")
-                # Check destructive actions in sequence steps
                 step_check = self.guardrails.check_action(step_action, step)
                 if not step_check.allowed:
                     return step_check.reason
-                # Check navigation URLs
                 if step_action == "goto":
                     url = step.get("url", "")
                     check = self.guardrails.check_navigation(url)
@@ -225,12 +244,28 @@ class ActionRouter:
     ) -> ActionResult:
         """Route to the correct executor."""
         if tool_name == "browser_dom":
-            result = await execute_dom_action(action, tool_input, self.browser)
+            result = await execute_dom_action(
+                action,
+                tool_input,
+                self.browser,
+                filter_config=self._filter_config,
+            )
             if action in _CAPTCHA_CHECK_ACTIONS:
                 result = await self._handle_captcha(result)
                 url_check = self.guardrails.check_url(self.browser.page.url)
                 if not url_check.allowed:
                     return ActionResult(error=f"Guardrail blocked: {url_check.reason}")
+            # Apply Python-side blinders post-filter on DOM content
+            if self.blinders and result.text and DOM_MARKER in result.text:
+                marker_idx = result.text.index(DOM_MARKER)
+                prefix = result.text[:marker_idx]
+                dom_content = result.text[marker_idx + len(DOM_MARKER) + 1 :]
+                filtered = self.blinders.filter_snapshot(dom_content)
+                result = ActionResult(
+                    screenshot_b64=result.screenshot_b64,
+                    text=f"{prefix}{DOM_MARKER}\n{filtered}",
+                    error=result.error,
+                )
             return result
 
         else:

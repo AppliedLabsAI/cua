@@ -6,7 +6,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-RunStatusValue = Literal["starting", "running", "completed", "failed", "timeout", "terminated"]
+RunStatusValue = Literal[
+    "starting", "running", "completed", "failed", "timeout", "terminated"
+]
 
 
 class RunConfig(BaseModel):
