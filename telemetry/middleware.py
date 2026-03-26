@@ -11,7 +11,7 @@ from fastapi import FastAPI
 def instrument_fastapi(app: FastAPI) -> None:
     """Attach OTel instrumentation to a FastAPI app.
 
-    No-op when ``cua_otel_enabled`` is False.
+    No-op when ``otel_sdk_disabled`` is True.
     """
     from settings import get_settings
 

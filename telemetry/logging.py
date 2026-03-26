@@ -76,15 +76,26 @@ def setup_logging(level: int = logging.INFO) -> None:
     """Configure root logger with the compact span-aware formatter.
 
     Call once at process startup (before any log output).
-    Replaces the default basicConfig format.
+    Adds our SpanFormatter handler if one isn't already present,
+    without removing handlers from other libraries.
     """
     root = logging.getLogger()
-    # Remove existing handlers to avoid duplicate output
-    root.handlers.clear()
 
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(SpanFormatter())
-    root.addHandler(handler)
+    # Only add our handler if not already present
+    already_installed = any(
+        isinstance(getattr(h, "formatter", None), SpanFormatter) for h in root.handlers
+    )
+    if not already_installed:
+        # Remove default handlers (basicConfig) but not library-added ones
+        root.handlers = [
+            h
+            for h in root.handlers
+            if not (isinstance(h, logging.StreamHandler) and h.stream is sys.stderr)
+        ]
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(SpanFormatter())
+        root.addHandler(handler)
+
     root.setLevel(level)
 
 

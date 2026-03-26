@@ -276,7 +276,7 @@ CUA includes built-in OpenTelemetry instrumentation for distributed tracing, met
 
 Every session produces a single trace linking the outer API request to every agent step inside the sandbox. The waterfall view shows:
 
-```
+```text
 cua.session                          → API request lifecycle
   cua.sandbox.create                 → Modal sandbox creation
   cua.agent.run                      → Full agent run (linked via W3C Traceparent)

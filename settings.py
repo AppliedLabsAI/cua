@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     otel_sdk_disabled: bool = True
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     otel_exporter_otlp_protocol: str = "grpc"
-    otel_exporter_otlp_insecure: bool = True
+    otel_exporter_otlp_insecure: bool = False
     otel_resource_env: str = "local"
     otel_traces_sampler_arg: float = 1.0
 

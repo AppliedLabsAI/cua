@@ -1,7 +1,7 @@
 """OpenTelemetry instrumentation for the CUA agent.
 
 Provides distributed tracing and metrics across the outer API and inner
-sandbox agent. Controlled by ``CUA_OTEL_ENABLED`` — when disabled, all
+sandbox agent. Controlled by ``OTEL_SDK_DISABLED`` — when set to True (default), all
 calls return no-op instances with zero overhead.
 """
 

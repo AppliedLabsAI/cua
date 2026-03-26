@@ -169,7 +169,7 @@ class ActionValidator:
             attributes={
                 ATTR_GENAI_SYSTEM: "anthropic",
                 ATTR_GENAI_MODEL: SAFETY_MODEL,
-                "cua.blinders.action": action_desc[:200],
+                "cua.blinders.action": action_desc,
             },
         ) as span:
             try:

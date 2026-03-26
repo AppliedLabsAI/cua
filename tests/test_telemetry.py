@@ -161,7 +161,7 @@ def test_inject_returns_empty_without_active_span():
     result = inject_trace_context()
     assert isinstance(result, dict)
     # No active span → no traceparent
-    assert "traceparent" not in result or result.get("traceparent") == ""
+    assert "TRACEPARENT" not in result or result.get("TRACEPARENT") == ""
 
 
 def test_inject_extract_roundtrip(otel_exporter):
@@ -179,11 +179,11 @@ def test_inject_extract_roundtrip(otel_exporter):
 
         # Inject current context
         carrier = inject_trace_context()
-        assert "traceparent" in carrier
-        assert parent_trace_id in carrier["traceparent"]
+        assert "TRACEPARENT" in carrier
+        assert parent_trace_id in carrier["TRACEPARENT"]
 
     # Extract in a "different process"
-    extracted_ctx = extract_trace_context(carrier["traceparent"])
+    extracted_ctx = extract_trace_context(carrier["TRACEPARENT"])
     assert extracted_ctx is not None
 
     # Create a child span using extracted context

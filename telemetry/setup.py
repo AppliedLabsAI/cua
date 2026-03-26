@@ -7,10 +7,17 @@ so instrumentation calls have zero overhead.
 
 from __future__ import annotations
 
+import atexit
+import logging
+
 from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace as otel_trace
 
 _initialized = False
+_tracer_provider = None
+_meter_provider = None
+
+log = logging.getLogger(__name__)
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -18,9 +25,9 @@ def setup_telemetry(service_name: str) -> None:
 
     Safe to call multiple times — only the first call takes effect.
     When ``OTEL_SDK_DISABLED`` is True, does nothing (no-op providers
-    are already the default).
+    are already the default). Registers ``shutdown_telemetry`` via atexit.
     """
-    global _initialized
+    global _initialized, _tracer_provider, _meter_provider
     if _initialized:
         return
 
@@ -52,8 +59,8 @@ def setup_telemetry(service_name: str) -> None:
     )
 
     sampler = TraceIdRatioBased(settings.otel_traces_sampler_arg)
-    tracer_provider = TracerProvider(resource=resource, sampler=sampler)
-    tracer_provider.add_span_processor(
+    _tracer_provider = TracerProvider(resource=resource, sampler=sampler)
+    _tracer_provider.add_span_processor(
         BatchSpanProcessor(
             OTLPSpanExporter(
                 endpoint=settings.otel_exporter_otlp_endpoint,
@@ -61,7 +68,7 @@ def setup_telemetry(service_name: str) -> None:
             )
         )
     )
-    otel_trace.set_tracer_provider(tracer_provider)
+    otel_trace.set_tracer_provider(_tracer_provider)
 
     metric_reader = PeriodicExportingMetricReader(
         OTLPMetricExporter(
@@ -70,8 +77,33 @@ def setup_telemetry(service_name: str) -> None:
         ),
         export_interval_millis=10_000,
     )
-    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
-    otel_metrics.set_meter_provider(meter_provider)
+    _meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    otel_metrics.set_meter_provider(_meter_provider)
+
+    atexit.register(shutdown_telemetry)
+
+
+def shutdown_telemetry() -> None:
+    """Flush and shut down OTel providers.
+
+    Ensures all buffered spans and metrics are exported before process exit.
+    Safe to call multiple times or when telemetry was never initialized.
+    """
+    global _tracer_provider, _meter_provider
+    if _tracer_provider is not None:
+        try:
+            _tracer_provider.force_flush()
+            _tracer_provider.shutdown()
+        except Exception:
+            log.debug("Tracer provider shutdown error", exc_info=True)
+        _tracer_provider = None
+    if _meter_provider is not None:
+        try:
+            _meter_provider.force_flush()
+            _meter_provider.shutdown()
+        except Exception:
+            log.debug("Meter provider shutdown error", exc_info=True)
+        _meter_provider = None
 
 
 def get_tracer(name: str = "cua") -> otel_trace.Tracer:

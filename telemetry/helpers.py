@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace as otel_trace
 
+from bridge import DOM_MARKER
 from telemetry.metrics import steps_total, tool_duration
 from telemetry.spans import (
     ATTR_GENAI_INPUT_TOKENS,
@@ -46,6 +47,13 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _strip_dom(text: str) -> str:
+    """Strip DOM snapshot content from text to avoid bloating span attributes."""
+    if DOM_MARKER in text:
+        return text[: text.index(DOM_MARKER)].rstrip()
+    return text
+
+
 def llm_span_attrs(
     model: str, max_tokens: int, thinking_budget: int, streaming: bool
 ) -> dict[str, Any]:
@@ -73,7 +81,7 @@ def finalize_llm_span(
         ATTR_LLM_HAS_TOOL_CALLS: has_tool_calls,
     }
     if text_response:
-        attrs[ATTR_LLM_TEXT_RESPONSE] = text_response[:200]
+        attrs[ATTR_LLM_TEXT_RESPONSE] = _strip_dom(text_response)
     span.set_attributes(attrs)
 
 
@@ -82,17 +90,18 @@ def record_text_block(block: Any, llm_span: Span, text_parts: list[str]) -> None
     text = getattr(block, "text", "") or ""
     if text:
         text_parts.append(text)
-        log.info("Agent text: %s", text[:200])
-        llm_span.add_event(EVENT_TEXT_OUTPUT, attributes={"text": text[:200]})
+        stripped = _strip_dom(text)
+        log.info("Agent text: %s", stripped)
+        llm_span.add_event(EVENT_TEXT_OUTPUT, attributes={"text": stripped})
 
 
 def record_thinking_block(block: Any, llm_span: Span) -> None:
     """Process a thinking content block: log and emit span event."""
     thinking_text = getattr(block, "thinking", "") or ""
     if thinking_text:
-        log.debug("Thinking: %s", thinking_text[:200])
+        log.debug("Thinking: %s", thinking_text)
         llm_span.add_event(
-            EVENT_THINKING, attributes={"thinking_text": thinking_text[:200]}
+            EVENT_THINKING, attributes={"thinking_text": thinking_text}
         )
 
 
@@ -132,10 +141,10 @@ async def execute_tool_with_span(
             ATTR_TOOL_DURATION_MS: tool_ms,
         }
         if is_error:
-            tool_span.set_status(otel_trace.StatusCode.ERROR)
+            tool_span.set_status(otel_trace.Status(otel_trace.StatusCode.ERROR))
             content = tool_result.get("content", [{}])
             if content:
-                attrs[ATTR_TOOL_ERROR] = str(content[0].get("text", ""))[:500]
+                attrs[ATTR_TOOL_ERROR] = _strip_dom(str(content[0].get("text", "")))
         if bridge.action_log:
             entry = bridge.action_log[-1]
             attrs[ATTR_TOOL_HAS_SCREENSHOT] = entry.has_screenshot

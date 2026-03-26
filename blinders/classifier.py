@@ -69,7 +69,7 @@ def classify_directive(
         attributes={
             ATTR_GENAI_SYSTEM: "anthropic",
             ATTR_GENAI_MODEL: SAFETY_MODEL,
-            "cua.blinders.directive": directive[:200],
+            "cua.blinders.directive": directive,
         },
     ) as span:
         response = client.messages.create(

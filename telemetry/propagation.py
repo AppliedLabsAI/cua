@@ -14,14 +14,14 @@ _propagator = TraceContextTextMapPropagator()
 
 
 def inject_trace_context() -> dict[str, str]:
-    """Capture the current span's trace context as a dict of headers.
+    """Capture the current span's trace context as env-var-friendly dict.
 
-    Returns e.g. ``{"traceparent": "00-<trace_id>-<span_id>-01"}``.
-    The caller should merge these into the sandbox environment variables.
+    Returns e.g. ``{"TRACEPARENT": "00-<trace_id>-<span_id>-01"}``.
+    Keys are uppercased for direct use as sandbox environment variables.
     """
     carrier: dict[str, str] = {}
     _propagator.inject(carrier)
-    return carrier
+    return {k.upper().replace("-", "_"): v for k, v in carrier.items()}
 
 
 def extract_trace_context(traceparent: str, tracestate: str = "") -> Context:
