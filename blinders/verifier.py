@@ -34,10 +34,16 @@ class ScopeVerifier:
         scope: TaskScope,
         guardrails: GuardrailEngine,
         directive: str = "",
+        *,
+        skip_llm_validation: bool = False,
     ) -> None:
         self.scope = scope
         self.guardrails = guardrails
-        self._validator = ActionValidator(directive) if directive else None
+        # When skip_llm_validation is True, rely solely on deterministic checks
+        # (domain scope, action type, SSRF, nav limits). Saves 2+ Haiku calls/step.
+        self._validator = (
+            None if skip_llm_validation else (ActionValidator(directive) if directive else None)
+        )
 
     def check(
         self,
@@ -92,8 +98,11 @@ class ScopeVerifier:
             if not nav.allowed:
                 return nav.reason
 
-        # 3. Destructive action classification via Haiku LLM
-        action_check = self.guardrails.check_action(action, tool_input)
+        # 3. Destructive action classification — skip LLM when we have no
+        #    validator (fast mode) or when validator handles safety itself.
+        action_check = self.guardrails.check_action(
+            action, tool_input, skip_llm=(self._validator is not None or not self.guardrails._llm_enabled)
+        )
         if not action_check.allowed:
             return action_check.reason
 

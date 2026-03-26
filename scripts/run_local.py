@@ -68,7 +68,7 @@ async def run(args: argparse.Namespace) -> int:
         return 1
 
     # Set up Cognitive Blinders
-    scope = extract_task_scope(args.directive, profile)
+    scope = extract_task_scope(args.directive, profile, use_llm=False)
     blinders = DOMBlinders(scope)
     log.info(
         "Blinders: goal_type=%s, actions=%d",
