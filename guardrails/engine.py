@@ -15,6 +15,17 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from settings import SAFETY_MODEL
+from telemetry import get_tracer
+from telemetry.spans import (
+    ATTR_GENAI_INPUT_TOKENS,
+    ATTR_GENAI_MODEL,
+    ATTR_GENAI_OUTPUT_TOKENS,
+    ATTR_GENAI_SYSTEM,
+    ATTR_GUARD_ALLOWED,
+    ATTR_GUARD_REASON,
+    ATTR_GUARD_USED_LLM,
+    GUARDRAIL_LLM,
+)
 
 log = logging.getLogger(__name__)
 
@@ -164,7 +175,8 @@ class GuardrailEngine:
         self._llm_enabled = self.config.enable_llm_action_check
         self._llm_client = None
         self._approved_selectors: set[str] = set()
-        self._pending_confirmations: set[str] = set()  # selectors awaiting agent retry
+        self._pending_confirmations: set[str] = set()
+        self._tracer = get_tracer()
 
     def check_url(self, url: str) -> GuardrailResult:
         """Check if a URL is allowed to be visited."""
@@ -260,41 +272,64 @@ class GuardrailEngine:
             self._approved_selectors.add(normalized)
             return GuardrailResult(allowed=True)
 
-        try:
-            prompt = _DESTRUCTIVE_CHECK_PROMPT.format(selector=selector)
-            response = self._get_llm_client().messages.create(
-                model=SAFETY_MODEL,
-                max_tokens=100,
-                messages=[{"role": "user", "content": prompt}],
-            )
-
-            block = response.content[0]
-            text: str = str(block.text) if hasattr(block, "text") else ""
-            text = text.strip()
-
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-            data = json.loads(text)
-            is_destructive = data.get("destructive", False)
-            reason = data.get("reason", "")
-
-            if is_destructive:
-                log.warning(
-                    "Haiku flagged destructive click: %s (%s)", selector, reason
-                )
-                return GuardrailResult(
-                    allowed=False,
-                    reason=f"Destructive action blocked (LLM): {reason}",
+        with self._tracer.start_as_current_span(
+            GUARDRAIL_LLM,
+            attributes={
+                ATTR_GENAI_SYSTEM: "anthropic",
+                ATTR_GENAI_MODEL: SAFETY_MODEL,
+                ATTR_GUARD_USED_LLM: True,
+            },
+        ) as llm_span:
+            try:
+                prompt = _DESTRUCTIVE_CHECK_PROMPT.format(selector=selector)
+                response = self._get_llm_client().messages.create(
+                    model=SAFETY_MODEL,
+                    max_tokens=100,
+                    messages=[{"role": "user", "content": prompt}],
                 )
 
-            self._approved_selectors.add(normalized)
-            log.debug("Haiku approved click: %s (%s)", selector, reason)
-            return GuardrailResult(allowed=True)
+                llm_span.set_attributes(
+                    {
+                        ATTR_GENAI_INPUT_TOKENS: response.usage.input_tokens,
+                        ATTR_GENAI_OUTPUT_TOKENS: response.usage.output_tokens,
+                    }
+                )
 
-        except Exception as e:
-            log.debug("Haiku destructive check skipped (%s), allowing action", e)
-            return GuardrailResult(allowed=True)
+                block = response.content[0]
+                text: str = str(block.text) if hasattr(block, "text") else ""
+                text = text.strip()
+
+                if text.startswith("```"):
+                    text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+                data = json.loads(text)
+                is_destructive = data.get("destructive", False)
+                reason = data.get("reason", "")
+
+                if is_destructive:
+                    log.warning(
+                        "Haiku flagged destructive click: %s (%s)", selector, reason
+                    )
+                    llm_span.set_attributes(
+                        {
+                            ATTR_GUARD_ALLOWED: False,
+                            ATTR_GUARD_REASON: reason[:500],
+                        }
+                    )
+                    return GuardrailResult(
+                        allowed=False,
+                        reason=f"Destructive action blocked (LLM): {reason}",
+                    )
+
+                self._approved_selectors.add(normalized)
+                llm_span.set_attributes({ATTR_GUARD_ALLOWED: True})
+                log.debug("Haiku approved click: %s (%s)", selector, reason)
+                return GuardrailResult(allowed=True)
+
+            except Exception as e:
+                log.debug("Haiku destructive check skipped (%s), allowing action", e)
+                llm_span.set_attributes({ATTR_GUARD_ALLOWED: True})
+                return GuardrailResult(allowed=True)
 
     def check_action(
         self, action: str, tool_input: dict, *, skip_llm: bool = False

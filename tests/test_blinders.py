@@ -18,10 +18,10 @@ from guardrails import GuardrailEngine
 
 class TestDOMBlinders:
     def _read_scope(self):
-        return extract_task_scope("Find the price on apple.com")
+        return extract_task_scope("Find the price on apple.com", use_llm=False)
 
     def _interact_scope(self):
-        return extract_task_scope("Click the button on example.com")
+        return extract_task_scope("Click the button on example.com", use_llm=False)
 
     def test_js_filter_config_read(self):
         b = DOMBlinders(self._read_scope())
@@ -109,20 +109,20 @@ class TestInjectionDetection:
 
 class TestDangerousTextPatterns:
     def test_read_blocks_all(self):
-        scope = extract_task_scope("Find info on example.com")
+        scope = extract_task_scope("Find info on example.com", use_llm=False)
         patterns = _get_dangerous_text_patterns(scope)
         assert "delete account" in patterns
         assert "place order" in patterns
         assert "send email" in patterns
 
     def test_interact_blocks_account_only(self):
-        scope = extract_task_scope("Click the button on example.com")
+        scope = extract_task_scope("Click the button on example.com", use_llm=False)
         patterns = _get_dangerous_text_patterns(scope)
         assert "delete account" in patterns
         assert "place order" not in patterns
 
     def test_fill_form_most_permissive(self):
-        scope = extract_task_scope("Fill out the form on example.com")
+        scope = extract_task_scope("Fill out the form on example.com", use_llm=False)
         patterns = _get_dangerous_text_patterns(scope)
         assert "delete account" in patterns
         assert "place order" not in patterns
@@ -136,7 +136,7 @@ class TestDangerousTextPatterns:
 
 class TestScopeVerifier:
     def _verifier(self, directive: str) -> ScopeVerifier:
-        scope = extract_task_scope(directive)
+        scope = extract_task_scope(directive, use_llm=False)
         return ScopeVerifier(scope, GuardrailEngine())
 
     def test_allows_in_scope_action(self):
@@ -216,7 +216,7 @@ class TestScopeVerifier:
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
 
-        scope = extract_task_scope("Click things on example.com")
+        scope = extract_task_scope("Click things on example.com", use_llm=False)
         engine = GuardrailEngine()
         engine._llm_enabled = True
         engine._llm_client = mock_client

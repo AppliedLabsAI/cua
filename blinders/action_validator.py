@@ -14,17 +14,28 @@ import logging
 import re
 
 from settings import SAFETY_MODEL
+from telemetry import get_tracer
+from telemetry.spans import (
+    ATTR_GENAI_INPUT_TOKENS,
+    ATTR_GENAI_MODEL,
+    ATTR_GENAI_OUTPUT_TOKENS,
+    ATTR_GENAI_SYSTEM,
+    ATTR_GUARD_ALLOWED,
+    ATTR_GUARD_REASON,
+)
 
 log = logging.getLogger(__name__)
 
 # Actions that are always safe — skip LLM validation
-_SAFE_ACTIONS = frozenset({
-    "extract",
-    "screenshot",
-    "scroll",
-    "get_dom",
-    "wait_for",
-})
+_SAFE_ACTIONS = frozenset(
+    {
+        "extract",
+        "screenshot",
+        "scroll",
+        "get_dom",
+        "wait_for",
+    }
+)
 
 # Click selectors that are obviously safe — skip Haiku validation.
 # Used as a fast-path to avoid LLM overhead for common UI patterns.
@@ -39,10 +50,12 @@ _SAFE_SELECTOR_RE = re.compile(
 
 # Actions within execute_sequence that don't need individual validation
 # (typing and key presses are almost always part of a form-fill workflow)
-_SAFE_IN_SEQUENCE = frozenset({
-    "key_press",
-    *_SAFE_ACTIONS,
-})
+_SAFE_IN_SEQUENCE = frozenset(
+    {
+        "key_press",
+        *_SAFE_ACTIONS,
+    }
+)
 
 _VALIDATION_PROMPT = """\
 You are a safety validator for a browser automation agent. Decide whether \
@@ -140,7 +153,9 @@ class ActionValidator:
         action_desc = _describe_action(action, tool_input)
 
         # Build page context
-        page_context = f"{page_title} ({page_url})" if page_title else page_url or "unknown"
+        page_context = (
+            f"{page_title} ({page_url})" if page_title else page_url or "unknown"
+        )
 
         prompt = _VALIDATION_PROMPT.format(
             directive=self.directive,
@@ -148,41 +163,61 @@ class ActionValidator:
             action_description=action_desc,
         )
 
-        try:
-            response = self._get_client().messages.create(
-                model=SAFETY_MODEL,
-                max_tokens=100,
-                messages=[{"role": "user", "content": prompt}],
-            )
+        tracer = get_tracer()
+        with tracer.start_as_current_span(
+            "cua.blinders.validate_action",
+            attributes={
+                ATTR_GENAI_SYSTEM: "anthropic",
+                ATTR_GENAI_MODEL: SAFETY_MODEL,
+                "cua.blinders.action": action_desc,
+            },
+        ) as span:
+            try:
+                response = self._get_client().messages.create(
+                    model=SAFETY_MODEL,
+                    max_tokens=100,
+                    messages=[{"role": "user", "content": prompt}],
+                )
 
-            block = response.content[0]
-            text: str = str(block.text) if hasattr(block, "text") else ""
-            text = text.strip()
+                span.set_attributes(
+                    {
+                        ATTR_GENAI_INPUT_TOKENS: response.usage.input_tokens,
+                        ATTR_GENAI_OUTPUT_TOKENS: response.usage.output_tokens,
+                    }
+                )
 
-            # Handle markdown wrapping
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+                block = response.content[0]
+                text: str = str(block.text) if hasattr(block, "text") else ""
+                text = text.strip()
 
-            data = json.loads(text)
-            is_safe = data.get("safe", True)
-            reason = data.get("reason", "")
+                if text.startswith("```"):
+                    text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
-            if not is_safe:
-                log.warning("Action validator blocked %s: %s", action_desc, reason)
-                return f"Action validator blocked: {reason}"
+                data = json.loads(text)
+                is_safe = data.get("safe", True)
+                reason = data.get("reason", "")
 
-            log.debug("Action validator approved: %s (%s)", action_desc, reason)
-            # Cache approval for future calls
-            if action == "goto":
-                domain = _extract_domain(tool_input.get("url", ""))
-                if domain:
-                    self._approved_domains.add(domain)
-            return None
+                if not is_safe:
+                    log.warning("Action validator blocked %s: %s", action_desc, reason)
+                    span.set_attributes(
+                        {
+                            ATTR_GUARD_ALLOWED: False,
+                            ATTR_GUARD_REASON: reason[:500],
+                        }
+                    )
+                    return f"Action validator blocked: {reason}"
 
-        except Exception as e:
-            # On any error, allow the action (fail open)
-            log.debug("Action validation skipped (%s), allowing action", e)
-            return None
+                span.set_attributes({ATTR_GUARD_ALLOWED: True})
+                log.debug("Action validator approved: %s (%s)", action_desc, reason)
+                if action == "goto":
+                    domain = _extract_domain(tool_input.get("url", ""))
+                    if domain:
+                        self._approved_domains.add(domain)
+                return None
+
+            except Exception as e:
+                log.debug("Action validation skipped (%s), allowing action", e)
+                return None
 
 
 def _extract_domain(url: str) -> str:

@@ -127,11 +127,11 @@ class TestActionClassification:
         assert result.allowed
 
     def test_disabled_llm_check(self):
+        """With LLM disabled, ambiguous selectors are allowed (fail-open)."""
         config = GuardrailConfig(enable_llm_action_check=False)
         engine = GuardrailEngine(config)
-        result = engine.check_action(
-            "click", {"selector": "text=Delete Account"}
-        )
+        # Use a selector that is ambiguous (bypasses both regex patterns)
+        result = engine.check_action("click", {"selector": "text=Process Batch #42"})
         assert result.allowed
 
 
@@ -187,14 +187,15 @@ class TestHaikuDestructiveCheck:
         """enable_llm_action_check=False disables the LLM layer."""
         config = GuardrailConfig(enable_llm_action_check=False)
         engine = GuardrailEngine(config)
-        result = engine.check_action("click", {"selector": "text=Confirm Deletion"})
+        # Use ambiguous selector that bypasses regex
+        result = engine.check_action("click", {"selector": "text=Finalize Changes"})
         assert result.allowed
 
     def test_skip_llm_flag(self):
         """skip_llm=True skips the Haiku check."""
         engine = GuardrailEngine()
         result = engine.check_action(
-            "click", {"selector": "text=Confirm Deletion"}, skip_llm=True
+            "click", {"selector": "text=Finalize Changes"}, skip_llm=True
         )
         assert result.allowed
 
@@ -207,14 +208,14 @@ class TestHaikuDestructiveCheck:
                 text='{"destructive": true, "reason": "confirms account deletion"}'
             )
         ]
+        mock_response.usage = MagicMock(input_tokens=50, output_tokens=20)
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
         mock_client_fn.return_value = mock_client
 
         engine = GuardrailEngine()
-        result = engine.check_action(
-            "click", {"selector": "text=Yes, Delete Everything"}
-        )
+        # Use ambiguous selector that bypasses regex → reaches Haiku
+        result = engine.check_action("click", {"selector": "text=Proceed with action"})
         assert not result.allowed
         assert result.needs_confirmation
         assert "LLM" in (result.reason or "")
@@ -224,25 +225,20 @@ class TestHaikuDestructiveCheck:
         """Agent retry of Haiku-flagged action confirms and allows it."""
         mock_response = MagicMock()
         mock_response.content = [
-            MagicMock(
-                text='{"destructive": true, "reason": "confirms deletion"}'
-            )
+            MagicMock(text='{"destructive": true, "reason": "confirms deletion"}')
         ]
+        mock_response.usage = MagicMock(input_tokens=50, output_tokens=20)
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
         mock_client_fn.return_value = mock_client
 
         engine = GuardrailEngine()
-        # First: flagged
-        result1 = engine.check_action(
-            "click", {"selector": "text=Yes, Delete Everything"}
-        )
+        # First: flagged (ambiguous selector bypasses regex)
+        result1 = engine.check_action("click", {"selector": "text=Proceed with action"})
         assert not result1.allowed
         assert result1.needs_confirmation
         # Retry: confirmed
-        result2 = engine.check_action(
-            "click", {"selector": "text=Yes, Delete Everything"}
-        )
+        result2 = engine.check_action("click", {"selector": "text=Proceed with action"})
         assert result2.allowed
 
     @patch("guardrails.engine.GuardrailEngine._get_llm_client")
@@ -252,12 +248,14 @@ class TestHaikuDestructiveCheck:
         mock_response.content = [
             MagicMock(text='{"destructive": false, "reason": "navigation link"}')
         ]
+        mock_response.usage = MagicMock(input_tokens=50, output_tokens=20)
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
         mock_client_fn.return_value = mock_client
 
         engine = GuardrailEngine()
-        result = engine.check_action("click", {"selector": "text=View Details"})
+        # Use ambiguous selector that bypasses regex → reaches Haiku
+        result = engine.check_action("click", {"selector": "text=Continue to step 2"})
         assert result.allowed
 
     @patch("guardrails.engine.GuardrailEngine._get_llm_client")
@@ -267,13 +265,15 @@ class TestHaikuDestructiveCheck:
         mock_response.content = [
             MagicMock(text='{"destructive": false, "reason": "safe"}')
         ]
+        mock_response.usage = MagicMock(input_tokens=50, output_tokens=20)
         mock_client = MagicMock()
         mock_client.messages.create.return_value = mock_response
         mock_client_fn.return_value = mock_client
 
         engine = GuardrailEngine()
-        engine.check_action("click", {"selector": "text=Next Page"})
-        engine.check_action("click", {"selector": "text=Next Page"})
+        # Use ambiguous selector that bypasses regex → reaches Haiku
+        engine.check_action("click", {"selector": "text=Run analysis"})
+        engine.check_action("click", {"selector": "text=Run analysis"})
         assert mock_client.messages.create.call_count == 1
 
     @patch("guardrails.engine.GuardrailEngine._get_llm_client")
@@ -284,8 +284,6 @@ class TestHaikuDestructiveCheck:
         mock_client_fn.return_value = mock_client
 
         engine = GuardrailEngine()
-        result = engine.check_action(
-            "click", {"selector": "text=Confirm Transfer"}
-        )
+        # Use ambiguous selector that bypasses regex → reaches Haiku (which errors)
+        result = engine.check_action("click", {"selector": "text=Finalize batch"})
         assert result.allowed
-

@@ -14,6 +14,8 @@ import asyncio
 import base64
 import contextlib
 import json
+import logging
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -365,6 +367,9 @@ async def execute_dom_action(
         return ActionResult(error=f"browser_dom.{action} failed: {e}")
 
 
+_seq_log = logging.getLogger("bridge.sequence")
+
+
 async def _execute_sequence(
     params: dict,
     browser: BrowserManager,
@@ -375,10 +380,21 @@ async def _execute_sequence(
     Runs each step sequentially, collecting results. Stops on first error
     and returns partial results up to the failure point.
     """
+    from actionlog.actions import summarize_action
+    from telemetry import get_tracer
+    from telemetry.spans import (
+        ATTR_TOOL_ACTION,
+        ATTR_TOOL_ERROR,
+        ATTR_TOOL_SELECTOR,
+        ATTR_TOOL_SUCCESS,
+        ATTR_TOOL_URL,
+    )
+
     steps = params.get("steps")
     if not steps or not isinstance(steps, list):
         return ActionResult(error="execute_sequence requires a 'steps' array")
 
+    tracer = get_tracer()
     results: list[str] = []
     last_step = len(steps) - 1
     for i, raw_step in enumerate(steps):
@@ -401,27 +417,61 @@ async def _execute_sequence(
                 text="\n".join(results) if results else None,
             )
 
-        # Intermediate steps skip screenshots for speed; last step runs normally.
-        # goto/click always return DOM-only, so intermediate nav still has context.
         is_last = i == last_step
-        result = await execute_dom_action(
-            action,
-            step,
-            browser,
-            _skip_screenshot=not is_last,
-            filter_config=filter_config,
-        )
+        step_start = time.monotonic()
 
-        if result.error:
-            # On error, take a screenshot so the agent can see what went wrong
-            try:
-                b64 = await page_screenshot(browser.page)
-            except Exception:
-                b64 = None
-            return ActionResult(
-                screenshot_b64=b64,
-                text="\n".join(results) if results else None,
-                error=f"Step {i + 1} ({action}): {result.error}",
+        with tracer.start_as_current_span(
+            "cua.sequence.step",
+            attributes={
+                "cua.sequence.index": i + 1,
+                "cua.sequence.total": len(steps),
+                ATTR_TOOL_ACTION: action,
+                ATTR_TOOL_SELECTOR: step.get("selector", ""),
+                ATTR_TOOL_URL: step.get("url", ""),
+            },
+        ) as step_span:
+            result = await execute_dom_action(
+                action,
+                step,
+                browser,
+                _skip_screenshot=not is_last,
+                filter_config=filter_config,
+            )
+            step_ms = int((time.monotonic() - step_start) * 1000)
+            summary = summarize_action("browser_dom", action, step)
+
+            if result.error:
+                step_span.set_attributes(
+                    {
+                        ATTR_TOOL_SUCCESS: False,
+                        ATTR_TOOL_ERROR: result.error[:500],
+                    }
+                )
+                _seq_log.info(
+                    "  [%d/%d] %s (%dms) ERR: %s",
+                    i + 1,
+                    len(steps),
+                    summary,
+                    step_ms,
+                    result.error[:80],
+                )
+                try:
+                    b64 = await page_screenshot(browser.page)
+                except Exception:
+                    b64 = None
+                return ActionResult(
+                    screenshot_b64=b64,
+                    text="\n".join(results) if results else None,
+                    error=f"Step {i + 1} ({action}): {result.error}",
+                )
+
+            step_span.set_attributes({ATTR_TOOL_SUCCESS: True})
+            _seq_log.info(
+                "  [%d/%d] %s (%dms) OK",
+                i + 1,
+                len(steps),
+                summary,
+                step_ms,
             )
 
         results.append(f"Step {i + 1} ({action}): {result.text or 'OK'}")

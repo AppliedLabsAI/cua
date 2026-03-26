@@ -14,6 +14,13 @@ from typing import Any
 from anthropic import Anthropic
 
 from settings import SAFETY_MODEL
+from telemetry import get_tracer
+from telemetry.spans import (
+    ATTR_GENAI_INPUT_TOKENS,
+    ATTR_GENAI_MODEL,
+    ATTR_GENAI_OUTPUT_TOKENS,
+    ATTR_GENAI_SYSTEM,
+)
 
 log = logging.getLogger(__name__)
 
@@ -55,43 +62,64 @@ def classify_directive(
     Raises on API/auth errors so the caller can fall back to keyword matching.
     """
     client = client or Anthropic()
+    tracer = get_tracer()
 
-    response = client.messages.create(
-        model=SAFETY_MODEL,
-        max_tokens=100,
-        messages=[
-            {
-                "role": "user",
-                "content": _CLASSIFICATION_PROMPT + directive,
-            }
-        ],
-    )
-
-    # Extract text from first content block (type-safe)
-    block = response.content[0]
-    text: str = _extract_text(block)
-    text = text.strip()
-
-    # Handle markdown code block wrapping
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-    data = json.loads(text)
-    goal_type = data.get("goal_type", "interact")
-
-    if goal_type not in _VALID_GOAL_TYPES:
-        log.warning(
-            "LLM returned unknown goal_type: %s, defaulting to interact",
-            goal_type,
+    with tracer.start_as_current_span(
+        "cua.blinders.classify",
+        attributes={
+            ATTR_GENAI_SYSTEM: "anthropic",
+            ATTR_GENAI_MODEL: SAFETY_MODEL,
+            "cua.blinders.directive": directive,
+        },
+    ) as span:
+        response = client.messages.create(
+            model=SAFETY_MODEL,
+            max_tokens=100,
+            messages=[
+                {
+                    "role": "user",
+                    "content": _CLASSIFICATION_PROMPT + directive,
+                }
+            ],
         )
-        return "interact"
 
-    log.info(
-        "LLM classified directive as: %s (needs_login=%s)",
-        goal_type,
-        data.get("needs_login"),
-    )
-    return goal_type
+        span.set_attributes(
+            {
+                ATTR_GENAI_INPUT_TOKENS: response.usage.input_tokens,
+                ATTR_GENAI_OUTPUT_TOKENS: response.usage.output_tokens,
+            }
+        )
+
+        block = response.content[0]
+        text: str = _extract_text(block)
+        text = text.strip()
+
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+        data = json.loads(text)
+        goal_type = data.get("goal_type", "interact")
+
+        if goal_type not in _VALID_GOAL_TYPES:
+            log.warning(
+                "LLM returned unknown goal_type: %s, defaulting to interact",
+                goal_type,
+            )
+            span.set_attributes({"cua.blinders.goal_type": "interact"})
+            return "interact"
+
+        span.set_attributes(
+            {
+                "cua.blinders.goal_type": goal_type,
+                "cua.blinders.needs_login": data.get("needs_login", False),
+            }
+        )
+        log.info(
+            "Classified directive as: %s (needs_login=%s)",
+            goal_type,
+            data.get("needs_login"),
+        )
+        return goal_type
 
 
 def _extract_text(block: Any) -> str:

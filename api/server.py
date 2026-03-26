@@ -15,10 +15,27 @@ import modal
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from opentelemetry import trace as otel_trace  # StatusCode used below
 
 from api.models import RunConfig, RunResponse, RunStatus
 from sandbox.image import PORT_NOVNC, PORT_STATUS, create_cua_sandbox
 from settings import get_settings
+from telemetry import get_tracer, setup_telemetry
+from telemetry.metrics import active_sessions, sessions_total
+from telemetry.middleware import instrument_fastapi
+from telemetry.propagation import inject_trace_context
+from telemetry.spans import (
+    ATTR_DIRECTIVE,
+    ATTR_DISPLAY_HEIGHT,
+    ATTR_DISPLAY_WIDTH,
+    ATTR_MAX_STEPS,
+    ATTR_MODEL,
+    ATTR_PROFILE,
+    ATTR_SESSION_ID,
+    ATTR_START_URL,
+    SANDBOX_CREATE,
+    SESSION,
+)
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +98,8 @@ def _cleanup_finished_sandbox(run_id: str) -> bool:
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     global _http_client
+    setup_telemetry("cua-api")
+    instrument_fastapi(app_instance)
     _http_client = httpx.AsyncClient(timeout=10)
     if not _API_KEY:
         log.warning("CUA_API_KEY not set — API endpoints are unauthenticated")
@@ -99,37 +118,62 @@ app = FastAPI(
 @app.post("/runs", response_model=RunResponse)
 async def create_run(config: RunConfig) -> RunResponse:
     """Create a new CUA run by spawning a Modal sandbox."""
-    sandbox: modal.Sandbox | None = None
-    run_id: str | None = None
-    try:
-        sandbox = create_cua_sandbox(config, modal_app)
-        run_id = sandbox.object_id
-        tunnels = sandbox.tunnels()
-        novnc_url = tunnels[PORT_NOVNC].url
-        status_base = tunnels[PORT_STATUS].url
-    except Exception as exc:
-        log.exception("Failed to create sandbox for run %s", run_id or "unknown")
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "error": "Failed to create sandbox",
-                "run_id": run_id,
-                "message": str(exc),
-            },
-        ) from exc
+    tracer = get_tracer()
 
-    assert sandbox is not None
-    _sandboxes[run_id] = sandbox
-    _sandbox_status_urls[run_id] = status_base
+    with tracer.start_as_current_span(
+        SESSION,
+        attributes={
+            ATTR_DIRECTIVE: config.directive[:500],
+            ATTR_MODEL: config.model,
+            ATTR_MAX_STEPS: config.max_steps,
+            ATTR_PROFILE: config.profile,
+            ATTR_DISPLAY_WIDTH: config.display_width,
+            ATTR_DISPLAY_HEIGHT: config.display_height,
+            ATTR_START_URL: config.start_url or "",
+        },
+    ) as session_span:
+        active_sessions().add(1)
+        sandbox: modal.Sandbox | None = None
+        run_id: str | None = None
+        try:
+            with tracer.start_as_current_span(SANDBOX_CREATE):
+                # Inject trace context into sandbox env vars
+                trace_ctx = inject_trace_context()
+                sandbox = create_cua_sandbox(config, modal_app, extra_env=trace_ctx)
+                run_id = sandbox.object_id
 
-    log.info("Created run %s, noVNC: %s", run_id, novnc_url)
+            session_span.set_attribute(ATTR_SESSION_ID, run_id)
 
-    return RunResponse(
-        run_id=run_id,
-        novnc_url=novnc_url,
-        status_url=f"/runs/{run_id}",
-        stream_url=f"/runs/{run_id}/stream",
-    )
+            tunnels = sandbox.tunnels()
+            novnc_url = tunnels[PORT_NOVNC].url
+            status_base = tunnels[PORT_STATUS].url
+        except Exception as exc:
+            log.exception("Failed to create sandbox for run %s", run_id or "unknown")
+            active_sessions().add(-1)
+            sessions_total().add(1, {"status": "failed"})
+            session_span.set_status(otel_trace.StatusCode.ERROR, str(exc))
+            session_span.record_exception(exc)
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "Failed to create sandbox",
+                    "run_id": run_id,
+                    "message": str(exc),
+                },
+            ) from exc
+
+        assert sandbox is not None
+        _sandboxes[run_id] = sandbox
+        _sandbox_status_urls[run_id] = status_base
+
+        log.info("Created run %s, noVNC: %s", run_id, novnc_url)
+
+        return RunResponse(
+            run_id=run_id,
+            novnc_url=novnc_url,
+            status_url=f"/runs/{run_id}",
+            stream_url=f"/runs/{run_id}/stream",
+        )
 
 
 @app.get("/runs/{run_id}", response_model=RunStatus)
