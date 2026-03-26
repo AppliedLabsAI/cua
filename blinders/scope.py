@@ -50,8 +50,7 @@ _FALLBACK_FILL_FORM_RE = re.compile(
     re.IGNORECASE,
 )
 _FALLBACK_INTERACT_RE = re.compile(
-    r"click|select\b|choose|download|upload|toggle|drag\b|drop\b"
-    r"|add.+(?:to|into).+cart|remove.+(?:from).+cart|buy\b|purchase\b|place.+order",
+    r"click|select\b|choose|download|upload|toggle|drag\b|drop\b",
     re.IGNORECASE,
 )
 _FALLBACK_READ_RE = re.compile(
