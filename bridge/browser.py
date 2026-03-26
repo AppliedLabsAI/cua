@@ -21,7 +21,7 @@ from patchright.async_api import (
 )
 
 _DEFAULT_TIMEOUT = 3000  # 3s for clicks/waits/selectors — fail fast on bad selectors
-_NAVIGATION_TIMEOUT = 10_000  # 10s for page loads — real sites need more time
+_NAVIGATION_TIMEOUT = 7_000  # 7s for page loads — real sites need more time
 _DOM_MAX_CHARS = 3500
 # Compact DOM auto-attached to goto/click responses
 _AUTO_DOM_MAX_CHARS = 2500  # Leave room for nav text + content summary

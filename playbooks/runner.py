@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _ACTION_TIMEOUT = 5000  # 5s for clicks, key presses
-_NAVIGATION_TIMEOUT = 15_000  # 15s for page loads
+_NAVIGATION_TIMEOUT = 7_000  # 7s for page loads
 _RETRY_DELAY_S = 1.0  # Delay before retrying a failed step
 
 
