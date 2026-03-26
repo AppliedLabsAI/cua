@@ -99,8 +99,8 @@ class ScopeVerifier:
             if not nav.allowed:
                 return nav.reason
 
-        # 3. Destructive action classification — always run (catches refund/delete
-        #    buttons even on trusted domains). Skip only when validator will cover it.
+        # 3. Destructive action check — skip when ActionValidator is active
+        #    (it subsumes destructive detection with directive context).
         action_check = self.guardrails.check_action(
             action, tool_input, skip_llm=bool(self._validator)
         )

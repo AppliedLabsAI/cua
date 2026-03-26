@@ -90,9 +90,6 @@ class ActionRouter:
     ) -> None:
         self.browser = browser
         self.guardrails = GuardrailEngine(guardrail_config)
-        # Disable Haiku LLM for ambiguous selectors — regex still catches
-        # destructive patterns. Saves ~500ms per click action.
-        self.guardrails._llm_enabled = False
         self.blinders = blinders
         self._filter_config = blinders.to_js_filter_config() if blinders else None
         self.action_log: list[ActionLog] = []
@@ -105,7 +102,6 @@ class ActionRouter:
 
             self._verifier = ScopeVerifier(
                 blinders.scope, self.guardrails, directive=directive,
-                skip_llm_validation=True,
             )
 
     async def execute(self, tool_name: str, tool_input: dict) -> dict:
