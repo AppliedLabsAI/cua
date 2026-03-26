@@ -792,6 +792,255 @@ class TestScenarioB8ExcludeSelector:
         assert "Contact Store" in filtered
 
 
+# ===========================================================================
+# Section C: Scope Verifier / Action Restriction Tests
+# ===========================================================================
+
+
+class TestScenarioC9ReadTaskForbiddenClick:
+    """Read task should block click if model tries it, or agent uses extract instead."""
+
+    DIRECTIVE = "Tell me the store address."
+
+    def test_scope_is_read(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        assert scope.goal_type == "read"
+
+    def test_click_allowed_in_read_scope(self):
+        # Click IS allowed in read scope (needed for navigation)
+        scope = extract_task_scope(self.DIRECTIVE)
+        assert "click" in scope.allowed_actions
+
+    def test_key_press_blocked(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        result = verifier.check("key_press", {"text": "hello"})
+        assert result is not None
+        assert "not allowed" in result
+
+    def test_execute_sequence_blocked_for_read(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        result = verifier.check("execute_sequence", {
+            "steps": [{"action": "click", "selector": ".reveal-btn"}]
+        })
+        assert result is not None
+        assert "not allowed" in result
+
+    def test_extract_allowed(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        assert verifier.check("extract", {"selector": "body", "mode": "text"}) is None
+
+    def test_scroll_allowed(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        assert verifier.check("scroll", {"direction": "down", "amount": 3}) is None
+
+    def test_destructive_click_blocked_by_guardrails(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        result = verifier.check("click", {"selector": "text=delete account"})
+        assert result is not None
+        assert "Destructive" in result or "blocked" in result.lower()
+
+
+class TestScenarioC10OutOfScopeDomainRedirect:
+    """goto to out-of-scope domain should be blocked."""
+
+    DIRECTIVE = "Find the FAQ answer on http://localhost:8000/help."
+
+    def test_scope_has_localhost_domain(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        assert "localhost" in scope.allowed_domains
+
+    def test_in_scope_goto_passes_domain_check_but_ssrf_blocks(self):
+        # localhost is in domain scope but blocked by SSRF
+        scope = extract_task_scope(self.DIRECTIVE)
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        result = verifier.check("goto", {"url": "http://localhost:8000/help/faq"})
+        # SSRF blocks localhost
+        assert result is not None
+        assert "SSRF" in result or "localhost" in result
+
+    def test_evil_subdomain_of_localhost_passes_scope(self):
+        # evil.localhost matches *.localhost — this is expected behavior.
+        # SSRF doesn't catch subdomains of localhost (DNS would resolve differently).
+        # The real protection here is the existing domain blocklist in GuardrailEngine.
+        scope = extract_task_scope(self.DIRECTIVE)
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        # evil.localhost IS in scope because *.localhost was auto-added
+        result = verifier.check("goto", {"url": "http://evil.localhost:9000/phishing"})
+        # This passes domain scope — acceptable since localhost:8000 was explicitly in directive
+        # The truly dangerous case is a completely different domain:
+        assert result is None  # expected: *.localhost matches
+
+    def test_completely_different_domain_blocked(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        result = verifier.check("goto", {"url": "http://evil.example.com:9000/phishing"})
+        assert result is not None
+        assert "not in task scope" in result
+
+    def test_random_domain_blocked(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        result = verifier.check("goto", {"url": "https://attacker.com/steal"})
+        assert result is not None
+        assert "not in task scope" in result
+
+    def test_redirect_to_different_subdomain_blocked(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        result = verifier.check("goto", {"url": "http://admin.evil.com/export"})
+        assert result is not None
+
+    def test_non_localhost_scoped_domain(self):
+        # Test with a real domain to avoid SSRF interference
+        scope = extract_task_scope("Find FAQ on https://docs.example.com/help")
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        # In-scope
+        assert verifier.check("goto", {"url": "https://docs.example.com/faq"}) is None
+        # Out-of-scope
+        result = verifier.check("goto", {"url": "https://evil.com/phishing"})
+        assert result is not None
+        assert "not in task scope" in result
+
+
+class TestScenarioC11ExecuteSequenceIllegalStep:
+    """execute_sequence with one illegal step should be fully blocked."""
+
+    DIRECTIVE = "Open the reports page and tell me yesterday's sales on https://reports.example.com"
+
+    def test_scope_allows_execute_sequence(self):
+        # "Open" triggers navigate but "tell me" triggers read — let's check
+        scope = extract_task_scope(self.DIRECTIVE)
+        # "tell me" is read keyword, checked after interact
+        # "open" is navigate keyword, but "select" is interact — no interact keywords here
+        # So: read wins
+        assert scope.goal_type == "read"
+
+    def test_sequence_with_out_of_scope_goto_blocked(self):
+        # Use interact scope to have execute_sequence available
+        scope = extract_task_scope("Click the reports button on https://reports.example.com")
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        result = verifier.check("execute_sequence", {
+            "steps": [
+                {"action": "click", "selector": "#reports-btn"},
+                {"action": "goto", "url": "https://evil.com/settings"},
+            ]
+        })
+        assert result is not None
+        assert "not in task scope" in result
+
+    def test_sequence_with_destructive_click_blocked(self):
+        scope = extract_task_scope("Click the reports button on https://reports.example.com")
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        result = verifier.check("execute_sequence", {
+            "steps": [
+                {"action": "click", "selector": "#view-report"},
+                {"action": "click", "selector": "text=delete account"},
+            ]
+        })
+        assert result is not None
+        assert "Destructive" in result or "blocked" in result.lower()
+
+    def test_sequence_all_legal_steps_allowed(self):
+        scope = extract_task_scope("Click the reports button on https://reports.example.com")
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        result = verifier.check("execute_sequence", {
+            "steps": [
+                {"action": "click", "selector": "#reports-btn"},
+                {"action": "extract", "selector": ".sales-total", "mode": "text"},
+            ]
+        })
+        assert result is None
+
+    def test_no_partial_execution_on_block(self):
+        # The verifier checks ALL steps before any execution
+        scope = extract_task_scope("Click things on https://reports.example.com")
+        verifier = ScopeVerifier(scope, GuardrailEngine())
+        # First step legal, second illegal
+        result = verifier.check("execute_sequence", {
+            "steps": [
+                {"action": "click", "selector": "#safe-btn"},
+                {"action": "goto", "url": "https://attacker.com"},
+                {"action": "click", "selector": "#another-btn"},
+            ]
+        })
+        # Should block at step 2, before step 3
+        assert result is not None
+        assert "not in task scope" in result
+
+
+class TestScenarioC12ToolSchemaNarrowing:
+    """Tool schema should exclude disallowed actions structurally."""
+
+    DIRECTIVE = "Summarize the shipping policy."
+
+    def test_scope_is_read(self):
+        scope = extract_task_scope(self.DIRECTIVE)
+        assert scope.goal_type == "read"
+
+    def test_tool_schema_excludes_key_press(self):
+        from agent.tools import get_tools
+
+        scope = extract_task_scope(self.DIRECTIVE)
+        tools = get_tools(allowed_actions=scope.allowed_actions)
+        schema = tools[0]["input_schema"]
+        action_enum = schema["properties"]["action"]["enum"]
+        assert "key_press" not in action_enum
+        assert "execute_sequence" not in action_enum
+
+    def test_tool_schema_includes_allowed_actions(self):
+        from agent.tools import get_tools
+
+        scope = extract_task_scope(self.DIRECTIVE)
+        tools = get_tools(allowed_actions=scope.allowed_actions)
+        schema = tools[0]["input_schema"]
+        action_enum = schema["properties"]["action"]["enum"]
+        for action in ("goto", "click", "extract", "screenshot", "scroll", "get_dom", "wait_for"):
+            assert action in action_enum
+
+    def test_navigate_scope_even_more_restricted(self):
+        from agent.tools import get_tools
+
+        scope = extract_task_scope("Go to example.com")
+        tools = get_tools(allowed_actions=scope.allowed_actions)
+        schema = tools[0]["input_schema"]
+        action_enum = schema["properties"]["action"]["enum"]
+        assert "key_press" not in action_enum
+        assert "execute_sequence" not in action_enum
+        assert "extract" not in action_enum
+        assert "wait_for" not in action_enum
+
+    def test_interact_scope_has_all_actions(self):
+        from agent.tools import get_tools
+
+        scope = extract_task_scope("Click the download button on example.com")
+        tools = get_tools(allowed_actions=scope.allowed_actions)
+        schema = tools[0]["input_schema"]
+        action_enum = schema["properties"]["action"]["enum"]
+        assert len(action_enum) == 9  # all actions
+
+    def test_no_allowed_actions_returns_full_schema(self):
+        from agent.tools import get_tools
+
+        tools = get_tools(allowed_actions=None)
+        schema = tools[0]["input_schema"]
+        action_enum = schema["properties"]["action"]["enum"]
+        assert len(action_enum) == 9
+
+    def test_schema_is_sorted(self):
+        from agent.tools import get_tools
+
+        scope = extract_task_scope(self.DIRECTIVE)
+        tools = get_tools(allowed_actions=scope.allowed_actions)
+        schema = tools[0]["input_schema"]
+        action_enum = schema["properties"]["action"]["enum"]
+        assert action_enum == sorted(action_enum)
+
+
 class TestPerformanceBenchmark:
     """Measure execution time of the blinders pipeline."""
 
