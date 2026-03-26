@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from telemetry.metrics import safety_degraded_total
+
 if TYPE_CHECKING:
     from profiles.loader import Profile
 
@@ -129,8 +131,11 @@ def _detect_goal_type(directive: str, *, use_llm: bool = True) -> str:
             from blinders.classifier import classify_directive
 
             return classify_directive(directive)
-        except Exception:
-            log.debug("LLM classification unavailable, using keyword fallback")
+        except Exception as exc:
+            log.warning("LLM classification unavailable, using degraded scope: %s", exc)
+            safety_degraded_total().add(
+                1, {"component": "scope_classifier", "fallback": "keyword_read"}
+            )
 
     return _detect_goal_type_fallback(directive)
 
@@ -149,8 +154,8 @@ def _detect_goal_type_fallback(directive: str) -> str:
         return "read"
     if _FALLBACK_NAVIGATE_RE.search(directive):
         return "navigate"
-    # Default: interact (most permissive)
-    return "interact"
+    # Default to read in degraded mode — safer than widening permissions.
+    return "read"
 
 
 def _default_visibility(goal_type: str) -> ElementVisibility:

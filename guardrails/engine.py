@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from settings import SAFETY_MODEL
 from telemetry import get_tracer
+from telemetry.metrics import safety_degraded_total
 from telemetry.spans import (
     ATTR_GENAI_INPUT_TOKENS,
     ATTR_GENAI_MODEL,
@@ -260,6 +261,7 @@ class GuardrailEngine:
             return GuardrailResult(
                 allowed=False,
                 reason=f"Destructive action blocked (pattern match): {selector}",
+                needs_confirmation=True,
             )
         if _SAFE_CLICK_RE.search(normalized):
             self._approved_selectors.add(normalized)
@@ -319,6 +321,7 @@ class GuardrailEngine:
                     return GuardrailResult(
                         allowed=False,
                         reason=f"Destructive action blocked (LLM): {reason}",
+                        needs_confirmation=True,
                     )
 
                 self._approved_selectors.add(normalized)
@@ -326,10 +329,25 @@ class GuardrailEngine:
                 log.debug("Haiku approved click: %s (%s)", selector, reason)
                 return GuardrailResult(allowed=True)
 
-            except Exception as e:
-                log.debug("Haiku destructive check skipped (%s), allowing action", e)
-                llm_span.set_attributes({ATTR_GUARD_ALLOWED: True})
-                return GuardrailResult(allowed=True)
+            except Exception as exc:
+                log.warning(
+                    "Haiku destructive check unavailable, blocking ambiguous click: %s",
+                    exc,
+                )
+                safety_degraded_total().add(
+                    1,
+                    {"component": "guardrail_destructive_check", "fallback": "block"},
+                )
+                llm_span.set_attributes(
+                    {
+                        ATTR_GUARD_ALLOWED: False,
+                        ATTR_GUARD_REASON: "validation unavailable",
+                    }
+                )
+                return GuardrailResult(
+                    allowed=False,
+                    reason=("Safety validation unavailable for ambiguous click action"),
+                )
 
     def check_action(
         self, action: str, tool_input: dict, *, skip_llm: bool = False
@@ -361,12 +379,9 @@ class GuardrailEngine:
         if not skip_llm:
             llm_result = self._check_destructive_llm(selector)
             if not llm_result.allowed:
-                self._pending_confirmations.add(normalized)
-                return GuardrailResult(
-                    allowed=False,
-                    needs_confirmation=True,
-                    reason=llm_result.reason,
-                )
+                if llm_result.needs_confirmation:
+                    self._pending_confirmations.add(normalized)
+                return llm_result
             return llm_result
 
         return GuardrailResult(allowed=True)

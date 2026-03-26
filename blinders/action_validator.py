@@ -15,6 +15,7 @@ import re
 
 from settings import SAFETY_MODEL
 from telemetry import get_tracer
+from telemetry.metrics import safety_degraded_total
 from telemetry.spans import (
     ATTR_GENAI_INPUT_TOKENS,
     ATTR_GENAI_MODEL,
@@ -215,9 +216,20 @@ class ActionValidator:
                         self._approved_domains.add(domain)
                 return None
 
-            except Exception as e:
-                log.debug("Action validation skipped (%s), allowing action", e)
-                return None
+            except Exception as exc:
+                log.warning(
+                    "Action validation unavailable, blocking ambiguous action: %s", exc
+                )
+                safety_degraded_total().add(
+                    1, {"component": "action_validator", "fallback": "block"}
+                )
+                span.set_attributes(
+                    {
+                        ATTR_GUARD_ALLOWED: False,
+                        ATTR_GUARD_REASON: "validation unavailable",
+                    }
+                )
+                return "Action validator blocked: safety validation unavailable"
 
 
 def _extract_domain(url: str) -> str:

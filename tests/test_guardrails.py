@@ -127,7 +127,7 @@ class TestActionClassification:
         assert result.allowed
 
     def test_disabled_llm_check(self):
-        """With LLM disabled, ambiguous selectors are allowed (fail-open)."""
+        """With LLM disabled intentionally, regex-only behavior stays enabled."""
         config = GuardrailConfig(enable_llm_action_check=False)
         engine = GuardrailEngine(config)
         # Use a selector that is ambiguous (bypasses both regex patterns)
@@ -221,6 +221,18 @@ class TestHaikuDestructiveCheck:
         assert "LLM" in (result.reason or "")
 
     @patch("guardrails.engine.GuardrailEngine._get_llm_client")
+    def test_blocks_ambiguous_click_when_haiku_unavailable(self, mock_client_fn):
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = RuntimeError("network down")
+        mock_client_fn.return_value = mock_client
+
+        engine = GuardrailEngine()
+        result = engine.check_action("click", {"selector": "text=Proceed with action"})
+        assert not result.allowed
+        assert not result.needs_confirmation
+        assert "validation unavailable" in (result.reason or "")
+
+    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
     def test_retry_confirms_haiku_flagged_action(self, mock_client_fn):
         """Agent retry of Haiku-flagged action confirms and allows it."""
         mock_response = MagicMock()
@@ -277,8 +289,8 @@ class TestHaikuDestructiveCheck:
         assert mock_client.messages.create.call_count == 1
 
     @patch("guardrails.engine.GuardrailEngine._get_llm_client")
-    def test_fail_open_on_api_error(self, mock_client_fn):
-        """API errors result in action being allowed (fail open)."""
+    def test_blocks_on_api_error_in_degraded_mode(self, mock_client_fn):
+        """API errors block ambiguous actions in degraded mode."""
         mock_client = MagicMock()
         mock_client.messages.create.side_effect = Exception("API timeout")
         mock_client_fn.return_value = mock_client
@@ -286,4 +298,5 @@ class TestHaikuDestructiveCheck:
         engine = GuardrailEngine()
         # Use ambiguous selector that bypasses regex → reaches Haiku (which errors)
         result = engine.check_action("click", {"selector": "text=Finalize batch"})
-        assert result.allowed
+        assert not result.allowed
+        assert "validation unavailable" in (result.reason or "")

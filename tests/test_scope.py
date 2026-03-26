@@ -32,8 +32,8 @@ class TestDetectGoalType:
         assert _detect_goal_type("Click the download button") == "interact"
         assert _detect_goal_type("Select the premium plan") == "interact"
 
-    def test_default_is_interact(self):
-        assert _detect_goal_type("Do something complex", use_llm=False) == "interact"
+    def test_default_is_read(self):
+        assert _detect_goal_type("Do something complex", use_llm=False) == "read"
 
     def test_fill_form_takes_precedence_over_navigate(self):
         # "fill" is checked before "go to"

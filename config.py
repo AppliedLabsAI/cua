@@ -1,8 +1,4 @@
-"""Centralized configuration for the CUA agent.
-
-Consolidates runtime settings from environment variables, API RunConfig,
-and profile overrides into a single typed structure.
-"""
+"""Centralized runtime configuration assembly for the CUA agent."""
 
 from __future__ import annotations
 
@@ -10,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from api.models import CredentialsMap, GuardrailSettings
 from exceptions import ConfigError
 from guardrails import GuardrailConfig
 from profiles.loader import apply_guardrail_overrides, load_profile
@@ -33,9 +30,35 @@ class CUAConfig:
     start_url: str | None = None
     proxy_url: str | None = None
     profile_name: str = "default"
-    credentials: dict | None = None
-    guardrail_config: GuardrailConfig | None = None
+    credentials: CredentialsMap | None = None
+    guardrail_config: GuardrailConfig = field(default_factory=GuardrailConfig)
     profile: Profile | None = field(default=None, repr=False)
+
+    @staticmethod
+    def _parse_credentials(raw_json: str) -> CredentialsMap | None:
+        if not raw_json:
+            return None
+
+        parsed = json.loads(raw_json)
+        if not isinstance(parsed, dict):
+            raise ConfigError("CREDENTIALS_JSON must be a JSON object")
+
+        normalized: CredentialsMap = {}
+        for service, creds in parsed.items():
+            if not isinstance(service, str) or not isinstance(creds, dict):
+                raise ConfigError(
+                    "CREDENTIALS_JSON entries must map strings to objects"
+                )
+            normalized[service] = {str(k): str(v) for k, v in creds.items()}
+        return normalized
+
+    @staticmethod
+    def _parse_guardrails(raw_json: str) -> GuardrailConfig | None:
+        if not raw_json:
+            return None
+
+        settings = GuardrailSettings.model_validate(json.loads(raw_json))
+        return GuardrailConfig.from_dict(settings.to_dict())
 
     @classmethod
     def from_env(cls) -> CUAConfig:
@@ -45,16 +68,8 @@ class CUAConfig:
         if not env.directive:
             raise ConfigError("DIRECTIVE env var is required")
 
-        credentials = None
-        if env.credentials_json:
-            credentials = json.loads(env.credentials_json)
-
-        guardrail_config = None
-        if env.guardrails_json:
-            guardrail_config = GuardrailConfig.from_dict(
-                json.loads(env.guardrails_json)
-            )
-
+        credentials = cls._parse_credentials(env.credentials_json)
+        guardrail_config = cls._parse_guardrails(env.guardrails_json)
         profile = load_profile(env.profile)
         guardrail_config = apply_guardrail_overrides(profile, guardrail_config)
 
@@ -78,7 +93,7 @@ class CUAConfig:
         """Build config from an API RunConfig (used by the outer API)."""
         guardrail_config = None
         if rc.guardrails:
-            guardrail_config = GuardrailConfig.from_dict(rc.guardrails)
+            guardrail_config = GuardrailConfig.from_dict(rc.guardrails.to_dict())
 
         profile = load_profile(rc.profile)
         guardrail_config = apply_guardrail_overrides(profile, guardrail_config)

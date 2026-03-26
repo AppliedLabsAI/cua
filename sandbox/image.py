@@ -114,7 +114,7 @@ def create_cua_sandbox(
         env["CREDENTIALS_JSON"] = json.dumps(config.credentials)
 
     if config.guardrails:
-        env["GUARDRAILS_JSON"] = json.dumps(config.guardrails)
+        env["GUARDRAILS_JSON"] = json.dumps(config.guardrails.to_dict())
 
     # Propagate OTel trace context and config into sandbox
     if extra_env:
