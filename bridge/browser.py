@@ -136,6 +136,28 @@ async def _ensure_dom_snapshot(page: Page) -> None:
     await page.evaluate(_DOM_SNAPSHOT_INIT_JS)
 
 
+async def _ensure_init_scripts(page: Page) -> None:
+    """Re-inject all init scripts if they've been lost after navigation.
+
+    Init scripts registered via add_init_script persist across navigations
+    within the same browsing context, but can be lost after full-page reloads
+    triggered by form submissions (e.g., login POST redirects). This function
+    re-injects any missing scripts before they're needed.
+    """
+    missing = await page.evaluate(
+        "() => [!window.__domSnapshot, !window.__smartExtract, "
+        "!window.__captchaDetect, !window.__extractValue]"
+    )
+    if missing[0]:
+        await page.evaluate(_DOM_SNAPSHOT_INIT_JS)
+    if missing[1]:
+        await page.evaluate(_SMART_EXTRACT_INIT_JS)
+    if missing[2]:
+        await page.evaluate(_CAPTCHA_DETECT_INIT_JS)
+    if missing[3]:
+        await page.evaluate(_EXTRACT_VALUE_INIT_JS)
+
+
 async def quick_dom_snapshot(
     page: Page,
     max_chars: int = _AUTO_DOM_MAX_CHARS,
@@ -194,6 +216,9 @@ async def execute_dom_action(
 
     try:
         page = browser.page
+
+        # Re-inject init scripts if lost after form submission / full reload
+        await _ensure_init_scripts(page)
 
         if action == "screenshot":
             b64, dom = await asyncio.gather(
@@ -287,17 +312,8 @@ async def execute_dom_action(
             if mode == "html":
                 content = await page.inner_html(selector, timeout=_DEFAULT_TIMEOUT)
             elif mode == "value":
-                # Use __extractValue if available, inline fallback if init script lost
                 content = await page.evaluate(
-                    """(sel) => {
-                        if (window.__extractValue) return window.__extractValue(sel);
-                        const el = document.querySelector(sel);
-                        if (!el) return '[not found]';
-                        const tag = el.tagName.toLowerCase();
-                        if (tag === 'select') { const o = el.options?.[el.selectedIndex]; return o ? o.text.trim() : ''; }
-                        if (tag === 'textarea' || tag === 'input') return el.value;
-                        return el.innerText || el.textContent || '';
-                    }""",
+                    "(sel) => window.__extractValue(sel)",
                     selector,
                 )
             elif is_body:
