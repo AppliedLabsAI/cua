@@ -11,22 +11,22 @@ import re
 
 from blinders.scope import TaskScope
 
+# Single combined regex for injection detection — one search per line instead of 9.
 # Patterns that suggest prompt injection attempts in web content.
-# These are heuristic — not foolproof, but catch common injection vectors.
-_INJECTION_PATTERNS = [
-    re.compile(
-        r"ignore\s+(previous|above|all|prior)\s+(instructions?|prompts?|rules?)",
-        re.IGNORECASE,
-    ),
-    re.compile(r"you\s+are\s+(now|a|an)\s+", re.IGNORECASE),
-    re.compile(r"system\s*prompt", re.IGNORECASE),
-    re.compile(r"new\s+instructions?\s*:", re.IGNORECASE),
-    re.compile(r"</?system", re.IGNORECASE),
-    re.compile(r"IMPORTANT\s*:.*override", re.IGNORECASE),
-    re.compile(r"disregard\s+(all|any|previous)", re.IGNORECASE),
-    re.compile(r"forget\s+(everything|all|previous)", re.IGNORECASE),
-    re.compile(r"\[INST\]|\[/INST\]|<\|im_start\|>|<\|im_end\|>", re.IGNORECASE),
-]
+_INJECTION_RE = re.compile(
+    r"ignore\s+(?:previous|above|all|prior)\s+(?:instructions?|prompts?|rules?)"
+    r"|ignore\s+the\s+user"
+    r"|you\s+are\s+(?:now|a|an)\s+"
+    r"|system\s*prompt"
+    r"|^SYSTEM\s*:"
+    r"|new\s+instructions?\s*:"
+    r"|</?system"
+    r"|IMPORTANT\s*:.*override"
+    r"|disregard\s+(?:all|any|previous)"
+    r"|forget\s+(?:everything|all|previous)"
+    r"|\[INST\]|\[/INST\]|<\|im_start\|>|<\|im_end\|>",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 # Default dangerous action text patterns (used when action buttons are hidden)
 _DANGEROUS_TEXT_PATTERNS = [
@@ -56,22 +56,21 @@ class DOMBlinders:
 
     def __init__(self, scope: TaskScope) -> None:
         self.scope = scope
-
-    def to_js_filter_config(self) -> dict:
-        """Convert TaskScope visibility into the JS filterConfig format.
-
-        This dict is passed as the 3rd argument to window.__domSnapshot().
-        """
-        vis = self.scope.visibility
-        return {
+        # Pre-compute JS filter config (scope is immutable after creation)
+        vis = scope.visibility
+        self._js_config = {
             "showForms": vis.show_forms,
             "showNavLinks": vis.show_nav_links,
             "showActionButtons": vis.show_action_buttons,
             "showAccountControls": vis.show_account_controls,
             "excludeSelectors": vis.exclude_selectors,
             "includeSelectors": vis.include_selectors,
-            "excludeTextPatterns": _get_dangerous_text_patterns(self.scope),
+            "excludeTextPatterns": _get_dangerous_text_patterns(scope),
         }
+
+    def to_js_filter_config(self) -> dict:
+        """Return pre-computed JS filterConfig for window.__domSnapshot()."""
+        return self._js_config
 
     def filter_snapshot(self, dom_text: str) -> str:
         """Apply Python-side filtering to a DOM snapshot string.
@@ -107,7 +106,7 @@ class DOMBlinders:
 
 def _contains_injection(text: str) -> bool:
     """Check if a line of text contains potential injection patterns."""
-    return any(pattern.search(text) for pattern in _INJECTION_PATTERNS)
+    return _INJECTION_RE.search(text) is not None
 
 
 def _get_dangerous_text_patterns(scope: TaskScope) -> list[str]:
