@@ -4,34 +4,46 @@ Autonomous browser automation powered by Claude. POST a natural-language directi
 
 CUA uses a DOM-first approach — Patchright for fast, precise browser interactions via CSS/text/role selectors. No pixel-hunting or screenshot-heavy loops. Each action completes in ~1-2s.
 
-## Architecture
+```mermaid
+graph LR
+    A["POST /runs { directive }"] --> B[API Server<br/>FastAPI + Auth]
+    B --> C[Modal Sandbox<br/>or Docker]
+    C --> D[Xvfb + Chromium<br/>noVNC :6080]
+    C --> E[Agent Loop<br/>Claude + Patchright]
+    E -->|browser_dom| D
+    C --> F[Status API :8090<br/>SSE stream]
+```
 
-```text
-POST /runs { directive: "...", profile: "research" }
-     |
-     v
-+-- API Server (FastAPI) -----------------------+
-|  Bearer token auth (CUA_API_KEY)              |
-|  Creates Modal Sandbox (or Docker container)  |
-|  Proxies status + SSE events                  |
-+-------------------+---------------------------+
-                    |
-                    v
-+-- Sandbox -----------------------------------------+
-|  +-- Desktop ------------------------------------+ |
-|  |  Xvfb + openbox + noVNC (:6080)               | |
-|  |  Chromium via Patchright (stealth)            | |
-|  +-----------------------------------------------+ |
-|  +-- Agent Loop ---------------------------------+ |
-|  |  Claude API (streaming, interleaved thinking) | |
-|  |       |                                       | |
-|  |  browser_dom tool (Patchright)                | |
-|  |  - goto, click, screenshot, key_press         | |
-|  |  - scroll, extract, get_dom, wait_for         | |
-|  |  - execute_sequence (batched actions)         | |
-|  +-----------------------------------------------+ |
-|  Status API (:8090) -- SSE action stream           |
-+----------------------------------------------------+
+## Quick Start
+
+**Modal** (recommended):
+```bash
+pip install -e .
+modal secret create anthropic-secret ANTHROPIC_API_KEY=sk-ant-...
+modal deploy api/server.py
+
+curl -X POST https://your-app--cua.modal.run/runs \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $CUA_API_KEY" \
+  -d '{"directive": "Go to example.com and find the contact page"}'
+```
+
+**Docker:**
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+docker compose up
+# noVNC: http://localhost:6080 | Status: http://localhost:8090/status
+```
+
+**Local dev:**
+```bash
+pip install -e ".[dev]" && patchright install chromium
+Xvfb :99 -screen 0 1280x720x24 &  # Linux only
+
+python scripts/run_local.py \
+  --directive "Go to example.com and find the contact page" \
+  --profile research \
+  --allow-private-networks  # disable SSRF protection for local testing
 ```
 
 ## Tools
@@ -52,7 +64,7 @@ CUA exposes a single `browser_dom` tool with 9 actions. The agent chooses which 
 
 ### Why `execute_sequence` matters
 
-`execute_sequence` is the most important action for performance. Each tool call has ~3-5s of overhead (API round-trip + thinking). Without batching, filling a 5-field form takes 5 separate calls = ~20s of pure overhead. With `execute_sequence`, it's a single call:
+Each tool call has ~3-5s of overhead (API round-trip + thinking). Without batching, filling a 5-field form takes 5 separate calls = ~20s of pure overhead. With `execute_sequence`, it's a single call:
 
 ```json
 {
@@ -69,19 +81,104 @@ CUA exposes a single `browser_dom` tool with 9 actions. The agent chooses which 
 
 Intermediate steps skip screenshots for speed. Only the final step captures the DOM, so the agent sees the result of the entire sequence in one response.
 
-### Design choices that make CUA fast
+### Design choices
 
-- **DOM-first, not screenshot-first.** `goto` and `click` return a compact DOM snapshot (~200-500 tokens) instead of a screenshot (~1-2K image tokens). The agent only takes screenshots when it needs to *see* the page visually (layout, images, charts).
-- **Streaming execution.** Tool calls are executed as they arrive from the Claude API stream, not after the full response. If Claude emits two tool calls, the first starts executing while the second is still being generated.
-- **Adaptive thinking budget.** Early steps get full thinking budget for task planning. After 3+ consecutive successes, the budget drops since the agent is in a known-good flow. Errors reset to full budget.
-- **Aggressive context pruning.** Old screenshots, DOM snapshots, and thinking blocks are stripped from the conversation every iteration. Only the most recent observation is kept in full, so input tokens stay flat regardless of run length.
-- **Page-change detection.** After a `goto`, `click`, or `execute_sequence`, any remaining tool calls in the same streaming response are skipped — they were planned on stale state. The agent re-observes the new page instead.
-- **CAPTCHA auto-resolution.** Patchright's stealth patches avoid most bot detection. When CAPTCHAs do appear (Cloudflare, reCAPTCHA, hCaptcha), CUA detects them and waits up to 30s for auto-resolution before continuing.
-- **Stuck detection.** If 4+ of the last 6 actions produce identical results, the agent gets a system hint to try a different approach, preventing infinite loops.
+- **DOM-first, not screenshot-first.** `goto` and `click` return a compact DOM snapshot (~200-500 tokens) instead of a screenshot (~1-2K image tokens). The agent only takes screenshots when it needs to *see* the page visually.
+- **Streaming execution.** Tool calls execute as they arrive from the Claude API stream, not after the full response.
+- **Adaptive thinking budget.** Full budget for planning (first 2 steps), reduced after 3+ consecutive successes, reset on errors.
+- **Aggressive context pruning.** Old screenshots, DOM snapshots, and thinking blocks are stripped every iteration. Input tokens stay flat regardless of run length.
+- **Page-change detection.** After `goto`/`click`/`execute_sequence`, remaining tool calls in the same response are skipped — they were planned on stale state.
+- **CAPTCHA auto-resolution.** Patchright stealth patches + auto-wait up to 30s for Cloudflare/reCAPTCHA/hCaptcha.
+- **Stuck detection.** System hint after 4+ of the last 6 actions produce identical results.
+
+## Guardrails
+
+CUA uses a layered safety architecture combining proactive observation control with traditional runtime checks.
+
+### Cognitive Blinders
+
+The primary safety mechanism is **Cognitive Blinders** — a proactive observation filtering system that controls what the agent can see, rather than reactively blocking what it tries to do.
+
+**The core insight**: if the agent can't see a "delete account" button, it can't click it. If it can't see injected instructions in a sidebar ad, it can't follow them. Research shows that filtering observations drops prompt injection attack success from 80%+ to under 2% ([FocusAgent, 2025](https://arxiv.org/html/2510.03204)), while also improving performance by reducing noise.
+
+Traditional guardrails are reactive — the agent sees everything, decides to act, then rules block bad actions. This is fragile because the agent has already been influenced by what it saw. Cognitive Blinders flips the model: control what enters the agent's observation space proactively.
+
+```mermaid
+graph LR
+    A["User Directive"] --> B["Task Scope<br/>Extraction"]
+    B --> C["DOM<br/>Blinders"]
+    C --> D["Filtered<br/>DOM"]
+    D --> E["Agent"]
+    E --> F["Scope Verifier +<br/>Action Validator"]
+    F -->|Safe| G["Execute"]
+    F -->|Blocked| H["Feedback"]
+
+    style A fill:#e8f5e9
+    style D fill:#e3f2fd
+    style G fill:#e8f5e9
+    style H fill:#ffebee
+```
+
+**How it works:**
+
+**1. Task Scope Extraction** — Before the agent sees any web content, Haiku classifies the directive into a goal type. This determines what the agent can see and do for the entire run.
+
+```mermaid
+graph LR
+    A["'Find price on apple.com'"] -->|Haiku| B["read"]
+    C["'Log in and find orders'"] -->|Haiku| D["fill_form"]
+    E["'Click download button'"] -->|Haiku| F["interact"]
+    G["'Go to example.com'"] -->|Haiku| H["navigate"]
+```
+
+- **Primary**: Haiku LLM call (~200ms, one-time) — handles nuanced directives like "find info but log in first" → `fill_form`
+- **Fallback**: Fast keyword matching (~25μs) — used when no API key is available (tests, offline)
+
+Each goal type gets adaptive defaults:
+
+| Goal Type | Forms | Dangerous Buttons | Account Controls | `key_press` | `execute_sequence` |
+|---|---|---|---|---|---|
+| `read` | Hidden | Hidden | Hidden | Blocked | Blocked |
+| `navigate` | Hidden | Hidden | Hidden | Blocked | Blocked |
+| `interact` | Visible | Visible | Hidden | Allowed | Allowed |
+| `fill_form` | Visible | Visible | Visible | Allowed | Allowed |
+
+**2. DOM Blinders** — The DOM snapshot sent to the agent is filtered at two levels:
+
+| Level | Where | What it does |
+|---|---|---|
+| **JS-side** | `dom_snapshot.js` in browser | Filters elements by category (forms, action buttons, account controls) based on task scope. Elements are removed before they leave the browser. |
+| **Python-side** | `blinders/filters.py` | Scans for prompt injection patterns (`"ignore previous instructions"`, `SYSTEM:`, `[INST]` tokens) and redacts them. Wraps content with provenance markers (`[web-content-start/end]`). |
+
+**3. Scope Verifier + Action Validator** — Two-layer pre-execution check:
+
+| Layer | Speed | What it checks |
+|---|---|---|
+| **Deterministic** | ~25μs | Action type allowed for goal? Domain in scope? SSRF? Destructive keywords? |
+| **Haiku LLM** | ~800ms | Does this action align with the user's task? Is it destructive or off-task? |
+
+The Haiku layer is optimized to minimize overhead:
+- **Domain caching** — once a domain is approved, future gotos skip re-validation
+- **Batched sequences** — a 5-step `execute_sequence` makes 1 Haiku call, not 6
+- **Safe action skipping** — `extract`, `screenshot`, `scroll`, `get_dom`, `wait_for` bypass LLM validation entirely
+
+**4. Tool Schema Restriction** — The tool definition sent to Claude only includes actions allowed by the task scope. For a `read` task, `key_press` and `execute_sequence` are literally absent from the schema — the model cannot select them.
+
+### Runtime Guardrails
+
+Defense-in-depth checks that run alongside Cognitive Blinders:
+
+| Guard | Default | Configurable |
+|---|---|---|
+| Domain blocklist | Banking, government, email, payment, social media | `allowed_domains` / `blocked_domains` |
+| Destructive action detection | Purchase, account deletion, message sending keywords | `blocked_action_categories` |
+| SSRF protection | Private IPs, localhost, cloud metadata (169.254.x.x) | `allow_private_networks` |
+| URL visit limit | 50 unique URLs per run | `max_urls_visited` |
+| Consecutive error limit | 5 errors | `max_consecutive_errors` |
 
 ## Profiles
 
-Profiles specialize the agent for different use cases by bundling a prompt extension and guardrail overrides. The same tools and agent loop are used for all profiles.
+Profiles specialize the agent by bundling a prompt extension and guardrail overrides. The same tools and agent loop are used for all profiles.
 
 | Profile | Description |
 |---|---|
@@ -90,51 +187,6 @@ Profiles specialize the agent for different use cases by bundling a prompt exten
 | `form_filling` | Unblocks purchase/submit actions, aggressive batching for form workflows |
 
 Create custom profiles by adding a YAML file to `profiles/`. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-## Quick Start — Modal
-
-```bash
-pip install -e .
-
-# Store your Anthropic API key as a Modal secret
-modal secret create anthropic-secret ANTHROPIC_API_KEY=sk-ant-...
-
-# Deploy the API server
-modal deploy api/server.py
-
-# Create a run
-curl -X POST https://your-app--cua.modal.run/runs \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $CUA_API_KEY" \
-  -d '{"directive": "Go to example.com and find the contact page"}'
-```
-
-## Quick Start — Docker
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export DIRECTIVE="Go to example.com and find the contact page"
-
-docker compose up
-
-# Open noVNC to watch: http://localhost:6080
-# Status API: http://localhost:8090/status
-```
-
-## Quick Start — Local Dev
-
-```bash
-pip install -e ".[dev]"
-patchright install chromium
-
-# Start Xvfb (Linux only)
-Xvfb :99 -screen 0 1280x720x24 &
-
-python scripts/run_local.py \
-  --directive "Go to example.com and find the contact page" \
-  --profile research \
-  --allow-private-networks  # disable SSRF protection for local testing
-```
 
 ## API Reference
 
@@ -196,121 +248,37 @@ curl -N https://your-app--cua.modal.run/runs/sb-abc123/stream
 | `proxy` | None | Proxy URL for bot avoidance |
 | `guardrails` | None | GuardrailConfig overrides (domains, actions, limits) |
 
-## Guardrails
+## Security
 
-CUA uses a layered safety architecture combining proactive observation control with traditional runtime checks.
-
-### Cognitive Blinders
-
-The primary safety mechanism is **Cognitive Blinders** — a proactive observation filtering system that controls what the agent can see, rather than reactively blocking what it tries to do. If the agent can't see a "delete account" button, it can't click it. If it can't see injected instructions in a sidebar ad, it can't follow them.
-
-The blinders pipeline runs automatically on every task:
-
-```text
-User Directive (trusted)
-        │
-        ▼
-┌──────────────────────┐
-│  Task Scope          │  Extracts goal type, allowed domains,
-│  Extraction          │  allowed actions from the directive.
-│  (blinders/scope.py) │  No LLM call — deterministic keyword analysis.
-└──────────┬───────────┘
-           │  TaskScope { goal_type, allowed_domains,
-           │    allowed_actions, element_visibility }
-           ▼
-┌──────────────────────┐
-│  DOM Blinders        │  JS-side: filters DOM elements by category
-│  (dom_snapshot.js +  │  Python-side: redacts injection patterns,
-│   blinders/filters)  │  adds content provenance markers
-└──────────┬───────────┘
-           │  Filtered DOM (task-relevant elements only)
-           ▼
-┌──────────────────────┐
-│  Scope Verifier      │  Deterministic pre-execution check:
-│  (blinders/verifier) │  action type + domain + existing guardrails
-└──────────┬───────────┘
-           │
-           ▼
-      Execute action
-```
-
-**How it works:**
-
-1. **Task Scope Extraction** — Before the agent sees any web content, the directive is analyzed to determine the goal type (`read`, `navigate`, `interact`, `fill_form`). This uses a two-tier approach:
-   - **Fast keyword matching** (~25μs) handles clear-cut directives ("find the price" → `read`, "fill out the form" → `fill_form`)
-   - **Haiku LLM validation** (~200ms, one-time) activates automatically when the keyword result is ambiguous — e.g., a directive says "find" (read keyword) but also mentions "login" or "password" (needs form interaction). This prevents misclassification that would block required actions.
-
-   The LLM layer auto-detects: if `ANTHROPIC_API_KEY` is set, ambiguous cases get validated; otherwise, keyword matching is used alone.
-
-   Each goal type gets adaptive visibility and action defaults:
-
-   | Goal Type | Forms | Action Buttons | Account Controls | Key Press |
-   |-----------|-------|----------------|------------------|-----------|
-   | `read` | Hidden | Hidden | Hidden | Blocked |
-   | `navigate` | Hidden | Hidden | Hidden | Blocked |
-   | `interact` | Visible | Visible | Hidden | Allowed |
-   | `fill_form` | Visible | Visible | Visible | Allowed |
-
-2. **DOM Blinders** — The DOM snapshot sent to the agent is filtered at two levels:
-   - **JS-side** (`dom_snapshot.js`): Elements are filtered by category before leaving the browser. Form inputs, dangerous buttons, and account controls are excluded based on the task scope.
-   - **Python-side** (`blinders/filters.py`): The snapshot is scanned for prompt injection patterns (e.g., "ignore previous instructions", `<system>` tags, `[INST]` tokens) and suspicious lines are redacted. Content is wrapped with provenance markers (`[web-content-start/end]`) so the model can distinguish web content from system instructions.
-
-3. **Scope Verifier** — Before every action executes, a deterministic check validates:
-   - Is this action type allowed for this goal? (structural — not prompt-based)
-   - Is the target URL within the allowed domains? (extracted from the directive)
-   - Does the existing SSRF/guardrail check pass? (defense in depth)
-
-4. **Tool Schema Restriction** — The tool definition sent to Claude only includes actions allowed by the task scope. For a `read` task, `key_press` and `execute_sequence` are literally absent from the schema — the model cannot select them.
-
-**Why this approach:**
-- **Proactive, not reactive** — the agent never sees out-of-scope elements, so it can't be influenced by them
-- **Structural, not behavioral** — architecture enforces safety, not prompts that can be bypassed
-- **Dual-purpose** — every safety filter also improves performance (fewer tokens, less noise, better focus)
-- **~25μs overhead** — the full pipeline adds negligible latency to each action
-
-### Runtime Guardrails
-
-In addition to Cognitive Blinders, CUA maintains traditional runtime guardrails as defense in depth:
-
-- **Domain blocklist**: Blocks navigation to banking, government, email, payment, and social media sites by default. Configurable via `allowed_domains` (allowlist) or `blocked_domains` (blocklist).
-- **Destructive action detection**: Blocks clicks on selectors matching purchase, account deletion, or message sending keywords.
-- **SSRF protection**: Blocks navigation to private IP ranges, localhost, and cloud metadata endpoints (169.254.169.254). Disable with `--allow-private-networks` (local runner) or `allow_private_networks: true` in guardrails config.
-- **URL visit limit**: Caps the number of unique URLs visited per run (default: 50).
-- **Consecutive error limit**: Stops the agent after 5 consecutive errors.
-
-## Security Considerations
-
-- **Credentials**: When provided, credentials are injected as plaintext into the system prompt sent to the Anthropic API. They will appear in Anthropic's request logs. Use service-specific tokens with minimal scope.
-- **API authentication**: Set `CUA_API_KEY` environment variable to require Bearer token auth on all endpoints. Without it, the API is unauthenticated.
-- **Action logs**: The `text` field in `key_press` actions is truncated in logs but not fully redacted. Avoid typing sensitive data that shouldn't appear in logs.
+- **Credentials**: Injected as plaintext into the system prompt sent to the Anthropic API. Use service-specific tokens with minimal scope.
+- **API authentication**: Set `CUA_API_KEY` environment variable to require Bearer token auth on all endpoints.
+- **Action logs**: `key_press` text is truncated in logs but not fully redacted. Avoid typing sensitive data that shouldn't appear in logs.
 
 ## Cost Estimation
 
 Per run (typical 10-20 step task with DOM-first actions):
-- **Claude API**: ~$0.02-0.15 (Sonnet 4.6, minimal screenshots)
-- **Modal compute**: ~$0.02-0.10 (1-5 min sandbox runtime)
-- **Total**: ~$0.05-0.25 per run
+- **Claude API**: ~$0.02-0.15 (Sonnet, minimal screenshots)
+- **Modal Sandbox**: ~$0.01-0.02 (1-5 min, 1 core + 2GB RAM at $0.04/core/hr + $0.007/GiB/hr sandbox rates)
+- **Total**: ~$0.03-0.17 per run
 
-DOM-first actions drastically reduce cost vs screenshot-heavy approaches — each screenshot is ~1-2K image tokens, while DOM snapshots are ~200-500 text tokens.
+DOM-first actions reduce cost vs screenshot-heavy approaches — each screenshot is ~1-2K image tokens, while DOM snapshots are ~200-500 text tokens.
 
 ## Project Structure
 
 ```text
 cua/
-├── agent/           Agent loop, tool definitions, system prompt, context management
-├── blinders/        Cognitive Blinders — task scope, DOM filtering, scope verification
-├── bridge/          Patchright browser executor, CAPTCHA handling, action router
-├── api/             FastAPI server (outer) + streaming server (inner sandbox)
-├── actionlog/       Action log dataclass, persistence, SSE formatting
+├── agent/           Agent loop, tools, prompts, context management
+├── blinders/        Cognitive Blinders (scope, DOM filters, verifier, action validator)
+├── bridge/          Patchright executor, CAPTCHA handling, action router
+├── api/             FastAPI servers (outer API + inner status API)
 ├── guardrails/      Domain/action/SSRF safety engine
-├── profiles/        YAML profile definitions (prompt + guardrails)
+├── profiles/        YAML profile definitions
 ├── sandbox/         Modal image definition + entrypoint script
 ├── scripts/         Local dev runner
-├── tests/           Unit + integration tests
+├── tests/           Unit + browser integration tests
 ├── config.py        Centralized CUAConfig (env vars, RunConfig, profiles)
 ├── exceptions.py    Custom exception hierarchy
-├── Dockerfile       Docker-based sandbox (alternative to Modal)
-└── docs/            Archived design documents
+└── Dockerfile       Docker-based sandbox (alternative to Modal)
 ```
 
 ## License
