@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Only goto and click reliably change the page URL/frame.
+# Actions that may materially change page/frame state.
 _CAPTCHA_CHECK_ACTIONS = {"goto", "click"}
 
 
@@ -113,6 +113,7 @@ class ActionRouter:
         self._recording = recording
 
         self._verifier = None
+        self._skip_captcha = False
         if blinders:
             from blinders.verifier import ScopeVerifier
 
@@ -339,7 +340,8 @@ class ActionRouter:
                 )
 
                 if action in _CAPTCHA_CHECK_ACTIONS:
-                    result = await self._handle_captcha(result)
+                    if not self._skip_captcha:
+                        result = await self._handle_captcha(result)
                     final_url = self.browser.page.url
                     browser_span.set_attribute(
                         ATTR_BROWSER_PAGE_CHANGED, final_url != page_url_before

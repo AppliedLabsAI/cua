@@ -18,50 +18,50 @@ import json
 import logging
 import os
 import sys
+from typing import TYPE_CHECKING
 
-# Add project root to path
+# Add project root to path — must precede project imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from bridge.browser import BrowserManager
+from recording.manager import RecordingManager
+
+if TYPE_CHECKING:
+    from profiles.loader import Profile
+
+import contextlib
 
 from telemetry.logging import setup_logging
 
 setup_logging()
+
 # Suppress noisy HTTP request logs from httpx
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("cua.local")
 
 
 async def run(args: argparse.Namespace) -> int:
-    from actionlog.actions import save_action_log
-    from agent.loop import run_agent
-    from blinders.filters import DOMBlinders
-    from blinders.scope import extract_task_scope
-    from bridge.browser import BrowserManager
-    from bridge.router import ActionRouter
-    from profiles.loader import apply_guardrail_overrides, load_profile
+    from profiles.loader import load_profile
     from recording import RecordingConfig
-    from recording.manager import RecordingManager
 
-    width = args.width
-    height = args.height
-    display = args.display
+    os.environ["DISPLAY"] = args.display
 
-    os.environ["DISPLAY"] = display
-
-    # Load profile
     profile = load_profile(args.profile)
-    guardrail_config = apply_guardrail_overrides(profile)
-    if args.allow_private_networks:
-        guardrail_config.allow_private_networks = True
-
-    log.info("Display: %s (%dx%d), profile: %s", display, width, height, args.profile)
+    log.info(
+        "Display: %s (%dx%d), profile: %s",
+        args.display,
+        args.width,
+        args.height,
+        args.profile,
+    )
     log.info("Directive: %s", args.directive)
 
     # Launch browser
     browser = BrowserManager()
     try:
         await browser.launch(
-            width=width,
-            height=height,
+            width=args.width,
+            height=args.height,
             start_url=args.start_url,
             proxy=args.proxy,
         )
@@ -70,16 +70,7 @@ async def run(args: argparse.Namespace) -> int:
         log.error("Failed to launch browser: %s", e)
         return 1
 
-    # Set up Cognitive Blinders
-    scope = extract_task_scope(args.directive, profile, use_llm=False)
-    blinders = DOMBlinders(scope)
-    log.info(
-        "Blinders: goal_type=%s, actions=%d",
-        scope.goal_type,
-        len(scope.allowed_actions),
-    )
-
-    # Initialize recording (always on for local runs) — save to output/
+    # Initialize recording
     local_output_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output"
     )
@@ -87,6 +78,128 @@ async def run(args: argparse.Namespace) -> int:
     recording = RecordingManager(recording_config, run_id="local")
     await recording.start(browser.context)
     log.info("Session recording started: %s", local_output_dir)
+
+    credentials = None
+    if args.credentials:
+        try:
+            credentials = json.loads(args.credentials)
+        except json.JSONDecodeError as exc:
+            log.error("Invalid --credentials JSON: %s", exc)
+            with contextlib.suppress(Exception):
+                await recording.stop()
+            await browser.close()
+            return 1
+
+    # --- Playbook path (deterministic, no LLM loop) ---
+    # Skips blinders, scope extraction, guardrails, and ActionRouter entirely.
+    if args.playbook:
+        return await _run_playbook(args, browser, recording, credentials)
+
+    # --- Standard LLM agent path ---
+    return await _run_agent(
+        args, browser, profile, recording, credentials, local_output_dir
+    )
+
+
+async def _run_playbook(
+    args: argparse.Namespace,
+    browser: BrowserManager,
+    recording: RecordingManager,
+    credentials: dict | None,
+) -> int:
+    """Execute a playbook deterministically — no blinders, no guardrails, no LLM loop."""
+    from playbooks.auth import DashboardAuth
+    from playbooks.runner import PlaybookRunner
+    from playbooks.store import PlaybookStore
+
+    store = PlaybookStore()
+    playbook = store.load(args.playbook)
+    log.info("Loaded playbook: %s (%d steps)", playbook.id, len(playbook.steps))
+
+    # Parse playbook params from --playbook-params or directive
+    pb_params: dict = {}
+    if args.playbook_params:
+        pb_params = json.loads(args.playbook_params)
+    elif playbook.parameters:
+        from playbooks.parser import DirectiveParser
+
+        parsed = DirectiveParser(store).parse(args.directive)
+        if parsed:
+            _, pb_params = parsed
+
+    # Authenticate if needed (attempt session restore even without fresh credentials)
+    if playbook.auth_required:
+        auth = DashboardAuth(browser, credentials or {})
+        login_url = playbook.start_url or ""
+        if not await auth.ensure_authenticated(login_url):
+            log.error("Authentication failed")
+            with contextlib.suppress(Exception):
+                await recording.stop()
+            await browser.close()
+            return 1
+
+    runner = PlaybookRunner(browser, recording)
+    pb_result = await runner.execute(playbook, pb_params)
+
+    # Print results
+    print("\n" + "=" * 60)
+    print(f"Status:  {'SUCCESS' if pb_result.success else 'FAILED'}")
+    print(f"Playbook: {pb_result.playbook_id}")
+    if pb_result.error:
+        print(f"Error:   {pb_result.error}")
+    print(f"Steps:   {len(pb_result.step_results)}")
+    print(f"Duration: {pb_result.total_duration_ms}ms")
+    for sr in pb_result.step_results:
+        status = "OK" if sr.success else "FAIL"
+        recovery = " (LLM recovery)" if sr.recovery_used else ""
+        print(
+            f"  Step {sr.step_index + 1}: {sr.action} — {status} ({sr.duration_ms}ms){recovery}"
+        )
+        if sr.extracted_text:
+            print(f"\n--- Extracted Data ---\n{sr.extracted_text}\n")
+    if pb_result.extracted_text and not any(
+        sr.extracted_text for sr in pb_result.step_results
+    ):
+        print(f"\n--- Extracted Data ---\n{pb_result.extracted_text}\n")
+    print("=" * 60)
+
+    try:
+        manifest = await recording.stop()
+        log.info("Recording saved: %d artifacts", len(manifest.artifacts))
+    except Exception as rec_exc:
+        log.warning("Recording finalization failed: %s", rec_exc)
+    await browser.close()
+    log.info("Browser closed")
+    return 0 if pb_result.success else 1
+
+
+async def _run_agent(
+    args: argparse.Namespace,
+    browser: BrowserManager,
+    profile: Profile,
+    recording: RecordingManager,
+    credentials: dict | None,
+    output_dir: str,
+) -> int:
+    """Run the full LLM agent loop with blinders, guardrails, and scope extraction."""
+    from actionlog.actions import save_action_log
+    from agent.loop import run_agent
+    from blinders.filters import DOMBlinders
+    from blinders.scope import extract_task_scope
+    from bridge.router import ActionRouter
+    from profiles.loader import apply_guardrail_overrides
+
+    guardrail_config = apply_guardrail_overrides(profile)
+    if args.allow_private_networks:
+        guardrail_config.allow_private_networks = True
+
+    scope = extract_task_scope(args.directive, profile, use_llm=False)
+    blinders = DOMBlinders(scope)
+    log.info(
+        "Blinders: goal_type=%s, actions=%d",
+        scope.goal_type,
+        len(scope.allowed_actions),
+    )
 
     bridge = ActionRouter(
         browser=browser,
@@ -96,11 +209,6 @@ async def run(args: argparse.Namespace) -> int:
         recording=recording,
     )
 
-    credentials = None
-    if args.credentials:
-        credentials = json.loads(args.credentials)
-
-    # Run agent
     try:
         result = await run_agent(
             directive=args.directive,
@@ -121,9 +229,9 @@ async def run(args: argparse.Namespace) -> int:
             log.info(
                 "Recording saved: %d artifacts at %s",
                 len(manifest.artifacts),
-                recording_config.output_dir,
+                output_dir,
             )
-            trace_path = os.path.join(local_output_dir, "trace.zip")
+            trace_path = os.path.join(output_dir, "trace.zip")
             if os.path.exists(trace_path):
                 log.info("View trace: npx playwright show-trace %s", trace_path)
         except Exception as rec_exc:
@@ -143,9 +251,6 @@ async def run(args: argparse.Namespace) -> int:
     print("=" * 60)
 
     # Save action log
-    output_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output"
-    )
     os.makedirs(output_dir, exist_ok=True)
     log_path = os.path.join(output_dir, "action_log.json")
     await save_action_log(result.action_log, log_path)
@@ -185,6 +290,16 @@ def main():
         "--allow-private-networks",
         action="store_true",
         help="Disable SSRF protection (allow localhost and private IPs)",
+    )
+    parser.add_argument(
+        "--playbook",
+        default=None,
+        help="Playbook ID to execute (e.g., cancel_order). Skips LLM agent loop.",
+    )
+    parser.add_argument(
+        "--playbook-params",
+        default=None,
+        help='JSON dict of playbook parameters (e.g., \'{"order_id": "12345"}\')',
     )
 
     args = parser.parse_args()

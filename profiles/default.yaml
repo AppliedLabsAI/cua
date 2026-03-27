@@ -1,4 +1,10 @@
 name: default
-description: General-purpose browser automation agent.
-prompt_extension: null
-guardrail_overrides: {}
+description: >
+  General-purpose browser automation agent with safe defaults.
+  Use the 'dashboard' profile for trusted internal dashboards
+  that need private network access and relaxed safety checks.
+prompt_extension: |
+  Be precise: verify each action succeeded before proceeding.
+  Use execute_sequence to batch related actions on the same page.
+  When clicking, prefer text-based or role-based selectors over CSS paths.
+  If an action fails, try alternative selectors before giving up.

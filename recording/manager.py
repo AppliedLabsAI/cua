@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from recording.config import RecordingConfig
+from recording.models import (
+    RecordingArtifact,
+    RecordingManifest,
+    list_recording_artifacts,
+    save_recording_manifest,
+)
 from recording.screenshots import ScreenshotRecorder
 from recording.trace import TraceRecorder
 from telemetry import get_tracer
@@ -21,62 +26,12 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class RecordingArtifact:
-    """Metadata for a single recording output file."""
-
-    filename: str
-    type: str  # "trace" or "screenshot"
-    size_bytes: int
-
-    def to_dict(self) -> dict:
-        return {
-            "filename": self.filename,
-            "type": self.type,
-            "size_bytes": self.size_bytes,
-        }
-
-
-@dataclass
-class RecordingManifest:
-    """Summary of all recording artifacts for a session."""
-
-    run_id: str
-    artifacts: list[RecordingArtifact] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {
-            "run_id": self.run_id,
-            "artifacts": [a.to_dict() for a in self.artifacts],
-        }
-
-
 def scan_recording_artifacts(root: Path) -> list[dict]:
     """Scan a recording directory and return artifact metadata as dicts.
 
     Shared by api/streaming.py and api/server.py for serving manifests.
     """
-    artifacts: list[dict] = []
-    trace = root / "trace.zip"
-    if trace.exists():
-        artifacts.append(
-            {
-                "filename": "trace.zip",
-                "type": "trace",
-                "size_bytes": trace.stat().st_size,
-            }
-        )
-    screenshots = root / "screenshots"
-    if screenshots.exists():
-        for jpg in sorted(screenshots.glob("*.jpg")):
-            artifacts.append(
-                {
-                    "filename": f"screenshots/{jpg.name}",
-                    "type": "screenshot",
-                    "size_bytes": jpg.stat().st_size,
-                }
-            )
-    return artifacts
+    return list_recording_artifacts(root)
 
 
 class RecordingManager:
@@ -142,19 +97,13 @@ class RecordingManager:
 
             # Collect screenshot artifacts from in-memory tracking
             if self._screenshots:
-                for art_dict in self._screenshots.artifacts:
-                    manifest.artifacts.append(
-                        RecordingArtifact(
-                            filename=art_dict["filename"],
-                            type=art_dict["type"],
-                            size_bytes=art_dict["size_bytes"],
-                        )
-                    )
+                manifest.artifacts.extend(self._screenshots.artifacts)
 
             span.set_attribute("recording.artifact_count", len(manifest.artifacts))
             total_bytes = sum(a.size_bytes for a in manifest.artifacts)
             span.set_attribute("recording.total_bytes", total_bytes)
 
+        save_recording_manifest(Path(self._config.output_dir), manifest)
         log.info(
             "Recording stopped: %d artifacts (%d bytes) for run %s",
             len(manifest.artifacts),
@@ -195,6 +144,9 @@ class RecordingManager:
         trace_src = src / "trace.zip"
         if trace_src.exists():
             shutil.copy2(trace_src, dest / "trace.zip")
+        manifest_src = src / "manifest.json"
+        if manifest_src.exists():
+            shutil.copy2(manifest_src, dest / "manifest.json")
         screenshots_src = src / "screenshots"
         if screenshots_src.exists():
             screenshots_dest = dest / "screenshots"

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import json
 import logging
 import time
@@ -15,12 +14,10 @@ from patchright.async_api import Page
 from bridge import DOM_MARKER, ActionResult
 from bridge.browser import (
     _AUTO_DOM_MAX_CHARS,
-    _DEFAULT_TIMEOUT,
     _DOM_MAX_CHARS,
-    _DOM_SNAPSHOT_INIT_JS,
-    _EXTRACT_VALUE_INIT_JS,
-    _SMART_EXTRACT_INIT_JS,
 )
+from bridge.js_helpers import DOM_SNAPSHOT_INIT_JS
+from bridge.page_actions import PageActionConfig, execute_page_action
 
 if TYPE_CHECKING:
     from bridge.browser import BrowserManager
@@ -37,24 +34,22 @@ _DOM_SNAPSHOT_CALL_JS = """([s, m, f, initJS]) => {
     return window.__domSnapshot ? window.__domSnapshot(s, m, f) : null;
 }"""
 
-_SMART_EXTRACT_CALL_JS = """(initJS) => {
-    if (!window.__smartExtract) new Function(initJS)();
-    return window.__smartExtract
-        ? window.__smartExtract()
-        : document.body.innerText;
-}"""
-
-_EXTRACT_VALUE_CALL_JS = """([sel, initJS]) => {
-    if (!window.__extractValue) new Function(initJS)();
-    return window.__extractValue
-        ? window.__extractValue(sel)
-        : '[not found]';
-}"""
-
 _CAPTCHA_DETECT_CALL_JS = """(initJS) => {
     if (!window.__detectCaptcha) new Function(initJS)();
     return window.__detectCaptcha ? window.__detectCaptcha() : null;
 }"""
+
+_TOOL_ACTION_CONFIG = PageActionConfig(
+    action_timeout_ms=3000,
+    navigation_timeout_ms=7_000,
+    scroll_unit=200,
+    type_delay_ms=0,
+    settle_after_click=True,
+    settle_after_evaluate=True,
+    settle_timeout_ms=2_000,
+    settle_sleep_s=0.0,
+    smart_body_extract=True,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +66,7 @@ async def quick_dom_snapshot(
     try:
         raw = await page.evaluate(
             _DOM_SNAPSHOT_CALL_JS,
-            [None, max_chars, filter_config, _DOM_SNAPSHOT_INIT_JS],
+            [None, max_chars, filter_config, DOM_SNAPSHOT_INIT_JS],
         )
         if raw is None:
             return ""
@@ -119,10 +114,13 @@ async def execute_dom_action(
 
         if action == "goto":
             url = params["url"]
-            resp = await page.goto(
-                url, wait_until="domcontentloaded", timeout=_DEFAULT_TIMEOUT
+            outcome = await execute_page_action(
+                page,
+                action,
+                params,
+                config=_TOOL_ACTION_CONFIG,
             )
-            status = resp.status if resp else "unknown"
+            status = outcome.navigation_status or "unknown"
             if _skip_screenshot:
                 return ActionResult(text=f"Navigated to {url} (status {status})")
             nav_text = f"Navigated to {url} (status {status})"
@@ -132,48 +130,53 @@ async def execute_dom_action(
             return ActionResult(text=nav_text)
 
         if action == "click":
-            selector = params["selector"]
-            url_before = page.url
-            await page.click(selector, timeout=_DEFAULT_TIMEOUT)
+            await execute_page_action(
+                page,
+                action,
+                params,
+                config=_TOOL_ACTION_CONFIG,
+            )
             if _skip_screenshot:
                 return ActionResult(text="Clicked")
-            if page.url != url_before:
-                with contextlib.suppress(Exception):
-                    await page.wait_for_load_state("domcontentloaded", timeout=2000)
             click_text = "Clicked"
             dom = await quick_dom_snapshot(page, filter_config=filter_config)
             if dom:
                 click_text += f"\n\n{DOM_MARKER}\n{dom}"
             return ActionResult(text=click_text)
 
-        if action == "key_press":
-            text = params.get("text", "")
-            key = params.get("key", "")
-            if not text and not key:
-                return ActionResult(error="key_press requires 'text' and/or 'key'")
-            parts: list[str] = []
-            if text:
-                await page.keyboard.type(text)
-                preview = text[:30] + "..." if len(text) > 30 else text
-                parts.append(f"Typed '{preview}'")
-            if key:
-                await page.keyboard.press(key)
-                parts.append(f"Pressed {key}")
-            return ActionResult(text=", ".join(parts))
+        if action in {
+            "key_press",
+            "scroll",
+            "wait_for",
+            "extract",
+            "select",
+            "evaluate",
+        }:
+            outcome = await execute_page_action(
+                page,
+                action,
+                params,
+                config=_TOOL_ACTION_CONFIG,
+            )
 
-        if action == "scroll":
+            if action == "extract":
+                return ActionResult(text=outcome.text)
+
+            if action in {"wait_for", "key_press"}:
+                return ActionResult(text=outcome.text or "Done")
+
+            if action == "select":
+                return ActionResult(text=outcome.text or "Selected option")
+
+            if action == "evaluate":
+                eval_text = "Evaluated script"
+                if outcome.page_changed:
+                    dom = await quick_dom_snapshot(page, filter_config=filter_config)
+                    if dom:
+                        eval_text += f"\n\n{DOM_MARKER}\n{dom}"
+                return ActionResult(text=eval_text)
+
             direction = params.get("direction", "down")
-            amount = params.get("amount", 3)
-            delta_x, delta_y = 0, 0
-            if direction == "down":
-                delta_y = amount * 200
-            elif direction == "up":
-                delta_y = -(amount * 200)
-            elif direction == "right":
-                delta_x = amount * 200
-            elif direction == "left":
-                delta_x = -(amount * 200)
-            await page.mouse.wheel(delta_x, delta_y)
             if _skip_screenshot:
                 return ActionResult(text=f"Scrolled {direction}")
             scroll_text = f"Scrolled {direction}"
@@ -182,33 +185,11 @@ async def execute_dom_action(
             b64 = await page_screenshot(page)
             return ActionResult(screenshot_b64=b64, text=scroll_text)
 
-        if action == "extract":
-            selector = params.get("selector", "body")
-            mode = params.get("mode", "text")
-            is_body = selector.lower() in ("body", "html")
-            if is_body and mode == "html":
-                mode = "text"
-            if mode == "html":
-                content = await page.inner_html(selector, timeout=_DEFAULT_TIMEOUT)
-            elif mode == "value":
-                content = await page.evaluate(
-                    _EXTRACT_VALUE_CALL_JS,
-                    [selector, _EXTRACT_VALUE_INIT_JS],
-                )
-            elif is_body:
-                content = await page.evaluate(
-                    _SMART_EXTRACT_CALL_JS,
-                    _SMART_EXTRACT_INIT_JS,
-                )
-            else:
-                content = await page.inner_text(selector, timeout=_DEFAULT_TIMEOUT)
-            return ActionResult(text=content)
-
         if action == "get_dom":
             selector = params.get("selector")
             raw = await page.evaluate(
                 _DOM_SNAPSHOT_CALL_JS,
-                [selector, _DOM_MAX_CHARS, filter_config, _DOM_SNAPSHOT_INIT_JS],
+                [selector, _DOM_MAX_CHARS, filter_config, DOM_SNAPSHOT_INIT_JS],
             )
             if raw is None:
                 return ActionResult(error="DOM snapshot unavailable")
@@ -216,23 +197,18 @@ async def execute_dom_action(
             header = f"[{data['title']}] {data['url']}\n"
             return ActionResult(text=header + data["dom"])
 
-        if action == "wait_for":
-            selector = params["selector"]
-            state = params.get("state", "visible")
-            await page.wait_for_selector(
-                selector, state=state, timeout=_DEFAULT_TIMEOUT
-            )
-            return ActionResult(text=f"Element {selector} is {state}")
-
         if action == "execute_sequence":
             return await _execute_sequence(params, browser, filter_config=filter_config)
 
         return ActionResult(error=f"Unknown browser_dom action: {action}")
 
     except TimeoutError:
-        return ActionResult(
-            error=f"{action} timed out after {_DEFAULT_TIMEOUT // 1000}s"
+        timeout_used = (
+            _TOOL_ACTION_CONFIG.navigation_timeout_ms
+            if action == "goto"
+            else _TOOL_ACTION_CONFIG.action_timeout_ms
         )
+        return ActionResult(error=f"{action} timed out after {timeout_used // 1000}s")
     except Exception as exc:
         return ActionResult(error=f"browser_dom.{action} failed: {exc}")
 

@@ -111,16 +111,16 @@ class TestExtractTaskScope:
     def test_profile_overrides_widen_scope(self):
         from profiles.loader import Profile
 
-        research_profile = Profile(
-            name="research",
+        dashboard_profile = Profile(
+            name="default",
             guardrail_overrides={
                 "enable_llm_action_check": False,
-                "max_urls_visited": 100,
+                "max_urls_visited": 200,
             },
         )
         scope = extract_task_scope(
-            "Research AI safety papers", profile=research_profile, use_llm=False
+            "Find the order total", profile=dashboard_profile, use_llm=False
         )
         assert scope.goal_type == "read"
-        # Research profile should widen visibility for action buttons
+        # Profile with enable_llm_action_check=False should widen visibility
         assert scope.visibility.show_action_buttons is True

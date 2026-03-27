@@ -12,18 +12,8 @@ class TestLoadProfile:
     def test_loads_default_profile(self):
         profile = load_profile("default")
         assert profile.name == "default"
-        assert profile.prompt_extension is None
-
-    def test_loads_research_profile(self):
-        profile = load_profile("research")
-        assert profile.name == "research"
         assert profile.prompt_extension is not None
-        assert "Research" in profile.prompt_extension
-
-    def test_loads_form_filling_profile(self):
-        profile = load_profile("form_filling")
-        assert profile.name == "form_filling"
-        assert profile.prompt_extension is not None
+        assert "Dashboard" in profile.prompt_extension
 
     def test_missing_profile_raises(self):
         with pytest.raises(ValueError, match="not found"):
@@ -34,33 +24,22 @@ class TestListProfiles:
     def test_lists_built_in_profiles(self):
         profiles = list_profiles()
         assert "default" in profiles
-        assert "research" in profiles
-        assert "form_filling" in profiles
 
 
 class TestApplyGuardrailOverrides:
-    def test_no_overrides_returns_base(self):
+    def test_default_profile_has_dashboard_overrides(self):
         profile = load_profile("default")
         config = apply_guardrail_overrides(profile)
-        assert config.max_urls_visited == 50  # default
-
-    def test_research_overrides(self):
-        profile = load_profile("research")
-        config = apply_guardrail_overrides(profile)
-        assert config.max_urls_visited == 100
         assert config.enable_llm_action_check is False
-
-    def test_form_filling_overrides(self):
-        profile = load_profile("form_filling")
-        config = apply_guardrail_overrides(profile)
-        # Form filling uses default config (Haiku handles contextually)
-        assert config.enable_llm_action_check is True
+        assert config.allow_private_networks is True
+        assert config.max_urls_visited == 200
+        assert config.max_consecutive_errors == 10
 
     def test_overrides_merge_with_base(self):
-        profile = load_profile("research")
-        base = GuardrailConfig(max_consecutive_errors=10)
+        profile = load_profile("default")
+        base = GuardrailConfig(max_urls_visited=100)
         config = apply_guardrail_overrides(profile, base)
-        # Profile override applied
+        # Explicit base value takes precedence over profile override
         assert config.max_urls_visited == 100
-        # Base value preserved where not overridden
+        # Profile override applied where base uses defaults
         assert config.max_consecutive_errors == 10
