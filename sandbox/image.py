@@ -50,21 +50,29 @@ sandbox_image = (
     )
     .uv_sync(str(_project_root))
     .run_commands("patchright install chromium")
-    # Local dirs must come last (lazy mounts, no build steps after)
-    .add_local_dir(str(_project_root / "agent"), "/opt/cua/agent")
-    .add_local_dir(str(_project_root / "bridge"), "/opt/cua/bridge")
-    .add_local_dir(str(_project_root / "api"), "/opt/cua/api")
-    .add_local_dir(str(_project_root / "actionlog"), "/opt/cua/actionlog")
-    .add_local_dir(str(_project_root / "sandbox"), "/opt/cua/sandbox")
-    .add_local_dir(str(_project_root / "profiles"), "/opt/cua/profiles")
-    .add_local_dir(str(_project_root / "playbooks"), "/opt/cua/playbooks")
-    .add_local_file(str(_project_root / "config.py"), "/opt/cua/config.py")
-    .add_local_file(str(_project_root / "settings.py"), "/opt/cua/settings.py")
-    .add_local_file(str(_project_root / "exceptions.py"), "/opt/cua/exceptions.py")
-    .add_local_dir(str(_project_root / "blinders"), "/opt/cua/blinders")
-    .add_local_dir(str(_project_root / "guardrails"), "/opt/cua/guardrails")
-    .add_local_dir(str(_project_root / "telemetry"), "/opt/cua/telemetry")
-    .add_local_dir(str(_project_root / "recording"), "/opt/cua/recording")
+    # Mount entire project — one call instead of per-directory mounts.
+    # Lazy mount (copy=False) so deploys stay fast on code changes.
+    .add_local_dir(
+        str(_project_root),
+        remote_path="/opt/cua",
+        ignore=[
+            ".git",
+            ".venv",
+            ".ruff_cache",
+            ".pytest_cache",
+            ".omc",
+            ".claude",
+            "__pycache__",
+            "tests",
+            "output",
+            "llm",
+            "*.lock",
+            "Dockerfile",
+            "docker-compose.yml",
+            ".env*",
+            ".git*",
+        ],
+    )
 )
 
 # Port exposed by the sandbox

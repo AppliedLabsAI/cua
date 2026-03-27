@@ -51,28 +51,28 @@ _project_root = Path(__file__).resolve().parent.parent
 
 api_image = (
     modal.Image.debian_slim(python_version="3.13")
-    .add_local_dir(str(_project_root / "api"), "/opt/cua/api", copy=True)
-    .add_local_dir(str(_project_root / "agent"), "/opt/cua/agent", copy=True)
-    .add_local_dir(str(_project_root / "bridge"), "/opt/cua/bridge", copy=True)
-    .add_local_dir(str(_project_root / "sandbox"), "/opt/cua/sandbox", copy=True)
-    .add_local_dir(str(_project_root / "actionlog"), "/opt/cua/actionlog", copy=True)
-    .add_local_dir(str(_project_root / "blinders"), "/opt/cua/blinders", copy=True)
-    .add_local_dir(str(_project_root / "guardrails"), "/opt/cua/guardrails", copy=True)
-    .add_local_dir(str(_project_root / "telemetry"), "/opt/cua/telemetry", copy=True)
-    .add_local_dir(str(_project_root / "recording"), "/opt/cua/recording", copy=True)
-    .add_local_dir(str(_project_root / "profiles"), "/opt/cua/profiles", copy=True)
-    .add_local_dir(str(_project_root / "playbooks"), "/opt/cua/playbooks", copy=True)
-    .add_local_file(str(_project_root / "config.py"), "/opt/cua/config.py", copy=True)
-    .add_local_file(
-        str(_project_root / "settings.py"), "/opt/cua/settings.py", copy=True
+    # Copy source into image (copy=True needed because uv_sync runs after)
+    .add_local_dir(
+        str(_project_root),
+        remote_path="/opt/cua",
+        copy=True,
+        ignore=[
+            ".git",
+            ".venv",
+            ".ruff_cache",
+            ".pytest_cache",
+            ".omc",
+            ".claude",
+            "__pycache__",
+            "tests",
+            "output",
+            "llm",
+            "Dockerfile",
+            "docker-compose.yml",
+            ".env*",
+            ".git*",
+        ],
     )
-    .add_local_file(
-        str(_project_root / "exceptions.py"), "/opt/cua/exceptions.py", copy=True
-    )
-    .add_local_file(
-        str(_project_root / "pyproject.toml"), "/opt/cua/pyproject.toml", copy=True
-    )
-    .add_local_file(str(_project_root / "uv.lock"), "/opt/cua/uv.lock", copy=True)
     .env({"PYTHONPATH": "/opt/cua"})
     .uv_sync(str(_project_root))
 )
