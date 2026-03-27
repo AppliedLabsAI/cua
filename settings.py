@@ -16,7 +16,7 @@ from pydantic_settings import BaseSettings
 # ---------------------------------------------------------------------------
 
 AGENT_MODEL = "claude-sonnet-4-6"
-SAFETY_MODEL = "claude-haiku-4-5-20251001"
+SAFETY_MODEL = "claude-haiku-4-5"
 
 # ---------------------------------------------------------------------------
 # Timeout constants (milliseconds unless noted) — change here to tune globally
