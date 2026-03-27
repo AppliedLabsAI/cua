@@ -13,6 +13,9 @@ from settings import AGENT_MODEL
 if TYPE_CHECKING:
     from anthropic import AsyncAnthropic
 
+    from agent.result import AgentResult
+    from playbooks.schema import PlaybookResult
+
 log = logging.getLogger(__name__)
 
 _EXTRACTION_MAX_TOKENS = 1024
@@ -86,7 +89,7 @@ async def extract_structured_output(
         return None, 0, 0
 
     context = "\n\n".join(context_parts)
-    schema_str = json.dumps(output_schema, indent=2)
+    schema_str = json.dumps(output_schema, separators=(",", ":"))
 
     prompt = (
         "Given the following information gathered during browser automation:\n\n"
@@ -95,6 +98,9 @@ async def extract_structured_output(
         f"Respond ONLY with valid JSON, no markdown fences or explanation.\n\n"
         f"Schema:\n{schema_str}"
     )
+
+    ext_input_tokens = 0
+    ext_output_tokens = 0
 
     try:
         response = await client.messages.create(
@@ -129,24 +135,28 @@ async def extract_structured_output(
 
     except json.JSONDecodeError as e:
         log.warning("Extraction produced invalid JSON: %s", e)
-        return None, 0, 0
+        return None, ext_input_tokens, ext_output_tokens
     except Exception as e:
         log.warning("Structured extraction failed: %s", e)
         return None, 0, 0
 
 
-def agent_result_to_output(result: Any) -> CuaOutput:
-    """Convert an AgentResult to a CuaOutput."""
-    summary = ""
-    data = (
-        dict(result.data)
-        if result.data and isinstance(result.data, dict)
-        else result.data
-    )
-    if isinstance(data, dict):
+def _extract_summary_and_data(
+    data: dict[str, Any] | None,
+    fallback_summary: str = "",
+) -> tuple[str, dict[str, Any] | None]:
+    """Extract 'summary' from data dict (if present) without mutating the original."""
+    if data and isinstance(data, dict):
+        data = dict(data)
         summary = data.pop("summary", "")
-    if not summary:
-        summary = result.summary
+    else:
+        summary = ""
+    return summary or fallback_summary, data
+
+
+def agent_result_to_output(result: AgentResult) -> CuaOutput:
+    """Convert an AgentResult to a CuaOutput."""
+    summary, data = _extract_summary_and_data(result.data, result.summary)
 
     return CuaOutput(
         status="completed" if result.success else "failed",
@@ -158,13 +168,9 @@ def agent_result_to_output(result: Any) -> CuaOutput:
     )
 
 
-def playbook_result_to_output(result: Any) -> CuaOutput:
+def playbook_result_to_output(result: PlaybookResult) -> CuaOutput:
     """Convert a PlaybookResult to a CuaOutput."""
-    summary = ""
-    raw = getattr(result, "data", None)
-    data = dict(raw) if raw and isinstance(raw, dict) else raw
-    if isinstance(data, dict):
-        summary = data.pop("summary", "")
+    summary, data = _extract_summary_and_data(result.data)
 
     return CuaOutput(
         status="completed" if result.success else "failed",

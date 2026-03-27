@@ -150,8 +150,9 @@ class TestExtractStructuredOutput:
         )
 
         assert data is None
-        assert in_tok == 0
-        assert out_tok == 0
+        # Tokens are still counted even when JSON parsing fails
+        assert in_tok == 50
+        assert out_tok == 30
 
     @pytest.mark.asyncio
     async def test_returns_none_on_empty_context(self):

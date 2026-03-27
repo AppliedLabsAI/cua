@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from typing import Any
 
 from anthropic import APIError, AsyncAnthropic
 
@@ -79,7 +80,7 @@ async def run_agent(
     client: AsyncAnthropic | None = None,
     profile_prompt: str | None = None,
     allowed_actions: frozenset[str] | None = None,
-    output_schema: dict | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> AgentResult:
     """Run the CUA agent loop with streaming, context management, and adaptive thinking."""
     run_start = time.monotonic()

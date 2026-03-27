@@ -15,6 +15,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -63,7 +64,7 @@ def push_action(action: ActionLog) -> None:
 async def complete_run(
     summary: str | None = None,
     error: str | None = None,
-    data: dict | None = None,
+    data: dict[str, Any] | None = None,
     extracted_texts: list[str] | None = None,
 ) -> None:
     """Mark the run as completed or failed. Called by the agent loop on exit."""

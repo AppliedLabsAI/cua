@@ -18,7 +18,7 @@ import json
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # Add project root to path — must precede project imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -191,7 +191,7 @@ async def _run_agent(
     recording: RecordingManager,
     credentials: dict | None,
     output_dir: str,
-    output_schema: dict | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> int:
     """Run the full LLM agent loop with blinders, guardrails, and scope extraction."""
     from actionlog.actions import save_action_log
