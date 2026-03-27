@@ -115,12 +115,12 @@
     const attrSelectors = [];
     const dataTestId = el.getAttribute("data-testid") || el.getAttribute("data-test-id");
     if (dataTestId) {
-      attrSelectors.push("[data-testid='" + dataTestId + "']");
+      attrSelectors.push("[data-testid='" + dataTestId.replace(/'/g, "\\'") + "']");
     }
 
     const elName = el.getAttribute("name");
     if (elName) {
-      attrSelectors.push(tag + "[name='" + elName + "']");
+      attrSelectors.push(tag + "[name='" + elName.replace(/'/g, "\\'") + "']");
     }
 
     const placeholder = el.getAttribute("placeholder");
@@ -179,13 +179,13 @@
       if (classes.length > 0) {
         part += "." + classes[0];
       } else if (current.parentElement) {
-        // nth-child for disambiguation
+        // nth-of-type for disambiguation (matches tag-filtered siblings)
         const siblings = Array.from(current.parentElement.children).filter(
           (s) => s.tagName === current.tagName
         );
         if (siblings.length > 1) {
           const index = siblings.indexOf(current) + 1;
-          part += ":nth-child(" + index + ")";
+          part += ":nth-of-type(" + index + ")";
         }
       }
 
@@ -296,7 +296,7 @@
 
       const tag = el.tagName.toLowerCase();
       const isTextInput =
-        (tag === "input" && !["submit", "button", "checkbox", "radio", "file"].includes(el.type)) ||
+        (tag === "input" && !["submit", "button", "checkbox", "radio", "file", "password"].includes(el.type)) ||
         tag === "textarea" ||
         el.contentEditable === "true";
 

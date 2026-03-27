@@ -47,7 +47,15 @@ class InteractionRecorder:
 
     def on_event(self, payload_json: str) -> None:
         """Callback for window.__cuaRecordEvent. Must be sync for expose_function."""
-        data = json.loads(payload_json)
+        try:
+            data = json.loads(payload_json)
+        except (json.JSONDecodeError, Exception) as exc:
+            log.error(
+                "Failed to parse recorder event: %s (payload: %s)",
+                exc,
+                payload_json[:200],
+            )
+            return
 
         if data.get("action") == "__done":
             log.info("Done signal received (Ctrl+Shift+S)")
@@ -122,6 +130,7 @@ async def run(args: argparse.Namespace) -> int:
     recorder = InteractionRecorder()
 
     pw = await async_playwright().start()
+    browser = None
     try:
         browser = await pw.chromium.launch(
             headless=False,
@@ -150,8 +159,11 @@ async def run(args: argparse.Namespace) -> int:
 
         # Handle Ctrl+C
         loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, recorder.done.set)
+        if sys.platform != "win32":
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, recorder.done.set)
+        else:
+            signal.signal(signal.SIGINT, lambda *_: recorder.done.set())
 
         log.info("=" * 60)
         log.info("RECORDING STARTED")
@@ -175,8 +187,9 @@ async def run(args: argparse.Namespace) -> int:
             log.exception("Recording failed")
             return 1
     finally:
-        with contextlib.suppress(Exception):
-            await browser.close()
+        if browser is not None:
+            with contextlib.suppress(Exception):
+                await browser.close()
         with contextlib.suppress(Exception):
             await pw.stop()
 

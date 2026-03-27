@@ -26,6 +26,9 @@ ACTION_TIMEOUT_MS = 5_000  # clicks, fills, selects
 NAVIGATION_TIMEOUT_MS = 7_000  # page loads / goto
 LOGIN_TIMEOUT_MS = 15_000  # auth login flow (longer for SSO redirects)
 SELECTOR_PROBE_TIMEOUT_MS = 800  # wait for a selector to appear
+LOGIN_DETECT_TIMEOUT_MS = (
+    1_500  # wait for login form elements (more generous than probe)
+)
 SETTLE_TIMEOUT_MS = 3_000  # DOM stabilization after actions
 SETTLE_SLEEP_S = 0.3  # sleep between DOM stability checks
 

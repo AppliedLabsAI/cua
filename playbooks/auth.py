@@ -15,7 +15,12 @@ if TYPE_CHECKING:
 
     from bridge.browser import BrowserManager
 
-from settings import ACTION_TIMEOUT_MS, LOGIN_TIMEOUT_MS, SELECTOR_PROBE_TIMEOUT_MS
+from settings import (
+    ACTION_TIMEOUT_MS,
+    LOGIN_DETECT_TIMEOUT_MS,
+    LOGIN_TIMEOUT_MS,
+    SELECTOR_PROBE_TIMEOUT_MS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -168,7 +173,7 @@ class DashboardAuth:
             handle = await page.wait_for_selector(
                 "input[type='password']",
                 state="visible",
-                timeout=SELECTOR_PROBE_TIMEOUT_MS,
+                timeout=LOGIN_DETECT_TIMEOUT_MS,
             )
             if handle:
                 return False
