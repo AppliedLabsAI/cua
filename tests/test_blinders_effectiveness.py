@@ -896,17 +896,15 @@ class TestScenarioC10OutOfScopeDomainRedirect:
         assert result is not None
         assert "SSRF" in result or "localhost" in result
 
-    def test_evil_subdomain_of_localhost_passes_scope(self):
-        # evil.localhost matches *.localhost — this is expected behavior.
-        # SSRF doesn't catch subdomains of localhost (DNS would resolve differently).
-        # The real protection here is the existing domain blocklist in GuardrailEngine.
+    def test_evil_subdomain_of_localhost_blocked_by_ssrf(self):
+        # evil.localhost resolves to loopback (::1 or 127.0.0.1).
+        # SSRF DNS resolution catches this — subdomains of localhost
+        # that resolve to private IPs are correctly blocked.
         scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        # evil.localhost IS in scope because *.localhost was auto-added
         result = verifier.check("goto", {"url": "http://evil.localhost:9000/phishing"})
-        # This passes domain scope — acceptable since localhost:8000 was explicitly in directive
-        # The truly dangerous case is a completely different domain:
-        assert result is None  # expected: *.localhost matches
+        assert result is not None
+        assert "SSRF" in result or "private IP" in result
 
     def test_completely_different_domain_blocked(self):
         scope = extract_task_scope(self.DIRECTIVE, use_llm=False)

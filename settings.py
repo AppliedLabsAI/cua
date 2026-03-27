@@ -47,6 +47,8 @@ class Settings(BaseSettings):
 
     model_config = {"populate_by_name": True}
 
+    environment: str = "local"
+
     # Anthropic API
     anthropic_api_key: str = ""
 

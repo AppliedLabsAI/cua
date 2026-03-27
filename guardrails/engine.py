@@ -6,11 +6,13 @@ confirmation. Called by ActionRouter BEFORE executing any action.
 
 from __future__ import annotations
 
+import concurrent.futures
 import fnmatch
 import ipaddress
 import json
 import logging
 import re
+import socket
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -49,15 +51,40 @@ _SAFE_CLICK_RE = re.compile(
 )
 
 _BLOCKED_DOMAINS_DEFAULT = [
-    # NOTE: *.bank.* only matches domains with literal ".bank." segment (e.g. foo.bank.example).
-    # Real bank domains (chase.com, wellsfargo.com) must be added explicitly if needed.
-    "*.bank.*",
+    # Government
     "*.gov",
+    "*.gov.*",
+    # Banking — generic pattern + major US/UK banks
+    "*.bank.*",
+    "chase.com",
+    "*.chase.com",
+    "wellsfargo.com",
+    "*.wellsfargo.com",
+    "bankofamerica.com",
+    "*.bankofamerica.com",
+    "citi.com",
+    "*.citi.com",
+    "usbank.com",
+    "*.usbank.com",
+    "capitalone.com",
+    "*.capitalone.com",
+    "hsbc.com",
+    "*.hsbc.com",
+    "barclays.co.uk",
+    "*.barclays.co.uk",
+    # Email
     "mail.google.com",
     "outlook.live.com",
+    "outlook.office.com",
+    # Payment / financial
     "paypal.com",
+    "*.paypal.com",
     "venmo.com",
     "stripe.com",
+    "*.stripe.com",
+    "square.com",
+    "cash.app",
+    # Social media
     "twitter.com",
     "x.com",
     "facebook.com",
@@ -115,15 +142,65 @@ class GuardrailConfig:
 
 # Private IP ranges blocked by SSRF protection
 _PRIVATE_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),  # "This" network (includes 0.0.0.0)
     ipaddress.ip_network("127.0.0.0/8"),  # Loopback
     ipaddress.ip_network("10.0.0.0/8"),  # RFC 1918
     ipaddress.ip_network("172.16.0.0/12"),  # RFC 1918
     ipaddress.ip_network("192.168.0.0/16"),  # RFC 1918
     ipaddress.ip_network("169.254.0.0/16"),  # Link-local / cloud metadata
+    ipaddress.ip_network("::/128"),  # IPv6 unspecified (::)
     ipaddress.ip_network("::1/128"),  # IPv6 loopback
     ipaddress.ip_network("fc00::/7"),  # IPv6 unique-local
     ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
 ]
+
+
+def _is_private_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Check if an IP address falls within any blocked private network."""
+    return any(addr in network for network in _PRIVATE_NETWORKS)
+
+
+# Cache DNS resolution results to avoid repeated lookups in tight loops.
+# Key: hostname, Value: GuardrailResult | None (None = safe).
+_dns_cache: dict[str, GuardrailResult | None] = {}
+_DNS_CACHE_MAX = 1024
+
+
+_DNS_TIMEOUT_S = 2.0  # Max time to wait for DNS resolution
+
+
+def _resolve_and_check(hostname: str) -> GuardrailResult | None:
+    """Resolve a hostname via DNS and check all returned IPs against private ranges.
+
+    Uses a thread pool with a timeout to prevent slow DNS from blocking
+    request handling.
+    """
+
+    def _do_resolve():
+        return socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_do_resolve)
+            addrinfos = future.result(timeout=_DNS_TIMEOUT_S)
+        for _family, _type, _proto, _canonname, sockaddr in addrinfos:
+            ip_str = sockaddr[0]
+            try:
+                addr = ipaddress.ip_address(ip_str)
+                if _is_private_ip(addr):
+                    log.warning(
+                        "SSRF blocked: %s resolves to private IP %s", hostname, ip_str
+                    )
+                    return GuardrailResult(
+                        allowed=False,
+                        reason=f"Blocked: {hostname} resolves to private IP {ip_str} (SSRF protection)",
+                    )
+            except ValueError:
+                continue
+    except (socket.gaierror, concurrent.futures.TimeoutError):
+        # DNS resolution failed or timed out — allow (browser will fail gracefully)
+        pass
+    return None
 
 
 def _check_ssrf(hostname: str) -> GuardrailResult | None:
@@ -131,26 +208,40 @@ def _check_ssrf(hostname: str) -> GuardrailResult | None:
 
     Returns a blocking GuardrailResult if the hostname resolves to a private
     IP range, or None if the hostname is safe.
+
+    Performs DNS resolution for non-IP hostnames to prevent bypass via
+    attacker-controlled domains that resolve to internal IPs (e.g., cloud
+    metadata endpoints like 169.254.169.254).
     """
     if hostname in ("localhost", "localhost.localdomain"):
         return GuardrailResult(
             allowed=False, reason="Blocked: localhost (SSRF protection)"
         )
 
+    # Check IP literals directly
     try:
         addr = ipaddress.ip_address(hostname)
-    except ValueError:
-        # Not an IP literal — hostname is fine (DNS resolution happens at browser level)
-        return None
-
-    for network in _PRIVATE_NETWORKS:
-        if addr in network:
+        if _is_private_ip(addr):
             return GuardrailResult(
                 allowed=False,
                 reason=f"Blocked: private IP {hostname} (SSRF protection)",
             )
+        return None
+    except ValueError:
+        pass  # Not an IP literal — resolve hostname below
 
-    return None
+    # Check cache before doing DNS resolution
+    if hostname in _dns_cache:
+        return _dns_cache[hostname]
+
+    result = _resolve_and_check(hostname)
+
+    # Store in cache (evict all if cache grows too large)
+    if len(_dns_cache) >= _DNS_CACHE_MAX:
+        _dns_cache.clear()
+    _dns_cache[hostname] = result
+
+    return result
 
 
 @dataclass
@@ -164,6 +255,24 @@ class GuardrailResult:
     allowed: bool
     reason: str | None = None
     needs_confirmation: bool = False
+
+
+def _domain_matches(domain: str, pattern: str) -> bool:
+    """Match a domain against a glob pattern, handling bare domains correctly.
+
+    fnmatch("irs.gov", "*.gov") returns True (``*`` matches ``irs``), but
+    fnmatch("gov", "*.gov") returns False because ``*`` must match at least
+    one character. This helper also strips the ``*.`` prefix and checks the
+    bare suffix so patterns like ``*.gov`` additionally match ``gov`` itself.
+    """
+    if fnmatch.fnmatch(domain, pattern):
+        return True
+    # For patterns like "*.example.com", also match "example.com" itself
+    if pattern.startswith("*."):
+        bare = pattern[2:]  # "*.gov" → "gov", "*.bank.*" → "bank.*"
+        if fnmatch.fnmatch(domain, bare) or domain == bare:
+            return True
+    return False
 
 
 class GuardrailEngine:
@@ -200,7 +309,7 @@ class GuardrailEngine:
         # Allowlist takes precedence
         if self.config.allowed_domains is not None:
             if not any(
-                fnmatch.fnmatch(domain, pat) for pat in self.config.allowed_domains
+                _domain_matches(domain, pat) for pat in self.config.allowed_domains
             ):
                 return GuardrailResult(
                     allowed=False,
@@ -210,7 +319,7 @@ class GuardrailEngine:
 
         # Blocklist check
         for pattern in self.config.blocked_domains:
-            if fnmatch.fnmatch(domain, pattern):
+            if _domain_matches(domain, pattern):
                 return GuardrailResult(
                     allowed=False,
                     reason=f"Domain {domain} is blocked (matches {pattern})",

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from bridge.js_helpers import EXTRACT_VALUE_INIT_JS, SMART_EXTRACT_INIT_JS
 from settings import SETTLE_SLEEP_S, SETTLE_TIMEOUT_MS
+
+log = logging.getLogger(__name__)
 
 SMART_EXTRACT_CALL_JS = """(initJS) => {
     if (!window.__smartExtract) new Function(initJS)();
@@ -133,8 +136,16 @@ async def execute_page_action(
         return PageActionOutcome(text="Selected option")
 
     if action == "evaluate":
+        script = params.get("script", "")
+        if not script or not script.strip():
+            log.warning("evaluate called with empty script — skipping")
+            return PageActionOutcome()
+        log.info("Executing JS evaluate (len=%d)", len(script))
+        log.debug(
+            "JS evaluate script: %.200s%s", script, "..." if len(script) > 200 else ""
+        )
         url_before = page.url
-        await page.evaluate(params.get("script", ""))
+        await page.evaluate(script)
         if config.settle_after_evaluate:
             await wait_for_stable(page, config.settle_timeout_ms)
         return PageActionOutcome(page_changed=page.url != url_before)

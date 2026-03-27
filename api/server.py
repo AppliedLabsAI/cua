@@ -53,9 +53,15 @@ _security = HTTPBearer(auto_error=False)
 async def _verify_api_key(
     credentials: HTTPAuthorizationCredentials | None = Depends(_security),  # noqa: B008
 ) -> None:
-    """Verify Bearer token if CUA_API_KEY is set. Skip auth if unset (local dev)."""
+    """Verify Bearer token. Auth is required unless environment=local."""
     if not _API_KEY:
-        return  # No auth configured — local dev mode
+        if get_settings().environment == "local":
+            return  # No auth configured — local dev mode
+        raise HTTPException(
+            status_code=503,
+            detail="Server misconfigured: CUA_API_KEY is required in production. "
+            "Set environment=local to disable auth for local development.",
+        )
     if credentials is None or credentials.credentials != _API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
@@ -103,7 +109,14 @@ async def lifespan(app_instance: FastAPI):
     instrument_fastapi(app_instance)
     _http_client = httpx.AsyncClient(timeout=10)
     if not _API_KEY:
-        log.warning("CUA_API_KEY not set — API endpoints are unauthenticated")
+        if get_settings().environment == "local":
+            log.warning(
+                "CUA_API_KEY not set — API endpoints are unauthenticated (local mode)"
+            )
+        else:
+            log.error(
+                "CUA_API_KEY not set — API requests will be rejected in production mode"
+            )
     yield
     await _http_client.aclose()
     _http_client = None
@@ -153,12 +166,16 @@ async def create_run(config: RunConfig) -> RunResponse:
             sessions_total().add(1, {"status": "failed"})
             session_span.set_status(otel_trace.StatusCode.ERROR, str(exc))
             session_span.record_exception(exc)
+            # Log full error server-side; return sanitized message to client
+            error_msg = str(exc)
             raise HTTPException(
                 status_code=502,
                 detail={
                     "error": "Failed to create sandbox",
                     "run_id": run_id,
-                    "message": str(exc),
+                    "message": error_msg
+                    if get_settings().environment == "local"
+                    else "Internal error — check server logs",
                 },
             ) from exc
 
