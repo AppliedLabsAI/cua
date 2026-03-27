@@ -7,10 +7,13 @@ Patchright browser, and the CUA agent runtime. Built once, cached by Modal.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import modal
 
 from api.models import RunConfig
+
+_project_root = Path(__file__).resolve().parent.parent
 
 recording_volume = modal.Volume.from_name(
     "cua-recordings", create_if_missing=True, version=2
@@ -18,45 +21,24 @@ recording_volume = modal.Volume.from_name(
 
 sandbox_image = (
     modal.Image.from_registry("ubuntu:24.04")
-    .apt_install(
-        # Display + WM
-        "xvfb",
-        "openbox",
-        "tint2",
-        # Browsers
-        "chromium-browser",
-        "firefox",
-        # Desktop apps
-        "libreoffice",
-        "xterm",
-        "thunar",
-        # Screenshot + image tools
-        "imagemagick",
-        # CLI essentials
-        "curl",
-        "wget",
-        "jq",
-        "git",
-        "nodejs",
-        "npm",
-        # Fonts
-        "fonts-liberation",
-        "fonts-noto-cjk",
+    .run_commands(
+        # chromium-browser and firefox on Ubuntu 24.04 require snapd,
+        # which fails in Modal containers (can't set capabilities).
+        # We skip system browsers and use Patchright's Chromium instead.
+        "apt-get update"
+        " && apt-get install -y --no-install-recommends "
+        "xvfb openbox tint2 "
+        "libreoffice xterm thunar "
+        "imagemagick "
+        "curl wget jq git nodejs npm "
+        "fonts-liberation fonts-noto-cjk "
+        # Chromium runtime deps (needed by Patchright's bundled Chromium)
+        "libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libcups2t64 "
+        "libdbus-1-3 libdrm2 libgbm1 libgtk-3-0t64 libnspr4 libnss3 "
+        "libpango-1.0-0 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 "
+        "libxrandr2 "
+        "&& rm -rf /var/lib/apt/lists/*"
     )
-    .uv_sync("../")
-    .add_local_dir("agent", "/opt/cua/agent")
-    .add_local_dir("bridge", "/opt/cua/bridge")
-    .add_local_dir("api", "/opt/cua/api")
-    .add_local_dir("actionlog", "/opt/cua/actionlog")
-    .add_local_dir("sandbox", "/opt/cua/sandbox")
-    .add_local_dir("profiles", "/opt/cua/profiles")
-    .add_local_file("config.py", "/opt/cua/config.py")
-    .add_local_file("settings.py", "/opt/cua/settings.py")
-    .add_local_file("exceptions.py", "/opt/cua/exceptions.py")
-    .add_local_dir("blinders", "/opt/cua/blinders")
-    .add_local_dir("guardrails", "/opt/cua/guardrails")
-    .add_local_dir("telemetry", "/opt/cua/telemetry")
-    .add_local_dir("recording", "/opt/cua/recording")
     .env(
         {
             "DISPLAY": ":99",
@@ -66,13 +48,30 @@ sandbox_image = (
             "PYTHONPATH": "/opt/cua",
         }
     )
+    .uv_sync(str(_project_root))
+    .run_commands("patchright install chromium")
+    # Local dirs must come last (lazy mounts, no build steps after)
+    .add_local_dir(str(_project_root / "agent"), "/opt/cua/agent")
+    .add_local_dir(str(_project_root / "bridge"), "/opt/cua/bridge")
+    .add_local_dir(str(_project_root / "api"), "/opt/cua/api")
+    .add_local_dir(str(_project_root / "actionlog"), "/opt/cua/actionlog")
+    .add_local_dir(str(_project_root / "sandbox"), "/opt/cua/sandbox")
+    .add_local_dir(str(_project_root / "profiles"), "/opt/cua/profiles")
+    .add_local_dir(str(_project_root / "playbooks"), "/opt/cua/playbooks")
+    .add_local_file(str(_project_root / "config.py"), "/opt/cua/config.py")
+    .add_local_file(str(_project_root / "settings.py"), "/opt/cua/settings.py")
+    .add_local_file(str(_project_root / "exceptions.py"), "/opt/cua/exceptions.py")
+    .add_local_dir(str(_project_root / "blinders"), "/opt/cua/blinders")
+    .add_local_dir(str(_project_root / "guardrails"), "/opt/cua/guardrails")
+    .add_local_dir(str(_project_root / "telemetry"), "/opt/cua/telemetry")
+    .add_local_dir(str(_project_root / "recording"), "/opt/cua/recording")
 )
 
 # Port exposed by the sandbox
 PORT_STATUS = 8090
 
 
-def create_cua_sandbox(
+async def create_cua_sandbox(
     config: RunConfig,
     app: modal.App,
     extra_env: dict[str, str] | None = None,
@@ -132,7 +131,7 @@ def create_cua_sandbox(
         env.setdefault("OTEL_RESOURCE_ENV", settings.otel_resource_env)
         env.setdefault("OTEL_TRACES_SAMPLER_ARG", str(settings.otel_traces_sampler_arg))
 
-    return modal.Sandbox.create(
+    return await modal.Sandbox.create.aio(
         "/opt/cua/sandbox/entrypoint.sh",
         app=app,
         image=sandbox_image,

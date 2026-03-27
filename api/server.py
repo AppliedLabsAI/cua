@@ -43,7 +43,67 @@ from telemetry.spans import (
 
 log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Modal app + image for the outer API server
+# ---------------------------------------------------------------------------
+
+_project_root = Path(__file__).resolve().parent.parent
+
+api_image = (
+    modal.Image.debian_slim(python_version="3.13")
+    .add_local_dir(str(_project_root / "api"), "/opt/cua/api", copy=True)
+    .add_local_dir(str(_project_root / "agent"), "/opt/cua/agent", copy=True)
+    .add_local_dir(str(_project_root / "bridge"), "/opt/cua/bridge", copy=True)
+    .add_local_dir(str(_project_root / "sandbox"), "/opt/cua/sandbox", copy=True)
+    .add_local_dir(str(_project_root / "actionlog"), "/opt/cua/actionlog", copy=True)
+    .add_local_dir(str(_project_root / "blinders"), "/opt/cua/blinders", copy=True)
+    .add_local_dir(str(_project_root / "guardrails"), "/opt/cua/guardrails", copy=True)
+    .add_local_dir(str(_project_root / "telemetry"), "/opt/cua/telemetry", copy=True)
+    .add_local_dir(str(_project_root / "recording"), "/opt/cua/recording", copy=True)
+    .add_local_dir(str(_project_root / "profiles"), "/opt/cua/profiles", copy=True)
+    .add_local_dir(str(_project_root / "playbooks"), "/opt/cua/playbooks", copy=True)
+    .add_local_file(str(_project_root / "config.py"), "/opt/cua/config.py", copy=True)
+    .add_local_file(
+        str(_project_root / "settings.py"), "/opt/cua/settings.py", copy=True
+    )
+    .add_local_file(
+        str(_project_root / "exceptions.py"), "/opt/cua/exceptions.py", copy=True
+    )
+    .add_local_file(
+        str(_project_root / "pyproject.toml"), "/opt/cua/pyproject.toml", copy=True
+    )
+    .add_local_file(str(_project_root / "uv.lock"), "/opt/cua/uv.lock", copy=True)
+    .env({"PYTHONPATH": "/opt/cua"})
+    .uv_sync(str(_project_root))
+)
+
 modal_app = modal.App("cua")
+
+
+# Force sandbox image to be pre-built at deploy time by registering a
+# function that uses it. Without this, the image is only built on first
+# sandbox creation, which adds minutes of latency and can fail silently.
+from sandbox.image import sandbox_image  # noqa: E402
+
+
+@modal_app.function(image=sandbox_image, include_source=False)
+def _sandbox_image_warmup():
+    """Dummy function to force sandbox image pre-build at deploy time."""
+    pass
+
+
+@modal_app.function(
+    image=api_image,
+    secrets=[modal.Secret.from_name("llm-secret")],
+    timeout=3600,
+    min_containers=0,
+    max_containers=1,
+)
+@modal.asgi_app()
+def serve():
+    """Serve the CUA FastAPI app as a Modal web endpoint."""
+    return app
+
 
 # --- API key authentication ---
 _API_KEY = get_settings().cua_api_key or None
@@ -81,13 +141,13 @@ def _get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
-def _cleanup_finished_sandbox(run_id: str) -> bool:
+async def _cleanup_finished_sandbox(run_id: str) -> bool:
     handle = _run_registry.get(run_id)
     if handle is None:
         return False
 
     try:
-        exit_code = handle.sandbox.poll()
+        exit_code = await handle.sandbox.poll.aio()
     except Exception:
         log.exception("Failed to poll sandbox for run %s", run_id)
         return False
@@ -153,12 +213,14 @@ async def create_run(config: RunConfig) -> RunResponse:
             with tracer.start_as_current_span(SANDBOX_CREATE):
                 # Inject trace context into sandbox env vars
                 trace_ctx = inject_trace_context()
-                sandbox = create_cua_sandbox(config, modal_app, extra_env=trace_ctx)
+                sandbox = await create_cua_sandbox(
+                    config, modal_app, extra_env=trace_ctx
+                )
                 run_id = sandbox.object_id
 
             session_span.set_attribute(ATTR_SESSION_ID, run_id)
 
-            tunnels = sandbox.tunnels()
+            tunnels = await sandbox.tunnels.aio()
             status_base = tunnels[PORT_STATUS].url
         except Exception as exc:
             log.exception("Failed to create sandbox for run %s", run_id or "unknown")
@@ -196,7 +258,7 @@ async def create_run(config: RunConfig) -> RunResponse:
 @app.get("/runs/{run_id}", response_model=RunStatus)
 async def get_run_status(run_id: str) -> RunStatus:
     """Get the status of a CUA run."""
-    if _cleanup_finished_sandbox(run_id):
+    if await _cleanup_finished_sandbox(run_id):
         return RunStatus(
             run_id=run_id,
             status="terminated",
@@ -230,7 +292,7 @@ async def stop_run(run_id: str) -> dict:
     if not handle:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
-    handle.sandbox.terminate()
+    await handle.sandbox.terminate.aio()
     _remove_run_registry(run_id)
     log.info("Terminated run %s", run_id)
     return {"status": "terminated", "run_id": run_id}
@@ -239,7 +301,7 @@ async def stop_run(run_id: str) -> dict:
 @app.get("/runs/{run_id}/stream")
 async def stream_run(run_id: str) -> StreamingResponse:
     """Proxy SSE events from the sandbox's internal status API."""
-    if _cleanup_finished_sandbox(run_id):
+    if await _cleanup_finished_sandbox(run_id):
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     handle = _run_registry.get(run_id)
