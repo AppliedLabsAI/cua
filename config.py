@@ -82,9 +82,12 @@ class CUAConfig:
         credentials = cls._parse_credentials(env.credentials_json)
         guardrail_config = cls._parse_guardrails(env.guardrails_json)
         recording_config = cls._parse_recording(env.recording_json)
-        output_schema = (
-            json.loads(env.output_schema_json) if env.output_schema_json else None
-        )
+        output_schema = None
+        if env.output_schema_json:
+            parsed = json.loads(env.output_schema_json)
+            if not isinstance(parsed, dict):
+                raise ConfigError("OUTPUT_SCHEMA_JSON must be a JSON object")
+            output_schema = parsed
         profile = load_profile(env.profile)
         guardrail_config = apply_guardrail_overrides(profile, guardrail_config)
 
