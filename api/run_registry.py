@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import modal
+from pydantic import BaseModel, ConfigDict
 
 
-@dataclass(slots=True)
-class RunHandle:
+class RunHandle(BaseModel):
     """Minimal state the API needs to manage an active sandbox run."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     run_id: str
     sandbox: modal.Sandbox

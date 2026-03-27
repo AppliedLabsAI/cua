@@ -387,7 +387,7 @@ class TestCuaOutput:
             actions=3,
             duration_ms=1500,
         )
-        d = out.to_dict()
+        d = out.model_dump()
         assert d["status"] == "completed"
         assert d["summary"] == "Found the price."
         assert d["data"] == {"price": "$10"}
@@ -400,14 +400,14 @@ class TestCuaOutput:
             status="completed",
             data={"nested": {"list": [1, 2, 3]}},
         )
-        s = json.dumps(out.to_dict())
+        s = json.dumps(out.model_dump())
         parsed = json.loads(s)
         assert parsed["data"]["nested"]["list"] == [1, 2, 3]
 
     def test_no_extracted_texts_or_token_fields(self):
         """CuaOutput should not have extracted_texts or token fields."""
         out = CuaOutput(status="completed")
-        d = out.to_dict()
+        d = out.model_dump()
         assert "extracted_texts" not in d
         assert "total_input_tokens" not in d
         assert "total_output_tokens" not in d

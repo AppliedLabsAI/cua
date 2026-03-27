@@ -256,7 +256,7 @@ async def _run_agent(
     # Build structured output
     output = agent_result_to_output(result)
     print("\n" + "=" * 60)
-    print(json.dumps(output.to_dict(), indent=2, ensure_ascii=False))
+    print(json.dumps(output.model_dump(), indent=2, ensure_ascii=False))
     print("=" * 60)
 
     # Save action log

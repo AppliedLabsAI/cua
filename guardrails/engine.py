@@ -13,8 +13,9 @@ import json
 import logging
 import re
 import socket
-from dataclasses import dataclass, field
 from urllib.parse import urlparse
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from settings import SAFETY_MODEL
 from telemetry import get_tracer
@@ -118,12 +119,13 @@ Respond with ONLY a JSON object:
 {{"destructive": false, "reason": "brief reason"}}"""
 
 
-@dataclass
-class GuardrailConfig:
+class GuardrailConfig(BaseModel):
     """Configuration for CUA safety guardrails."""
 
+    model_config = ConfigDict(extra="ignore")
+
     allowed_domains: list[str] | None = None
-    blocked_domains: list[str] = field(
+    blocked_domains: list[str] = Field(
         default_factory=lambda: list(_BLOCKED_DOMAINS_DEFAULT)
     )
 
@@ -131,13 +133,6 @@ class GuardrailConfig:
     max_consecutive_errors: int = 5
     allow_private_networks: bool = False
     enable_llm_action_check: bool = True
-
-    @staticmethod
-    def from_dict(data: dict) -> GuardrailConfig:
-        """Create a GuardrailConfig from a dict (e.g. parsed from JSON)."""
-        known_fields = set(GuardrailConfig.__dataclass_fields__)
-        filtered = {k: v for k, v in data.items() if k in known_fields}
-        return GuardrailConfig(**filtered)
 
 
 # Private IP ranges blocked by SSRF protection
@@ -244,8 +239,7 @@ def _check_ssrf(hostname: str) -> GuardrailResult | None:
     return result
 
 
-@dataclass
-class GuardrailResult:
+class GuardrailResult(BaseModel):
     """Outcome of a guardrail check.
 
     When needs_confirmation is True, the action is not hard-blocked but

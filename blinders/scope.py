@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+
+from pydantic import BaseModel, Field
 
 from telemetry.metrics import safety_degraded_total
 
@@ -63,20 +64,18 @@ _FALLBACK_NAVIGATE_RE = re.compile(
 )
 
 
-@dataclass
-class ElementVisibility:
+class ElementVisibility(BaseModel):
     """Controls which DOM element categories pass through the blinders."""
 
     show_forms: bool = True
     show_nav_links: bool = True
     show_action_buttons: bool = True
     show_account_controls: bool = False
-    include_selectors: list[str] = field(default_factory=list)
-    exclude_selectors: list[str] = field(default_factory=list)
+    include_selectors: list[str] = Field(default_factory=list)
+    exclude_selectors: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class TaskScope:
+class TaskScope(BaseModel):
     """Defines the agent's observation and action boundaries for a run."""
 
     goal_type: str  # "read" | "navigate" | "interact" | "fill_form"
@@ -239,12 +238,15 @@ def extract_task_scope(
     # Profile overrides can widen scope
     if profile and profile.guardrail_overrides:
         overrides = profile.guardrail_overrides
+        updates: dict[str, bool] = {}
         # Research profile disables LLM action check → widen visibility
         if overrides.get("enable_llm_action_check") is False:
-            visibility.show_action_buttons = True
+            updates["show_action_buttons"] = True
         # Higher URL limits suggest broader navigation needs
         if overrides.get("max_urls_visited", 50) > 50:
-            visibility.show_nav_links = True
+            updates["show_nav_links"] = True
+        if updates:
+            visibility = visibility.model_copy(update=updates)
 
     return TaskScope(
         goal_type=goal_type,

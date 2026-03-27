@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from pydantic import BaseModel
 
 
-@dataclass(slots=True)
-class ActionResult:
+class ActionResult(BaseModel):
     """Result of executing a bridge action."""
 
     screenshot_b64: str | None = None
