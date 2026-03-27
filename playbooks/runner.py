@@ -73,6 +73,7 @@ class PlaybookRunner:
                 step=step,
                 remaining_steps=remaining_steps,
                 page=page,
+                runtime_params=runtime_params,
             )
             result.step_index = index
             result.duration_ms = int((time.monotonic() - step_start) * 1000)
@@ -84,16 +85,26 @@ class PlaybookRunner:
                 if step.store_as and result.extracted_text is not None:
                     runtime_params[step.store_as] = result.extracted_text
                 log.info("  Step %d OK (%dms)", index + 1, result.duration_ms)
+                if result.recovery_used:
+                    # LLM completed all remaining steps — stop the loop
+                    return PlaybookResult(
+                        playbook_id=playbook.id,
+                        success=True,
+                        step_results=step_results,
+                        total_duration_ms=int((time.monotonic() - start) * 1000),
+                        extracted_text=result.extracted_text or final_extracted,
+                    )
                 continue
 
             if result.recovery_used:
+                # LLM tried but failed — return failure
                 step_results.append(result)
                 return PlaybookResult(
                     playbook_id=playbook.id,
-                    success=result.success,
+                    success=False,
                     step_results=step_results,
                     total_duration_ms=int((time.monotonic() - start) * 1000),
-                    error=None if result.success else result.error,
+                    error=result.error,
                     extracted_text=result.extracted_text or final_extracted,
                 )
 
@@ -125,6 +136,7 @@ class PlaybookRunner:
         step: PlaybookStep,
         remaining_steps: list[PlaybookStep],
         page: Any,
+        runtime_params: dict[str, Any] | None = None,
     ) -> StepResult:
         """Run a step according to its declared failure mode."""
         result = await self._executor.execute_step(step, page)
@@ -143,6 +155,7 @@ class PlaybookRunner:
             remaining_steps=remaining_steps,
             error=result.error or "",
             page=page,
+            runtime_params=runtime_params,
         )
         llm_result.recovery_used = True
         return llm_result
@@ -153,6 +166,7 @@ class PlaybookRunner:
         remaining_steps: list[PlaybookStep],
         error: str,
         page: Any,
+        runtime_params: dict[str, Any] | None = None,
     ) -> StepResult:
         """Hand off the remaining work to the full LLM agent."""
         try:
@@ -160,14 +174,31 @@ class PlaybookRunner:
             from blinders.scope import ALL_ACTIONS
             from bridge.router import ActionRouter
 
-            step_descriptions = "\n".join(
-                f"  {index + 1}. {step.description or step.action}"
-                for index, step in enumerate(remaining_steps)
-            )
+            step_lines: list[str] = []
+            for index, step in enumerate(remaining_steps):
+                parts = [
+                    f"  {index + 1}. [{step.action}] {step.description or '(no description)'}"
+                ]
+                if step.selector:
+                    parts.append(f"     selector: {step.selector.primary}")
+                if step.params:
+                    parts.append(f"     params: {step.params}")
+                step_lines.append("\n".join(parts))
+            step_descriptions = "\n".join(step_lines)
+
+            param_section = ""
+            if runtime_params:
+                param_section = (
+                    "\nRuntime parameters:\n"
+                    + "\n".join(f"  {k} = {v}" for k, v in runtime_params.items())
+                    + "\n"
+                )
+
             directive = (
                 "Complete the following task on this dashboard page.\n\n"
                 f"Playbook: {playbook.name}\n"
-                f"Description: {playbook.description}\n\n"
+                f"Description: {playbook.description}\n"
+                f"{param_section}\n"
                 f"A previous automation step failed with: {error}\n"
                 f"You are now on: {page.url}\n\n"
                 f"Remaining steps to complete:\n{step_descriptions}\n\n"

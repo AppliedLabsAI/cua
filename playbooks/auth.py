@@ -15,10 +15,16 @@ if TYPE_CHECKING:
 
     from bridge.browser import BrowserManager
 
+from settings import (
+    ACTION_TIMEOUT_MS,
+    LOGIN_DETECT_TIMEOUT_MS,
+    LOGIN_TIMEOUT_MS,
+    SELECTOR_PROBE_TIMEOUT_MS,
+)
+
 log = logging.getLogger(__name__)
 
 _SESSION_DIR = Path.home() / ".cua" / "sessions"
-_LOGIN_TIMEOUT = 15_000
 _USERNAME_SELECTORS = [
     "input[type='email']",
     "input[name='email']",
@@ -97,10 +103,12 @@ class DashboardAuth:
             # Reload the page to apply restored cookies
             if login_url:
                 await page.goto(
-                    login_url, wait_until="domcontentloaded", timeout=_LOGIN_TIMEOUT
+                    login_url, wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
                 )
             else:
-                await page.reload(wait_until="domcontentloaded", timeout=_LOGIN_TIMEOUT)
+                await page.reload(
+                    wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
+                )
 
             if await self._is_logged_in(page):
                 log.info("Session restored successfully")
@@ -111,7 +119,7 @@ class DashboardAuth:
         # Navigate to login page if needed
         if login_url and login_url not in page.url:
             await page.goto(
-                login_url, wait_until="domcontentloaded", timeout=_LOGIN_TIMEOUT
+                login_url, wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
             )
 
         # Execute login
@@ -151,7 +159,7 @@ class DashboardAuth:
 
         # Wait for navigation after login
         with contextlib.suppress(Exception):
-            await page.wait_for_load_state("domcontentloaded", timeout=_LOGIN_TIMEOUT)
+            await page.wait_for_load_state("domcontentloaded", timeout=LOGIN_TIMEOUT_MS)
 
         return await self._is_logged_in(page)
 
@@ -163,7 +171,9 @@ class DashboardAuth:
         # If there's still a visible password field, probably not logged in
         try:
             handle = await page.wait_for_selector(
-                "input[type='password']", state="visible", timeout=1500
+                "input[type='password']",
+                state="visible",
+                timeout=LOGIN_DETECT_TIMEOUT_MS,
             )
             if handle:
                 return False
@@ -234,7 +244,7 @@ class DashboardAuth:
                         await page.goto(
                             origin_url,
                             wait_until="domcontentloaded",
-                            timeout=_LOGIN_TIMEOUT,
+                            timeout=LOGIN_TIMEOUT_MS,
                         )
                         await page.evaluate(
                             """(entries) => {
@@ -273,10 +283,10 @@ class DashboardAuth:
                 handle = await page.wait_for_selector(
                     selector,
                     state="visible",
-                    timeout=500,
+                    timeout=SELECTOR_PROBE_TIMEOUT_MS,
                 )
                 if handle:
-                    await page.fill(selector, value, timeout=3000)
+                    await page.fill(selector, value, timeout=ACTION_TIMEOUT_MS)
                     return True
             except Exception:
                 continue
@@ -288,10 +298,10 @@ class DashboardAuth:
                 handle = await page.wait_for_selector(
                     selector,
                     state="visible",
-                    timeout=500,
+                    timeout=SELECTOR_PROBE_TIMEOUT_MS,
                 )
                 if handle:
-                    await page.click(selector, timeout=3000)
+                    await page.click(selector, timeout=ACTION_TIMEOUT_MS)
                     return True
             except Exception:
                 continue

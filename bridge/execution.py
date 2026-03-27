@@ -18,6 +18,7 @@ from bridge.browser import (
 )
 from bridge.js_helpers import DOM_SNAPSHOT_INIT_JS
 from bridge.page_actions import PageActionConfig, execute_page_action
+from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS, SETTLE_TIMEOUT_MS
 
 if TYPE_CHECKING:
     from bridge.browser import BrowserManager
@@ -40,13 +41,13 @@ _CAPTCHA_DETECT_CALL_JS = """(initJS) => {
 }"""
 
 _TOOL_ACTION_CONFIG = PageActionConfig(
-    action_timeout_ms=3000,
-    navigation_timeout_ms=7_000,
+    action_timeout_ms=ACTION_TIMEOUT_MS,
+    navigation_timeout_ms=NAVIGATION_TIMEOUT_MS,
     scroll_unit=200,
     type_delay_ms=0,
     settle_after_click=True,
     settle_after_evaluate=True,
-    settle_timeout_ms=2_000,
+    settle_timeout_ms=SETTLE_TIMEOUT_MS,
     settle_sleep_s=0.0,
     smart_body_extract=True,
 )
