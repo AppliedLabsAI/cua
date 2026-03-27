@@ -137,11 +137,12 @@ async def execute_page_action(
 
     if action == "evaluate":
         script = params.get("script", "")
-        log.warning(
-            "Executing arbitrary JS evaluate (len=%d): %.200s%s",
-            len(script),
-            script,
-            "..." if len(script) > 200 else "",
+        if not script or not script.strip():
+            log.warning("evaluate called with empty script — skipping")
+            return PageActionOutcome()
+        log.info("Executing JS evaluate (len=%d)", len(script))
+        log.debug(
+            "JS evaluate script: %.200s%s", script, "..." if len(script) > 200 else ""
         )
         url_before = page.url
         await page.evaluate(script)

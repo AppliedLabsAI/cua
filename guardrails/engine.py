@@ -6,6 +6,7 @@ confirmation. Called by ActionRouter BEFORE executing any action.
 
 from __future__ import annotations
 
+import concurrent.futures
 import fnmatch
 import ipaddress
 import json
@@ -165,10 +166,23 @@ _dns_cache: dict[str, GuardrailResult | None] = {}
 _DNS_CACHE_MAX = 1024
 
 
+_DNS_TIMEOUT_S = 2.0  # Max time to wait for DNS resolution
+
+
 def _resolve_and_check(hostname: str) -> GuardrailResult | None:
-    """Resolve a hostname via DNS and check all returned IPs against private ranges."""
+    """Resolve a hostname via DNS and check all returned IPs against private ranges.
+
+    Uses a thread pool with a timeout to prevent slow DNS from blocking
+    request handling.
+    """
+
+    def _do_resolve():
+        return socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+
     try:
-        addrinfos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_do_resolve)
+            addrinfos = future.result(timeout=_DNS_TIMEOUT_S)
         for _family, _type, _proto, _canonname, sockaddr in addrinfos:
             ip_str = sockaddr[0]
             try:
@@ -183,8 +197,8 @@ def _resolve_and_check(hostname: str) -> GuardrailResult | None:
                     )
             except ValueError:
                 continue
-    except socket.gaierror:
-        # DNS resolution failed — allow (browser will fail gracefully)
+    except (socket.gaierror, concurrent.futures.TimeoutError):
+        # DNS resolution failed or timed out — allow (browser will fail gracefully)
         pass
     return None
 
@@ -246,9 +260,10 @@ class GuardrailResult:
 def _domain_matches(domain: str, pattern: str) -> bool:
     """Match a domain against a glob pattern, handling bare domains correctly.
 
-    fnmatch("irs.gov", "*.gov") returns False because ``*`` requires at least
-    one character before the dot. This helper also checks the bare domain
-    (without subdomain prefix) so patterns like ``*.gov`` match ``irs.gov``.
+    fnmatch("irs.gov", "*.gov") returns True (``*`` matches ``irs``), but
+    fnmatch("gov", "*.gov") returns False because ``*`` must match at least
+    one character. This helper also strips the ``*.`` prefix and checks the
+    bare suffix so patterns like ``*.gov`` additionally match ``gov`` itself.
     """
     if fnmatch.fnmatch(domain, pattern):
         return True
