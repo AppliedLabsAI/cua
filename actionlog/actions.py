@@ -1,4 +1,4 @@
-"""Action log dataclass and persistence.
+"""Action log model and persistence.
 
 Every agent action is recorded as an ActionLog entry for debugging,
 observability, and the SSE action stream.
@@ -9,8 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+
+from pydantic import BaseModel
 
 from api.models import ActionEvent
 
@@ -23,8 +24,7 @@ _LARGE_FIELDS = {"text"}
 _MAX_FIELD_LEN = 500
 
 
-@dataclass(slots=True)
-class ActionLog:
+class ActionLog(BaseModel):
     """Record of a single agent action execution."""
 
     step: int
@@ -173,7 +173,7 @@ def _persist_sync(log_entry: ActionLog) -> str:
     filename = f"{log_entry.step:04d}_{log_entry.tool}_{action_safe}.json"
     path = os.path.join(_LOG_DIR, filename)
     with open(path, "w") as f:
-        json.dump(asdict(log_entry), f, indent=2)
+        json.dump(log_entry.model_dump(), f, indent=2)
     return path
 
 
@@ -185,7 +185,7 @@ async def persist_action_log(log_entry: ActionLog) -> str:
 def _save_action_log_sync(action_log: list[ActionLog], path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w") as f:
-        json.dump([asdict(entry) for entry in action_log], f, indent=2)
+        json.dump([entry.model_dump() for entry in action_log], f, indent=2)
 
 
 async def save_action_log(action_log: list[ActionLog], path: str) -> None:

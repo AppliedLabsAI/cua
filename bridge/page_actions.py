@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from dataclasses import dataclass
 from typing import Any
+
+from pydantic import BaseModel
 
 from bridge.js_helpers import EXTRACT_VALUE_INIT_JS, SMART_EXTRACT_INIT_JS
 from settings import SETTLE_SLEEP_S, SETTLE_TIMEOUT_MS
@@ -28,8 +29,7 @@ EXTRACT_VALUE_CALL_JS = """([sel, initJS]) => {
 }"""
 
 
-@dataclass(slots=True)
-class PageActionConfig:
+class PageActionConfig(BaseModel):
     """Execution knobs shared across browser action call sites."""
 
     action_timeout_ms: int
@@ -43,8 +43,7 @@ class PageActionConfig:
     smart_body_extract: bool = True
 
 
-@dataclass(slots=True)
-class PageActionOutcome:
+class PageActionOutcome(BaseModel):
     """Normalized output from a primitive browser action."""
 
     text: str | None = None

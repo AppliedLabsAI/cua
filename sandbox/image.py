@@ -44,14 +44,15 @@ sandbox_image = (
         "fonts-noto-cjk",
     )
     .pip_install(
-        "anthropic>=0.52.0",
-        "patchright>=1.0.0",
-        "fastapi>=0.115.0",
-        "uvicorn>=0.34.0",
-        "httpx>=0.28.0",
-        "opentelemetry-api>=1.28",
-        "opentelemetry-sdk>=1.28",
-        "opentelemetry-exporter-otlp-proto-grpc>=1.28",
+        "anthropic>=0.86",
+        "fastapi>=0.135.2",
+        "httpx>=0.28.1",
+        "opentelemetry-api>=1.40",
+        "opentelemetry-sdk>=1.40",
+        "opentelemetry-exporter-otlp-proto-grpc>=1.40",
+        "opentelemetry-instrumentation-fastapi>=0.61b0",
+        "patchright>=1.58.2",
+        "uvicorn>=0.42",
     )
     .run_commands(
         "patchright install chromium",
@@ -114,10 +115,12 @@ def create_cua_sandbox(
         env["CREDENTIALS_JSON"] = json.dumps(config.credentials)
 
     if config.guardrails:
-        env["GUARDRAILS_JSON"] = json.dumps(config.guardrails.to_dict())
+        env["GUARDRAILS_JSON"] = json.dumps(
+            config.guardrails.model_dump(exclude_none=True)
+        )
 
     if config.recording:
-        env["RECORDING_JSON"] = json.dumps(config.recording.to_dict())
+        env["RECORDING_JSON"] = json.dumps(config.recording.model_dump())
 
     if config.output_schema is not None:
         env["OUTPUT_SCHEMA_JSON"] = json.dumps(config.output_schema)

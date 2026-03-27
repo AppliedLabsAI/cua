@@ -13,9 +13,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
 
 from patchright.async_api import Page
+from pydantic import BaseModel, ConfigDict
 
 from bridge.js_helpers import CAPTCHA_DETECT_INIT_JS
 
@@ -43,18 +43,20 @@ _STILL_PRESENT_JS = """(initJS) => {
 }"""
 
 
-@dataclass(frozen=True, slots=True)
-class CaptchaDetection:
+class CaptchaDetection(BaseModel):
     """Result of a CAPTCHA detection check."""
+
+    model_config = ConfigDict(frozen=True)
 
     detected: bool
     captcha_type: str | None = None  # "cloudflare" | "recaptcha" | "hcaptcha"
     is_blocking: bool = False  # True if CAPTCHA blocks page content
 
 
-@dataclass(frozen=True, slots=True)
-class CaptchaHandleResult:
+class CaptchaHandleResult(BaseModel):
     """Outcome of a CAPTCHA detection + wait cycle."""
+
+    model_config = ConfigDict(frozen=True)
 
     detected: bool
     resolved: bool = False

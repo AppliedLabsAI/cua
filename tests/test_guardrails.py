@@ -156,7 +156,7 @@ class TestErrorTracking:
 
 class TestGuardrailConfigFromDict:
     def test_creates_from_dict(self):
-        config = GuardrailConfig.from_dict(
+        config = GuardrailConfig.model_validate(
             {
                 "max_urls_visited": 100,
                 "enable_llm_action_check": False,
@@ -166,7 +166,7 @@ class TestGuardrailConfigFromDict:
         assert config.enable_llm_action_check is False
 
     def test_ignores_unknown_keys(self):
-        config = GuardrailConfig.from_dict(
+        config = GuardrailConfig.model_validate(
             {
                 "max_urls_visited": 10,
                 "unknown_field": "ignored",
@@ -175,7 +175,7 @@ class TestGuardrailConfigFromDict:
         assert config.max_urls_visited == 10
 
     def test_empty_dict_uses_defaults(self):
-        config = GuardrailConfig.from_dict({})
+        config = GuardrailConfig.model_validate({})
         assert config.max_urls_visited == 50
         assert config.max_consecutive_errors == 5
 

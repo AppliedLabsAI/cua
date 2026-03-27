@@ -229,6 +229,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation-fastapi" },
     { name = "opentelemetry-sdk" },
     { name = "patchright" },
+    { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "uvicorn" },
@@ -245,16 +246,17 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.86" },
-    { name = "fastapi", specifier = ">=0.135" },
-    { name = "httpx", specifier = ">=0.28" },
+    { name = "fastapi", specifier = ">=0.135.2" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "modal", specifier = ">=1.4" },
     { name = "opentelemetry-api", specifier = ">=1.40" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.40" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.61b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.40" },
-    { name = "patchright", specifier = ">=1.58" },
-    { name = "pydantic-settings", specifier = ">=2.13" },
-    { name = "pyyaml", specifier = ">=6" },
+    { name = "patchright", specifier = ">=1.58.2" },
+    { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "pydantic-settings", specifier = ">=2.13.1" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "uvicorn", specifier = ">=0.42" },
 ]
 

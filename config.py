@@ -3,23 +3,22 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from api.models import CredentialsMap, GuardrailSettings, RecordingSettings
+from pydantic import BaseModel, Field
+
+from api.models import CredentialsMap
 from exceptions import ConfigError
 from guardrails import GuardrailConfig
-from profiles.loader import apply_guardrail_overrides, load_profile
+from profiles.loader import Profile, apply_guardrail_overrides, load_profile
 from recording import RecordingConfig
 from settings import AGENT_MODEL, get_settings
 
 if TYPE_CHECKING:
     from api.models import RunConfig
-    from profiles.loader import Profile
 
 
-@dataclass
-class CUAConfig:
+class CUAConfig(BaseModel):
     """Complete runtime configuration for a CUA agent run."""
 
     directive: str
@@ -32,10 +31,10 @@ class CUAConfig:
     proxy_url: str | None = None
     profile_name: str = "default"
     credentials: CredentialsMap | None = None
-    guardrail_config: GuardrailConfig = field(default_factory=GuardrailConfig)
-    recording_config: RecordingConfig = field(default_factory=RecordingConfig)
+    guardrail_config: GuardrailConfig = Field(default_factory=GuardrailConfig)
+    recording_config: RecordingConfig = Field(default_factory=RecordingConfig)
     output_schema: dict[str, Any] | None = None
-    profile: Profile | None = field(default=None, repr=False)
+    profile: Profile | None = Field(default=None, repr=False)
 
     @staticmethod
     def _parse_credentials(raw_json: str) -> CredentialsMap | None:
@@ -59,17 +58,13 @@ class CUAConfig:
     def _parse_recording(raw_json: str) -> RecordingConfig:
         if not raw_json:
             return RecordingConfig()
-
-        settings = RecordingSettings.model_validate(json.loads(raw_json))
-        return RecordingConfig.from_dict(settings.to_dict())
+        return RecordingConfig.model_validate(json.loads(raw_json))
 
     @staticmethod
     def _parse_guardrails(raw_json: str) -> GuardrailConfig | None:
         if not raw_json:
             return None
-
-        settings = GuardrailSettings.model_validate(json.loads(raw_json))
-        return GuardrailConfig.from_dict(settings.to_dict())
+        return GuardrailConfig.model_validate(json.loads(raw_json))
 
     @classmethod
     def from_env(cls) -> CUAConfig:
@@ -113,11 +108,13 @@ class CUAConfig:
         """Build config from an API RunConfig (used by the outer API)."""
         guardrail_config = None
         if rc.guardrails:
-            guardrail_config = GuardrailConfig.from_dict(rc.guardrails.to_dict())
+            guardrail_config = GuardrailConfig.model_validate(
+                rc.guardrails.model_dump(exclude_none=True)
+            )
 
         recording_config = RecordingConfig()
         if rc.recording:
-            recording_config = RecordingConfig.from_dict(rc.recording.to_dict())
+            recording_config = RecordingConfig.model_validate(rc.recording.model_dump())
 
         profile = load_profile(rc.profile)
         guardrail_config = apply_guardrail_overrides(profile, guardrail_config)

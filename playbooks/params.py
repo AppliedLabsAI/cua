@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Any
 
 from playbooks.schema import (
@@ -24,7 +23,7 @@ def materialize_playbook(playbook: Playbook, params: dict[str, Any]) -> Playbook
         for step_index, _ in enumerate(playbook.steps)
     ]
 
-    return replace(playbook, steps=steps)
+    return playbook.model_copy(update={"steps": steps})
 
 
 def materialize_step(

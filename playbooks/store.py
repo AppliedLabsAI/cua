@@ -6,17 +6,11 @@ import logging
 from pathlib import Path
 
 import yaml
+from pydantic import ValidationError
 
 from playbooks.schema import (
-    KNOWN_FAILURE_MODES,
-    KNOWN_PARAMETER_TYPES,
-    KNOWN_PLAYBOOK_ACTIONS,
     Playbook,
-    PlaybookGuardrails,
-    PlaybookParameter,
     PlaybookStep,
-    SelectorStrategy,
-    StepVerification,
 )
 
 log = logging.getLogger(__name__)
@@ -119,147 +113,33 @@ class PlaybookStore:
         with open(path) as f:
             data = yaml.safe_load(f)
 
-        steps = []
-        for step_data in data.get("steps", []):
-            action = step_data["action"]
-            if action not in KNOWN_PLAYBOOK_ACTIONS:
-                raise ValueError(f"Unknown playbook action '{action}' in {path.name}")
-
-            on_failure = step_data.get("on_failure", "llm_recover")
-            if on_failure not in KNOWN_FAILURE_MODES:
-                raise ValueError(
-                    f"Unknown on_failure mode '{on_failure}' in {path.name}"
-                )
-
-            selector = None
-            sel_data = step_data.get("selector")
-            if sel_data:
+        try:
+            steps = []
+            for step_data in data.get("steps", []):
+                # Handle selector shorthand: plain string → SelectorStrategy
+                sel_data = step_data.get("selector")
                 if isinstance(sel_data, str):
-                    selector = SelectorStrategy(primary=sel_data)
-                else:
-                    selector = SelectorStrategy(
-                        primary=sel_data["primary"],
-                        fallbacks=sel_data.get("fallbacks", []),
-                        description=sel_data.get("description", ""),
-                    )
+                    step_data = {**step_data, "selector": {"primary": sel_data}}
 
-            verify = None
-            verify_data = step_data.get("verify")
-            if verify_data:
-                verify = StepVerification(
-                    expect_url_contains=verify_data.get("expect_url_contains"),
-                    expect_element_visible=verify_data.get("expect_element_visible"),
-                    expect_element_gone=verify_data.get("expect_element_gone"),
-                    expect_text_on_page=verify_data.get("expect_text_on_page"),
-                    timeout_ms=verify_data.get("timeout_ms", 5000),
-                )
+                steps.append(PlaybookStep.model_validate(step_data))
 
-            steps.append(
-                PlaybookStep(
-                    action=action,
-                    params=step_data.get("params", {}),
-                    selector=selector,
-                    verify=verify,
-                    description=step_data.get("description", ""),
-                    on_failure=on_failure,
-                    store_as=step_data.get("store_as", ""),
-                )
-            )
-
-        parameters = []
-        for param_data in data.get("parameters", []):
-            parameter_type = param_data.get("type", "string")
-            if parameter_type not in KNOWN_PARAMETER_TYPES:
-                raise ValueError(
-                    f"Unknown parameter type '{parameter_type}' in {path.name}"
-                )
-            parameters.append(
-                PlaybookParameter(
-                    name=param_data["name"],
-                    type=parameter_type,
-                    description=param_data.get("description", ""),
-                    inject_into=param_data.get("inject_into", ""),
-                    pattern=param_data.get("pattern", ""),
-                )
-            )
-
-        return Playbook(
-            id=data["id"],
-            name=data.get("name", data["id"]),
-            description=data.get("description", ""),
-            parameters=parameters,
-            auth_required=data.get("auth_required", True),
-            steps=steps,
-            tags=data.get("tags", []),
-            start_url=data.get("start_url", ""),
-            guardrails=PlaybookGuardrails.from_dict(data.get("guardrails")),
-        )
+            playbook_data = {**data, "steps": steps}
+            # Default name to id if not provided
+            playbook_data.setdefault("name", data["id"])
+            return Playbook.model_validate(playbook_data)
+        except ValidationError as exc:
+            raise ValueError(f"Invalid playbook {path.name}: {exc}") from exc
 
     @staticmethod
     def _to_dict(playbook: Playbook) -> dict:
-        """Convert a Playbook to a YAML-serializable dict."""
-        steps = []
-        for step in playbook.steps:
-            step_dict: dict = {"action": step.action}
-            if step.params:
-                step_dict["params"] = step.params
-            if step.selector:
-                sel: dict = {"primary": step.selector.primary}
-                if step.selector.fallbacks:
-                    sel["fallbacks"] = step.selector.fallbacks
-                if step.selector.description:
-                    sel["description"] = step.selector.description
-                step_dict["selector"] = sel
-            if step.verify:
-                v = step.verify
-                verify_dict: dict = {}
-                if v.expect_url_contains:
-                    verify_dict["expect_url_contains"] = v.expect_url_contains
-                if v.expect_element_visible:
-                    verify_dict["expect_element_visible"] = v.expect_element_visible
-                if v.expect_element_gone:
-                    verify_dict["expect_element_gone"] = v.expect_element_gone
-                if v.expect_text_on_page:
-                    verify_dict["expect_text_on_page"] = v.expect_text_on_page
-                if v.timeout_ms != 5000:
-                    verify_dict["timeout_ms"] = v.timeout_ms
-                step_dict["verify"] = verify_dict
-            if step.description:
-                step_dict["description"] = step.description
-            if step.on_failure != "llm_recover":
-                step_dict["on_failure"] = step.on_failure
-            if step.store_as:
-                step_dict["store_as"] = step.store_as
-            steps.append(step_dict)
+        """Convert a Playbook to a YAML-serializable dict.
 
-        params = []
-        for p in playbook.parameters:
-            pd: dict = {"name": p.name}
-            if p.type != "string":
-                pd["type"] = p.type
-            if p.description:
-                pd["description"] = p.description
-            if p.inject_into:
-                pd["inject_into"] = p.inject_into
-            if p.pattern:
-                pd["pattern"] = p.pattern
-            params.append(pd)
-
-        result: dict = {
-            "id": playbook.id,
-            "name": playbook.name,
-        }
-        if playbook.description:
-            result["description"] = playbook.description
-        if playbook.tags:
-            result["tags"] = playbook.tags
+        Uses exclude_defaults to produce compact output, then ensures
+        required structural fields are always present.
+        """
+        result = playbook.model_dump(exclude_defaults=True, exclude_none=True)
+        # Always include auth_required and steps even when they match defaults
         result["auth_required"] = playbook.auth_required
-        if playbook.start_url:
-            result["start_url"] = playbook.start_url
-        if playbook.guardrails.has_overrides():
-            result["guardrails"] = playbook.guardrails.to_dict()
-        if params:
-            result["parameters"] = params
-        result["steps"] = steps
-
+        if "steps" not in result:
+            result["steps"] = []
         return result

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 PlaybookAction = Literal[
     "goto",
@@ -32,8 +33,7 @@ KNOWN_FAILURE_MODES: tuple[OnFailureMode, ...] = ("llm_recover", "retry", "abort
 KNOWN_PARAMETER_TYPES: tuple[ParameterType, ...] = ("string", "int", "selector_text")
 
 
-@dataclass
-class SelectorStrategy:
+class SelectorStrategy(BaseModel):
     """Multi-strategy selector with fallback chain.
 
     Selectors use Playwright syntax:
@@ -43,7 +43,7 @@ class SelectorStrategy:
     """
 
     primary: str
-    fallbacks: list[str] = field(default_factory=list)
+    fallbacks: list[str] = Field(default_factory=list)
     description: str = ""
 
     @property
@@ -51,8 +51,7 @@ class SelectorStrategy:
         return [self.primary, *self.fallbacks]
 
 
-@dataclass
-class StepVerification:
+class StepVerification(BaseModel):
     """Post-action verification to ensure a step succeeded."""
 
     expect_url_contains: str | None = None
@@ -62,9 +61,10 @@ class StepVerification:
     timeout_ms: int = 5000
 
 
-@dataclass
-class PlaybookGuardrails:
+class PlaybookGuardrails(BaseModel):
     """Optional per-playbook guardrail overrides for LLM handoff."""
+
+    model_config = ConfigDict(extra="forbid")
 
     allowed_domains: list[str] | None = None
     blocked_domains: list[str] | None = None
@@ -73,46 +73,23 @@ class PlaybookGuardrails:
     allow_private_networks: bool | None = None
     enable_llm_action_check: bool | None = None
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> PlaybookGuardrails:
-        payload = data or {}
-        known_fields = cls.__dataclass_fields__
-        unknown_fields = sorted(set(payload) - set(known_fields))
-        if unknown_fields:
-            raise ValueError(
-                f"Unknown playbook guardrail overrides: {', '.join(unknown_fields)}"
-            )
-        filtered = {key: value for key, value in payload.items() if key in known_fields}
-        return cls(**filtered)
-
-    def to_dict(self) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for field_name in self.__dataclass_fields__:
-            value = getattr(self, field_name)
-            if value is not None:
-                result[field_name] = value
-        return result
-
     def has_overrides(self) -> bool:
-        return any(
-            getattr(self, field_name) is not None
-            for field_name in self.__dataclass_fields__
-        )
+        return any(getattr(self, name) is not None for name in type(self).model_fields)
 
     def to_runtime_config(self):
         from guardrails import GuardrailConfig
 
-        if not self.has_overrides():
+        overrides = self.model_dump(exclude_none=True)
+        if not overrides:
             return GuardrailConfig()
-        return GuardrailConfig.from_dict(self.to_dict())
+        return GuardrailConfig.model_validate(overrides)
 
 
-@dataclass
-class PlaybookStep:
+class PlaybookStep(BaseModel):
     """Single action in a playbook."""
 
     action: PlaybookAction
-    params: dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
     selector: SelectorStrategy | None = None
     verify: StepVerification | None = None
     description: str = ""
@@ -120,8 +97,7 @@ class PlaybookStep:
     store_as: str = ""  # Save extracted output for later {param} substitution
 
 
-@dataclass
-class PlaybookParameter:
+class PlaybookParameter(BaseModel):
     """Variable slot in a playbook template."""
 
     name: str
@@ -131,23 +107,21 @@ class PlaybookParameter:
     pattern: str = ""  # Regex for extraction from directive
 
 
-@dataclass
-class Playbook:
+class Playbook(BaseModel):
     """Complete workflow definition."""
 
     id: str
     name: str
     description: str = ""
-    parameters: list[PlaybookParameter] = field(default_factory=list)
+    parameters: list[PlaybookParameter] = Field(default_factory=list)
     auth_required: bool = True
-    steps: list[PlaybookStep] = field(default_factory=list)
-    tags: list[str] = field(default_factory=list)
+    steps: list[PlaybookStep] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     start_url: str = ""  # Override start URL for this playbook
-    guardrails: PlaybookGuardrails = field(default_factory=PlaybookGuardrails)
+    guardrails: PlaybookGuardrails = Field(default_factory=PlaybookGuardrails)
 
 
-@dataclass
-class StepResult:
+class StepResult(BaseModel):
     """Outcome of a single playbook step."""
 
     step_index: int
@@ -160,13 +134,12 @@ class StepResult:
     extracted_text: str | None = None  # Text extracted by 'extract' action
 
 
-@dataclass
-class PlaybookResult:
+class PlaybookResult(BaseModel):
     """Outcome of a full playbook execution."""
 
     playbook_id: str
     success: bool
-    step_results: list[StepResult] = field(default_factory=list)
+    step_results: list[StepResult] = Field(default_factory=list)
     total_duration_ms: int = 0
     error: str | None = None
     screenshot_b64: str | None = None  # Final screenshot on completion/failure

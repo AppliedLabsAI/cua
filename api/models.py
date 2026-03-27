@@ -22,9 +22,6 @@ class RecordingSettings(BaseModel):
     screenshots: bool = True
     trace: bool = True
 
-    def to_dict(self) -> dict:
-        return self.model_dump()
-
 
 class GuardrailSettings(BaseModel):
     """API-facing representation of guardrail configuration."""
@@ -35,10 +32,6 @@ class GuardrailSettings(BaseModel):
     max_consecutive_errors: int = 5
     allow_private_networks: bool = False
     enable_llm_action_check: bool = True
-
-    def to_dict(self) -> dict:
-        """Return a JSON-serializable representation without null overrides."""
-        return self.model_dump(exclude_none=True)
 
 
 class ActionEvent(BaseModel):

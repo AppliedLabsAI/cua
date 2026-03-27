@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import BaseModel
 
 from actionlog.actions import ActionLog
 from settings import AGENT_MODEL
@@ -42,8 +43,7 @@ DEFAULT_OUTPUT_SCHEMA: dict[str, Any] = {
 }
 
 
-@dataclass(slots=True)
-class CuaOutput:
+class CuaOutput(BaseModel):
     """Structured, machine-readable result of a CUA run."""
 
     status: Literal["completed", "failed", "timeout", "terminated"]
@@ -52,10 +52,6 @@ class CuaOutput:
     error: str | None = None
     actions: int = 0
     duration_ms: int = 0
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable dict."""
-        return asdict(self)
 
 
 def collect_extracted_texts(action_log: list[ActionLog]) -> list[str]:
