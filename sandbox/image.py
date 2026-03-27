@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 import modal
-from modal import FilePatternMatcher  # noqa: F401 — used in image definition
+from modal import FilePatternMatcher
 
 from api.models import RunConfig
 
