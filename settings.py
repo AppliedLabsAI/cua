@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     credentials_json: str = ""
     guardrails_json: str = ""
     recording_json: str = ""
+    output_schema_json: str = ""
 
     # Infrastructure
     modal_sandbox_id: str = "local"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from api.models import CredentialsMap, GuardrailSettings, RecordingSettings
 from exceptions import ConfigError
@@ -34,6 +34,7 @@ class CUAConfig:
     credentials: CredentialsMap | None = None
     guardrail_config: GuardrailConfig = field(default_factory=GuardrailConfig)
     recording_config: RecordingConfig = field(default_factory=RecordingConfig)
+    output_schema: dict[str, Any] | None = None
     profile: Profile | None = field(default=None, repr=False)
 
     @staticmethod
@@ -81,6 +82,9 @@ class CUAConfig:
         credentials = cls._parse_credentials(env.credentials_json)
         guardrail_config = cls._parse_guardrails(env.guardrails_json)
         recording_config = cls._parse_recording(env.recording_json)
+        output_schema = (
+            json.loads(env.output_schema_json) if env.output_schema_json else None
+        )
         profile = load_profile(env.profile)
         guardrail_config = apply_guardrail_overrides(profile, guardrail_config)
 
@@ -97,6 +101,7 @@ class CUAConfig:
             credentials=credentials,
             guardrail_config=guardrail_config,
             recording_config=recording_config,
+            output_schema=output_schema,
             profile=profile,
         )
 
@@ -127,5 +132,6 @@ class CUAConfig:
             credentials=rc.credentials,
             guardrail_config=guardrail_config,
             recording_config=recording_config,
+            output_schema=rc.output_schema,
             profile=profile,
         )

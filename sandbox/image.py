@@ -119,6 +119,9 @@ def create_cua_sandbox(
     if config.recording:
         env["RECORDING_JSON"] = json.dumps(config.recording.to_dict())
 
+    if config.output_schema:
+        env["OUTPUT_SCHEMA_JSON"] = json.dumps(config.output_schema)
+
     # Propagate OTel trace context and config into sandbox
     if extra_env:
         env.update(extra_env)
