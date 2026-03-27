@@ -18,7 +18,7 @@ import json
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # Add project root to path — must precede project imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -96,8 +96,19 @@ async def run(args: argparse.Namespace) -> int:
         return await _run_playbook(args, browser, recording, credentials)
 
     # --- Standard LLM agent path ---
+    output_schema = None
+    if args.output_schema:
+        try:
+            output_schema = json.loads(args.output_schema)
+        except json.JSONDecodeError as exc:
+            log.error("Invalid --output-schema JSON: %s", exc)
+            with contextlib.suppress(Exception):
+                await recording.stop()
+            await browser.close()
+            return 1
+
     return await _run_agent(
-        args, browser, profile, recording, credentials, local_output_dir
+        args, browser, profile, recording, credentials, local_output_dir, output_schema
     )
 
 
@@ -180,10 +191,12 @@ async def _run_agent(
     recording: RecordingManager,
     credentials: dict | None,
     output_dir: str,
+    output_schema: dict[str, Any] | None = None,
 ) -> int:
     """Run the full LLM agent loop with blinders, guardrails, and scope extraction."""
     from actionlog.actions import save_action_log
     from agent.loop import run_agent
+    from agent.output import agent_result_to_output
     from blinders.filters import DOMBlinders
     from blinders.scope import extract_task_scope
     from bridge.router import ActionRouter
@@ -222,6 +235,7 @@ async def _run_agent(
                 "  Step %d: %s (%dms)", a.step, a.input_summary, a.duration_ms
             ),
             allowed_actions=scope.allowed_actions,
+            output_schema=output_schema,
         )
     finally:
         try:
@@ -239,15 +253,10 @@ async def _run_agent(
         await browser.close()
         log.info("Browser closed")
 
-    # Print results
+    # Build structured output
+    output = agent_result_to_output(result)
     print("\n" + "=" * 60)
-    print(f"Status:  {'SUCCESS' if result.success else 'FAILED'}")
-    print(f"Summary: {result.summary}")
-    if result.error:
-        print(f"Error:   {result.error}")
-    print(f"Actions: {result.action_count}")
-    print(f"Duration: {result.total_duration_ms}ms")
-    print(f"Tokens:  {result.total_input_tokens} in / {result.total_output_tokens} out")
+    print(json.dumps(output.to_dict(), indent=2, ensure_ascii=False))
     print("=" * 60)
 
     # Save action log
@@ -290,6 +299,11 @@ def main():
         "--allow-private-networks",
         action="store_true",
         help="Disable SSRF protection (allow localhost and private IPs)",
+    )
+    parser.add_argument(
+        "--output-schema",
+        default=None,
+        help='JSON Schema for structured output extraction (e.g., \'{"type": "object", "properties": {"price": {"type": "string"}}}\')',
     )
     parser.add_argument(
         "--playbook",

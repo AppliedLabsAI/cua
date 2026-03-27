@@ -91,7 +91,7 @@ def record_text_block(block: Any, llm_span: Span, text_parts: list[str]) -> None
     if text:
         text_parts.append(text)
         stripped = _strip_dom(text)
-        log.info("Agent text: %s", stripped)
+        log.debug("Agent text: %s", stripped)
         llm_span.add_event(EVENT_TEXT_OUTPUT, attributes={"text": stripped})
 
 

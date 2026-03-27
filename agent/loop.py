@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from typing import Any
 
 from anthropic import APIError, AsyncAnthropic
 
@@ -14,6 +15,11 @@ from agent.llm_runtime import (
     append_hint_to_last_result,
     fallback_llm_call,
     streaming_llm_call,
+)
+from agent.output import (
+    DEFAULT_OUTPUT_SCHEMA,
+    collect_extracted_texts,
+    extract_structured_output,
 )
 from agent.prompts import build_system_prompt
 from agent.result import AgentResult, make_error_result
@@ -74,6 +80,7 @@ async def run_agent(
     client: AsyncAnthropic | None = None,
     profile_prompt: str | None = None,
     allowed_actions: frozenset[str] | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> AgentResult:
     """Run the CUA agent loop with streaming, context management, and adaptive thinking."""
     run_start = time.monotonic()
@@ -278,6 +285,20 @@ async def run_agent(
         )
 
     summary = "\n".join(text_parts) if text_parts else f"Completed in {step} steps"
+    extracted_texts = collect_extracted_texts(bridge.action_log)
+
+    structured_data = None
+    schema = output_schema or DEFAULT_OUTPUT_SCHEMA
+    if summary or extracted_texts:
+        structured_data, ext_in, ext_out = await extract_structured_output(
+            summary=summary,
+            extracted_texts=extracted_texts,
+            output_schema=schema,
+            client=client,
+            model=model,
+        )
+        total_input_tokens += ext_in
+        total_output_tokens += ext_out
 
     return AgentResult(
         success=True,
@@ -287,4 +308,6 @@ async def run_agent(
         total_duration_ms=int((time.monotonic() - run_start) * 1000),
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
+        data=structured_data,
+        extracted_texts=extracted_texts,
     )

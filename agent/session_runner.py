@@ -129,6 +129,7 @@ async def run_sandbox_session(
                 on_action=push_action,
                 profile_prompt=profile_prompt,
                 allowed_actions=scope.allowed_actions,
+                output_schema=config.output_schema,
             )
         except APIError as exc:
             log.error("Agent loop crashed with API error: %s", exc)
@@ -164,12 +165,19 @@ async def run_sandbox_session(
 
         if result.success:
             log.info("Agent succeeded: %s", (result.summary or "")[:200])
-            await complete_run(summary=result.summary)
+            await complete_run(
+                summary=result.summary,
+                data=result.data,
+                extracted_texts=result.extracted_texts,
+            )
             run_span.set_status(otel_trace.StatusCode.OK)
         else:
             error_text = str(result.error) if result.error is not None else ""
             log.error("Agent failed: %s", error_text)
-            await complete_run(error=result.error)
+            await complete_run(
+                error=result.error,
+                extracted_texts=result.extracted_texts,
+            )
             run_span.set_status(otel_trace.StatusCode.ERROR, error_text)
 
         run_span.add_event(

@@ -171,3 +171,4 @@ class PlaybookResult:
     error: str | None = None
     screenshot_b64: str | None = None  # Final screenshot on completion/failure
     extracted_text: str | None = None  # Data extracted during execution
+    data: dict[str, Any] | None = None  # Schema-driven structured extraction

@@ -15,6 +15,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -60,11 +61,18 @@ def push_action(action: ActionLog) -> None:
             log.warning("Subscriber queue full, dropping action %d", action.step)
 
 
-async def complete_run(summary: str | None = None, error: str | None = None) -> None:
+async def complete_run(
+    summary: str | None = None,
+    error: str | None = None,
+    data: dict[str, Any] | None = None,
+    extracted_texts: list[str] | None = None,
+) -> None:
     """Mark the run as completed or failed. Called by the agent loop on exit."""
     _status.status = "failed" if error else "completed"
     _status.result = summary
     _status.error = error
+    _status.data = data
+    _status.extracted_texts = extracted_texts or []
     _status.duration_ms = int((time.monotonic() - _run_start) * 1000)
     for q in list(_subscribers):
         try:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -72,6 +72,7 @@ class RunConfig(BaseModel):
     proxy: str | None = None
     guardrails: GuardrailSettings | None = None
     recording: RecordingSettings | None = None
+    output_schema: dict[str, Any] | None = None
 
 
 class RunResponse(BaseModel):
@@ -92,3 +93,5 @@ class RunStatus(BaseModel):
     result: str | None = None
     error: str | None = None
     duration_ms: int | None = None
+    data: dict[str, Any] | None = None
+    extracted_texts: list[str] = Field(default_factory=list)
