@@ -29,10 +29,12 @@ class PlaybookRunner:
         browser: BrowserManager,
         recording: RecordingManager | None = None,
         step_executor: PlaybookStepExecutor | None = None,
+        output_schema: dict[str, Any] | None = None,
     ) -> None:
         self._browser = browser
         self._recording = recording
         self._executor = step_executor or PlaybookStepExecutor()
+        self._output_schema = output_schema
 
     async def execute(
         self,
@@ -122,12 +124,17 @@ class PlaybookRunner:
 
         total_ms = int((time.monotonic() - start) * 1000)
         log.info("Playbook '%s' completed in %dms", playbook.id, total_ms)
+
+        # Structured extraction from collected texts
+        data = await self._extract_structured_data(step_results, playbook)
+
         return PlaybookResult(
             playbook_id=playbook.id,
             success=True,
             step_results=step_results,
             total_duration_ms=total_ms,
             extracted_text=final_extracted,
+            data=data,
         )
 
     async def _run_with_policy(
@@ -215,7 +222,7 @@ class PlaybookRunner:
                 directive=directive,
                 bridge=bridge,
                 max_steps=20,
-                thinking_budget=2048,
+                thinking="medium",
                 allowed_actions=ALL_ACTIONS,
             )
 
@@ -238,6 +245,32 @@ class PlaybookRunner:
                 error=f"LLM handoff failed: {exc}",
                 recovery_used=True,
             )
+
+    async def _extract_structured_data(
+        self,
+        step_results: list[StepResult],
+        playbook: Playbook,
+    ) -> dict[str, Any] | None:
+        """Run post-execution structured extraction from collected texts."""
+        extracted_texts = [
+            sr.extracted_text for sr in step_results if sr.extracted_text and sr.success
+        ]
+        if not extracted_texts:
+            return None
+
+        try:
+            from agent.output import DEFAULT_OUTPUT_SCHEMA, extract_structured_output
+
+            schema = self._output_schema or DEFAULT_OUTPUT_SCHEMA
+            data, _, _ = await extract_structured_output(
+                summary=f"Playbook '{playbook.name}' completed successfully.",
+                extracted_texts=extracted_texts,
+                output_schema=schema,
+            )
+            return data
+        except Exception as exc:
+            log.warning("Structured extraction failed: %s", exc)
+            return None
 
     async def _capture_failure_screenshot(self, page: Any) -> str | None:
         try:

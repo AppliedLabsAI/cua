@@ -1,4 +1,4 @@
-"""LLM-based action validation using Haiku.
+"""LLM-based action validation using Pydantic AI.
 
 Validates potentially risky actions before execution by asking Haiku
 whether the action is aligned with the task directive and safe to perform.
@@ -13,14 +13,16 @@ import json
 import logging
 import re
 
-from settings import SAFETY_MODEL
+from pydantic import BaseModel
+from pydantic_ai import Agent
+
+from settings import UTILITY_MODEL
 from telemetry import get_tracer
 from telemetry.metrics import safety_degraded_total
 from telemetry.spans import (
     ATTR_GENAI_INPUT_TOKENS,
     ATTR_GENAI_MODEL,
     ATTR_GENAI_OUTPUT_TOKENS,
-    ATTR_GENAI_SYSTEM,
     ATTR_GUARD_ALLOWED,
     ATTR_GUARD_REASON,
 )
@@ -76,10 +78,21 @@ Rules:
 - BLOCK actions that delete data, modify accounts, or send messages \
 UNLESS the user's task explicitly requires it
 - BLOCK navigation to completely unrelated external domains
-- When in doubt, ALLOW the action
+- When in doubt, ALLOW the action"""
 
-Respond with ONLY a JSON object:
-{{"safe": true, "reason": "brief reason"}} or {{"safe": false, "reason": "brief reason"}}"""
+
+class ValidationResult(BaseModel):
+    """Structured response from the action validator."""
+
+    safe: bool = True
+    reason: str = ""
+
+
+_validator_agent = Agent[None, ValidationResult](
+    UTILITY_MODEL,
+    output_type=ValidationResult,
+    model_settings={"max_tokens": 100},
+)
 
 
 class ActionValidator:
@@ -88,18 +101,10 @@ class ActionValidator:
     def __init__(self, directive: str) -> None:
         self.directive = directive
         self._enabled = True
-        self._client = None
         self._approved_domains: set[str] = set()  # domains already validated
         self._approved_selectors: set[str] = set()  # click targets already validated
 
-    def _get_client(self):
-        if self._client is None:
-            from anthropic import Anthropic
-
-            self._client = Anthropic()
-        return self._client
-
-    def validate(
+    async def validate(
         self,
         action: str,
         tool_input: dict,
@@ -168,35 +173,23 @@ class ActionValidator:
         with tracer.start_as_current_span(
             "cua.blinders.validate_action",
             attributes={
-                ATTR_GENAI_SYSTEM: "anthropic",
-                ATTR_GENAI_MODEL: SAFETY_MODEL,
+                ATTR_GENAI_MODEL: UTILITY_MODEL,
                 "cua.blinders.action": action_desc,
             },
         ) as span:
             try:
-                response = self._get_client().messages.create(
-                    model=SAFETY_MODEL,
-                    max_tokens=100,
-                    messages=[{"role": "user", "content": prompt}],
-                )
+                result = await _validator_agent.run(prompt)
+                usage = result.usage()
 
                 span.set_attributes(
                     {
-                        ATTR_GENAI_INPUT_TOKENS: response.usage.input_tokens,
-                        ATTR_GENAI_OUTPUT_TOKENS: response.usage.output_tokens,
+                        ATTR_GENAI_INPUT_TOKENS: usage.input_tokens or 0,
+                        ATTR_GENAI_OUTPUT_TOKENS: usage.output_tokens or 0,
                     }
                 )
 
-                block = response.content[0]
-                text: str = str(block.text) if hasattr(block, "text") else ""
-                text = text.strip()
-
-                if text.startswith("```"):
-                    text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-                data = json.loads(text)
-                is_safe = data.get("safe", True)
-                reason = data.get("reason", "")
+                is_safe = result.output.safe
+                reason = result.output.reason
 
                 if not is_safe:
                     log.warning("Action validator blocked %s: %s", action_desc, reason)

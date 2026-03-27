@@ -19,8 +19,7 @@ from telemetry.spans import (
     ATTR_GENAI_MAX_TOKENS,
     ATTR_GENAI_MODEL,
     ATTR_GENAI_OUTPUT_TOKENS,
-    ATTR_GENAI_SYSTEM,
-    ATTR_GENAI_THINKING_BUDGET,
+    ATTR_GENAI_THINKING,
     ATTR_LLM_HAS_TOOL_CALLS,
     ATTR_LLM_STREAMING,
     ATTR_LLM_TEXT_RESPONSE,
@@ -55,14 +54,13 @@ def _strip_dom(text: str) -> str:
 
 
 def llm_span_attrs(
-    model: str, max_tokens: int, thinking_budget: int, streaming: bool
+    model: str, max_tokens: int, thinking: str | bool, streaming: bool
 ) -> dict[str, Any]:
     """Build initial attributes for an LLM call span."""
     return {
-        ATTR_GENAI_SYSTEM: "anthropic",
         ATTR_GENAI_MODEL: model,
         ATTR_GENAI_MAX_TOKENS: max_tokens,
-        ATTR_GENAI_THINKING_BUDGET: thinking_budget,
+        ATTR_GENAI_THINKING: str(thinking),
         ATTR_LLM_STREAMING: streaming,
     }
 

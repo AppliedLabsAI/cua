@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 
-from anthropic import APIError
 from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 
@@ -84,7 +83,7 @@ async def run_sandbox_session(
                     log.info("Session recording started")
 
                 with tracer.start_as_current_span(BLINDERS_EXTRACT):
-                    scope = extract_task_scope(config.directive, config.profile)
+                    scope = await extract_task_scope(config.directive, config.profile)
                     blinders = DOMBlinders(scope)
 
                 setup_span.set_attributes(
@@ -124,21 +123,13 @@ async def run_sandbox_session(
                 bridge=bridge,
                 model=config.model,
                 max_steps=config.max_steps,
-                thinking_budget=config.thinking_budget,
+                thinking=config.thinking,
                 credentials=config.credentials,
                 on_action=push_action,
                 profile_prompt=profile_prompt,
                 allowed_actions=scope.allowed_actions,
                 output_schema=config.output_schema,
             )
-        except APIError as exc:
-            log.error("Agent loop crashed with API error: %s", exc)
-            run_span.set_status(otel_trace.StatusCode.ERROR, str(exc))
-            run_span.record_exception(exc)
-            active_sessions().add(-1)
-            sessions_total().add(1, {"status": "failed"})
-            await complete_run(error=str(exc))
-            return 1
         except Exception as exc:
             log.error("Agent loop crashed: %s", exc, exc_info=True)
             run_span.set_status(otel_trace.StatusCode.ERROR, str(exc))

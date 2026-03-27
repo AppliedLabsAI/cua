@@ -104,7 +104,6 @@ def test_attribute_keys_are_strings():
         spans.ATTR_TOOL_ACTION,
         spans.ATTR_TOOL_STEP,
         spans.ATTR_GUARD_ALLOWED,
-        spans.ATTR_GENAI_SYSTEM,
         spans.ATTR_GENAI_INPUT_TOKENS,
         spans.ATTR_BROWSER_ACTION,
     ]

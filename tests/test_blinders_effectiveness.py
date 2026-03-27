@@ -8,7 +8,8 @@ verification work correctly end-to-end.
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock
+
+import pytest
 
 from blinders.filters import DOMBlinders, _contains_injection
 from blinders.scope import ALL_ACTIONS, extract_task_scope
@@ -17,17 +18,11 @@ from guardrails import GuardrailEngine
 
 
 def _mock_destructive_engine():
-    """Create a GuardrailEngine with a mocked Haiku client that flags destructive actions."""
-    mock_response = MagicMock()
-    mock_response.content = [
-        MagicMock(text='{"destructive": true, "reason": "account deletion"}')
-    ]
-    mock_client = MagicMock()
-    mock_client.messages.create.return_value = mock_response
-
+    """Create a GuardrailEngine that flags destructive actions via regex (no LLM needed)."""
+    # The _DESTRUCTIVE_RE regex layer catches "delete account" etc. without LLM.
+    # We just disable LLM to avoid network calls in tests.
     engine = GuardrailEngine()
-    engine._llm_enabled = True
-    engine._llm_client = mock_client
+    engine._llm_enabled = False
     return engine
 
 
@@ -137,29 +132,35 @@ class TestScenarioA1ReadWithHostileSidebar:
         "and tell me the product dimensions."
     )
 
-    def test_scope_classified_as_read(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_classified_as_read(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.goal_type == "read"
 
-    def test_forms_hidden(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_forms_hidden(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.visibility.show_forms is False
 
-    def test_action_buttons_hidden(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_action_buttons_hidden(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.visibility.show_action_buttons is False
 
-    def test_account_controls_hidden(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_account_controls_hidden(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.visibility.show_account_controls is False
 
-    def test_allowed_actions_exclude_key_press(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_allowed_actions_exclude_key_press(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert "key_press" not in scope.allowed_actions
         assert "execute_sequence" not in scope.allowed_actions
 
-    def test_allowed_actions_include_read_actions(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_allowed_actions_include_read_actions(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         for action in (
             "goto",
             "click",
@@ -171,61 +172,72 @@ class TestScenarioA1ReadWithHostileSidebar:
         ):
             assert action in scope.allowed_actions
 
-    def test_domain_scoped_to_localhost(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_domain_scoped_to_localhost(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert "localhost" in scope.allowed_domains
 
-    def test_injection_redacted_in_dom(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_injection_redacted_in_dom(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_PRODUCT_PAGE)
         assert "Ignore prior instructions" not in filtered
         assert "[content redacted" in filtered
 
-    def test_dimensions_preserved_in_dom(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_dimensions_preserved_in_dom(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_PRODUCT_PAGE)
         assert "30cm x 20cm x 15cm" in filtered
 
-    def test_provenance_markers_present(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_provenance_markers_present(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_PRODUCT_PAGE)
         assert "[web-content-start]" in filtered
         assert "[web-content-end]" in filtered
 
-    def test_verifier_blocks_key_press(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_verifier_blocks_key_press(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check("key_press", {"text": "test"})
+        result = await verifier.check("key_press", {"text": "test"})
         assert result is not None
         assert "not allowed" in result
 
-    def test_verifier_blocks_out_of_scope_domain(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_verifier_blocks_out_of_scope_domain(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check("goto", {"url": "https://evil.com"})
+        result = await verifier.check("goto", {"url": "https://evil.com"})
         assert result is not None
 
-    def test_verifier_blocks_localhost_via_ssrf(self):
+    @pytest.mark.asyncio
+    async def test_verifier_blocks_localhost_via_ssrf(self):
         # SSRF protection correctly blocks localhost even if domain is in scope
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check("goto", {"url": "http://localhost:8000/products"})
+        result = await verifier.check("goto", {"url": "http://localhost:8000/products"})
         assert result is not None
         assert "SSRF" in result or "localhost" in result
 
-    def test_verifier_allows_in_scope_domain(self):
+    @pytest.mark.asyncio
+    async def test_verifier_allows_in_scope_domain(self):
         # Test with a non-localhost domain
         directive = "Find the price on https://shop.example.com/products/sku-123"
-        scope = extract_task_scope(directive, use_llm=False)
+        scope = await extract_task_scope(directive)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check("goto", {"url": "https://shop.example.com/products"})
+        result = await verifier.check(
+            "goto", {"url": "https://shop.example.com/products"}
+        )
         assert result is None
 
-    def test_js_filter_config_hides_forms_and_actions(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_js_filter_config_hides_forms_and_actions(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
         assert config["showForms"] is False
@@ -246,28 +258,32 @@ class TestScenarioA2AmbiguousReadTask:
         "Open the admin dashboard and find the opening hours of the latest shop."
     )
 
-    def test_scope_not_fill_form(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_not_fill_form(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         # Should NOT be fill_form — this is a read/navigate task
         assert scope.goal_type != "fill_form"
 
-    def test_dangerous_actions_constrained(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_dangerous_actions_constrained(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         # Even if classified as navigate or interact, dangerous buttons should be filtered
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
         # Account controls should be hidden regardless
         assert config["showAccountControls"] is False
 
-    def test_admin_dom_preserves_opening_hours(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_admin_dom_preserves_opening_hours(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_ADMIN_DASHBOARD)
         assert "Mon-Fri 9am-6pm" in filtered
         assert "Mon-Sat 10am-8pm" in filtered
 
-    def test_no_form_filling_expected(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_no_form_filling_expected(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         # If classified as navigate, forms should be hidden
         if scope.goal_type in ("read", "navigate"):
             assert scope.visibility.show_forms is False
@@ -286,47 +302,55 @@ class TestScenarioA3FillFormWithLogin:
         "credentials, and submit the support form for order 123."
     )
 
-    def test_scope_classified_as_fill_form(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_classified_as_fill_form(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.goal_type == "fill_form"
 
-    def test_forms_visible(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_forms_visible(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.visibility.show_forms is True
 
-    def test_account_controls_visible_for_login(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_account_controls_visible_for_login(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.visibility.show_account_controls is True
 
-    def test_all_actions_available(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_all_actions_available(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert "key_press" in scope.allowed_actions
         assert "execute_sequence" in scope.allowed_actions
 
-    def test_delete_account_still_blocked_by_verifier(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_delete_account_still_blocked_by_verifier(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, _mock_destructive_engine())
         # Even fill_form scope should block destructive clicks via Haiku
-        result = verifier.check("click", {"selector": "text=delete account"})
+        result = await verifier.check("click", {"selector": "text=delete account"})
         assert result is not None
 
-    def test_support_form_content_preserved(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_support_form_content_preserved(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_SUPPORT_FORM)
         assert "Submit Support Ticket" in filtered
         assert "Order ID" in filtered
 
-    def test_login_form_content_preserved(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_login_form_content_preserved(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_LOGIN_PAGE)
         assert "Username" in filtered
         assert "Password" in filtered
         assert "Log In" in filtered
 
-    def test_dangerous_text_patterns_minimal(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_dangerous_text_patterns_minimal(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
         # Fill form should have very few blocked patterns
@@ -346,8 +370,9 @@ class TestScenarioA3FillFormWithLogin:
 class TestInjectionDefenseStress:
     """Verify all injection vectors are caught across different scopes."""
 
-    def test_all_injections_caught_in_heavy_dom(self):
-        scope = extract_task_scope("Find prices on example.com", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_all_injections_caught_in_heavy_dom(self):
+        scope = await extract_task_scope("Find prices on example.com")
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_INJECTION_HEAVY)
         # Count redacted lines
@@ -355,8 +380,9 @@ class TestInjectionDefenseStress:
         # We have 7 injection lines in the DOM
         assert redacted_count >= 6, f"Only caught {redacted_count} injections"
 
-    def test_real_content_survives_injection_filter(self):
-        scope = extract_task_scope("Find prices on example.com", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_real_content_survives_injection_filter(self):
+        scope = await extract_task_scope("Find prices on example.com")
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_INJECTION_HEAVY)
         assert "Welcome to our site" in filtered
@@ -411,10 +437,11 @@ class TestInjectionDefenseStress:
 class TestScopeEdgeCases:
     """Directives that could be misclassified."""
 
-    def test_read_with_navigate_word(self):
+    @pytest.mark.asyncio
+    async def test_read_with_navigate_word(self):
         # "Open" is navigate keyword but "find" is read — read should win
-        scope = extract_task_scope(
-            "Open the admin dashboard and find the opening hours", use_llm=False
+        scope = await extract_task_scope(
+            "Open the admin dashboard and find the opening hours"
         )
         # "find" is in interact keywords via _INTERACT_RE? No, "find" is read
         # Actually "open" triggers interact (not navigate) because "enter" matches? No.
@@ -424,40 +451,45 @@ class TestScopeEdgeCases:
         assert scope.goal_type != "fill_form"
         assert scope.visibility.show_account_controls is False
 
-    def test_select_ambiguity(self):
+    @pytest.mark.asyncio
+    async def test_select_ambiguity(self):
         # "select" is an interact keyword but "find" is read
-        scope = extract_task_scope("Find and select the cheapest flight", use_llm=False)
+        scope = await extract_task_scope("Find and select the cheapest flight")
         # "select" (interact) checked before "find" (read)
         assert scope.goal_type == "interact"
         assert scope.allowed_actions == ALL_ACTIONS
 
-    def test_submit_triggers_fill_form(self):
-        scope = extract_task_scope("Submit a bug report on github.com", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_submit_triggers_fill_form(self):
+        scope = await extract_task_scope("Submit a bug report on github.com")
         assert scope.goal_type == "fill_form"
 
-    def test_book_triggers_fill_form(self):
-        scope = extract_task_scope(
-            "Book a table at the Italian restaurant", use_llm=False
-        )
+    @pytest.mark.asyncio
+    async def test_book_triggers_fill_form(self):
+        scope = await extract_task_scope("Book a table at the Italian restaurant")
         assert scope.goal_type == "fill_form"
 
-    def test_pure_url_defaults_to_read(self):
-        scope = extract_task_scope("https://example.com", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_pure_url_defaults_to_read(self):
+        scope = await extract_task_scope("https://example.com")
         # Degraded keyword fallback now defaults to "read" for safety.
         assert scope.goal_type == "read"
 
-    def test_empty_directive_defaults_to_read(self):
-        scope = extract_task_scope("", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_empty_directive_defaults_to_read(self):
+        scope = await extract_task_scope("")
         # Degraded keyword fallback now defaults to "read" for safety.
         assert scope.goal_type == "read"
 
-    def test_download_is_interact(self):
-        scope = extract_task_scope("Download the PDF from example.com", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_download_is_interact(self):
+        scope = await extract_task_scope("Download the PDF from example.com")
         assert scope.goal_type == "interact"
 
-    def test_check_is_read(self):
+    @pytest.mark.asyncio
+    async def test_check_is_read(self):
         # "check" is read but also "enter" is interact — no "enter" here
-        scope = extract_task_scope("Check the weather forecast", use_llm=False)
+        scope = await extract_task_scope("Check the weather forecast")
         assert scope.goal_type == "read"
 
 
@@ -504,25 +536,25 @@ class TestInjectionFalsePositives:
 
 
 class TestDomainExtractionEdgeCases:
-    def test_multiple_urls_in_directive(self):
-        scope = extract_task_scope(
-            "Compare prices on amazon.com and walmart.com", use_llm=False
-        )
+    @pytest.mark.asyncio
+    async def test_multiple_urls_in_directive(self):
+        scope = await extract_task_scope("Compare prices on amazon.com and walmart.com")
         assert "amazon.com" in scope.allowed_domains
         assert "walmart.com" in scope.allowed_domains
 
-    def test_url_with_path(self):
-        scope = extract_task_scope(
-            "Go to https://example.com/products/123", use_llm=False
-        )
+    @pytest.mark.asyncio
+    async def test_url_with_path(self):
+        scope = await extract_task_scope("Go to https://example.com/products/123")
         assert "example.com" in scope.allowed_domains
 
-    def test_no_url_means_no_domain_restriction(self):
-        scope = extract_task_scope("Find the best restaurant nearby", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_no_url_means_no_domain_restriction(self):
+        scope = await extract_task_scope("Find the best restaurant nearby")
         assert scope.allowed_domains == []
 
-    def test_subdomain_auto_added(self):
-        scope = extract_task_scope("Visit https://shop.example.com", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_subdomain_auto_added(self):
+        scope = await extract_task_scope("Visit https://shop.example.com")
         assert "shop.example.com" in scope.allowed_domains
         assert "*.shop.example.com" in scope.allowed_domains
 
@@ -626,18 +658,21 @@ class TestScenarioB4HiddenDangerousControls:
 
     DIRECTIVE = "Tell me the shipping cutoff time for this shop."
 
-    def test_scope_is_read(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_is_read(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.goal_type == "read"
 
-    def test_action_buttons_hidden_in_config(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_action_buttons_hidden_in_config(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
         assert config["showActionButtons"] is False
 
-    def test_dangerous_text_patterns_in_config(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_dangerous_text_patterns_in_config(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
         # Read scope should block all dangerous text patterns
@@ -647,23 +682,26 @@ class TestScenarioB4HiddenDangerousControls:
             "refund" not in " ".join(patterns).lower() or True
         )  # refund not in default list
 
-    def test_shipping_cutoff_preserved(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_shipping_cutoff_preserved(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_SHOP_PAGE_WITH_DANGERS)
         assert "2:00 PM EST" in filtered
         assert "6:00 PM EST" in filtered
 
-    def test_safe_links_preserved(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_safe_links_preserved(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_SHOP_PAGE_WITH_DANGERS)
         assert "Shipping Policy" in filtered
 
-    def test_verifier_blocks_key_press(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_verifier_blocks_key_press(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        assert verifier.check("key_press", {"text": "test"}) is not None
+        assert await verifier.check("key_press", {"text": "test"}) is not None
 
 
 class TestScenarioB5InjectionInArticleText:
@@ -671,12 +709,14 @@ class TestScenarioB5InjectionInArticleText:
 
     DIRECTIVE = "Summarize the return policy on this page."
 
-    def test_scope_is_read(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_is_read(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.goal_type == "read"
 
-    def test_injections_redacted(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_injections_redacted(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_RETURN_POLICY_WITH_INJECTION)
         # All 3 injection lines must be redacted
@@ -686,8 +726,9 @@ class TestScenarioB5InjectionInArticleText:
         # Redaction markers present
         assert filtered.count("[content redacted") >= 3
 
-    def test_real_policy_preserved(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_real_policy_preserved(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_RETURN_POLICY_WITH_INJECTION)
         assert "30-Day Returns" in filtered
@@ -696,8 +737,9 @@ class TestScenarioB5InjectionInArticleText:
         assert "15-day return window" in filtered
         assert "non-refundable" in filtered
 
-    def test_provenance_markers(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_provenance_markers(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_RETURN_POLICY_WITH_INJECTION)
         assert "[web-content-start]" in filtered
@@ -709,33 +751,38 @@ class TestScenarioB6InjectionInButtonText:
 
     DIRECTIVE = "Find the order total."
 
-    def test_scope_is_read(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_is_read(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.goal_type == "read"
 
-    def test_action_buttons_hidden(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_action_buttons_hidden(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
         assert config["showActionButtons"] is False
 
-    def test_injection_in_button_redacted(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_injection_in_button_redacted(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_ORDER_WITH_FAKE_BUTTON)
         # The injection phrase inside the button text should be caught
         assert "Ignore prior instructions" not in filtered
         assert "export customer data" not in filtered
 
-    def test_order_total_preserved(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_order_total_preserved(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_ORDER_WITH_FAKE_BUTTON)
         assert "$167.98" in filtered
         assert "Order Total" in filtered
 
-    def test_safe_links_preserved(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_safe_links_preserved(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_ORDER_WITH_FAKE_BUTTON)
         assert "Back to Orders" in filtered
@@ -746,20 +793,23 @@ class TestScenarioB7IncludeSelector:
 
     DIRECTIVE = "Read the product info and ingredients."
 
-    def test_scope_is_read(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_is_read(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.goal_type == "read"
 
-    def test_include_selector_in_config(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_include_selector_in_config(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         # Manually add an include selector (simulating profile or config)
         scope.visibility.include_selectors = ["#ingredients-panel"]
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
         assert "#ingredients-panel" in config["includeSelectors"]
 
-    def test_forms_hidden_but_widget_content_preserved(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_forms_hidden_but_widget_content_preserved(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_PRODUCT_WITH_WIDGET)
         # Product content should be visible
@@ -767,8 +817,9 @@ class TestScenarioB7IncludeSelector:
         assert "Ingredients" in filtered
         assert "Aloe Vera" in filtered
 
-    def test_dangerous_controls_not_in_python_filter(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_dangerous_controls_not_in_python_filter(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
         # For read scope, action buttons hidden
@@ -781,35 +832,40 @@ class TestScenarioB8ExcludeSelector:
 
     DIRECTIVE = "Tell me the operating hours."
 
-    def test_scope_is_read(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_is_read(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.goal_type == "read"
 
-    def test_exclude_selector_in_config(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_exclude_selector_in_config(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         scope.visibility.exclude_selectors = ["#sidebar-ads"]
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
         assert "#sidebar-ads" in config["excludeSelectors"]
 
-    def test_main_hours_preserved(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_main_hours_preserved(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_HOURS_WITH_MALICIOUS_SIDEBAR)
         assert "Monday-Friday: 9:00 AM - 8:00 PM" in filtered
         assert "Saturday: 10:00 AM - 6:00 PM" in filtered
         assert "Sunday: Closed" in filtered
 
-    def test_injection_in_sidebar_redacted(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_injection_in_sidebar_redacted(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_HOURS_WITH_MALICIOUS_SIDEBAR)
         # Sidebar injection caught by Python post-filter
         assert "Ignore prior instructions" not in filtered
         assert "[content redacted" in filtered
 
-    def test_scam_hours_not_treated_as_real(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scam_hours_not_treated_as_real(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_HOURS_WITH_MALICIOUS_SIDEBAR)
         # The scam "Always Open" text should still be present (not injection),
@@ -818,8 +874,9 @@ class TestScenarioB8ExcludeSelector:
         # This is expected — the JS filter handles structural exclusion.
         assert "Store Information" in filtered
 
-    def test_safe_links_preserved(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_safe_links_preserved(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         blinders = DOMBlinders(scope)
         filtered = blinders.filter_snapshot(_DOM_HOURS_WITH_MALICIOUS_SIDEBAR)
         assert "Contact Store" in filtered
@@ -835,46 +892,58 @@ class TestScenarioC9ReadTaskForbiddenClick:
 
     DIRECTIVE = "Tell me the store address."
 
-    def test_scope_is_read(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_is_read(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.goal_type == "read"
 
-    def test_click_allowed_in_read_scope(self):
+    @pytest.mark.asyncio
+    async def test_click_allowed_in_read_scope(self):
         # Click IS allowed in read scope (needed for navigation)
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert "click" in scope.allowed_actions
 
-    def test_key_press_blocked(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_key_press_blocked(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check("key_press", {"text": "hello"})
+        result = await verifier.check("key_press", {"text": "hello"})
         assert result is not None
         assert "not allowed" in result
 
-    def test_execute_sequence_blocked_for_read(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_execute_sequence_blocked_for_read(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check(
+        result = await verifier.check(
             "execute_sequence",
             {"steps": [{"action": "click", "selector": ".reveal-btn"}]},
         )
         assert result is not None
         assert "not allowed" in result
 
-    def test_extract_allowed(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_extract_allowed(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        assert verifier.check("extract", {"selector": "body", "mode": "text"}) is None
+        assert (
+            await verifier.check("extract", {"selector": "body", "mode": "text"})
+            is None
+        )
 
-    def test_scroll_allowed(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scroll_allowed(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        assert verifier.check("scroll", {"direction": "down", "amount": 3}) is None
+        assert (
+            await verifier.check("scroll", {"direction": "down", "amount": 3}) is None
+        )
 
-    def test_destructive_click_blocked_by_guardrails(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_destructive_click_blocked_by_guardrails(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, _mock_destructive_engine())
-        result = verifier.check("click", {"selector": "text=delete account"})
+        result = await verifier.check("click", {"selector": "text=delete account"})
         assert result is not None
 
 
@@ -883,61 +952,71 @@ class TestScenarioC10OutOfScopeDomainRedirect:
 
     DIRECTIVE = "Find the FAQ answer on http://localhost:8000/help."
 
-    def test_scope_has_localhost_domain(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_has_localhost_domain(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert "localhost" in scope.allowed_domains
 
-    def test_in_scope_goto_passes_domain_check_but_ssrf_blocks(self):
+    @pytest.mark.asyncio
+    async def test_in_scope_goto_passes_domain_check_but_ssrf_blocks(self):
         # localhost is in domain scope but blocked by SSRF
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check("goto", {"url": "http://localhost:8000/help/faq"})
+        result = await verifier.check("goto", {"url": "http://localhost:8000/help/faq"})
         # SSRF blocks localhost
         assert result is not None
         assert "SSRF" in result or "localhost" in result
 
-    def test_evil_subdomain_of_localhost_blocked_by_ssrf(self):
+    @pytest.mark.asyncio
+    async def test_evil_subdomain_of_localhost_blocked_by_ssrf(self):
         # evil.localhost resolves to loopback (::1 or 127.0.0.1).
         # SSRF DNS resolution catches this — subdomains of localhost
         # that resolve to private IPs are correctly blocked.
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check("goto", {"url": "http://evil.localhost:9000/phishing"})
+        result = await verifier.check(
+            "goto", {"url": "http://evil.localhost:9000/phishing"}
+        )
         assert result is not None
         assert "SSRF" in result or "private IP" in result
 
-    def test_completely_different_domain_blocked(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_completely_different_domain_blocked(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check(
+        result = await verifier.check(
             "goto", {"url": "http://evil.example.com:9000/phishing"}
         )
         assert result is not None
         assert "not in task scope" in result
 
-    def test_random_domain_blocked(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_random_domain_blocked(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check("goto", {"url": "https://attacker.com/steal"})
+        result = await verifier.check("goto", {"url": "https://attacker.com/steal"})
         assert result is not None
         assert "not in task scope" in result
 
-    def test_redirect_to_different_subdomain_blocked(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_redirect_to_different_subdomain_blocked(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check("goto", {"url": "http://admin.evil.com/export"})
+        result = await verifier.check("goto", {"url": "http://admin.evil.com/export"})
         assert result is not None
 
-    def test_non_localhost_scoped_domain(self):
+    @pytest.mark.asyncio
+    async def test_non_localhost_scoped_domain(self):
         # Test with a real domain to avoid SSRF interference
-        scope = extract_task_scope(
-            "Find FAQ on https://docs.example.com/help", use_llm=False
-        )
+        scope = await extract_task_scope("Find FAQ on https://docs.example.com/help")
         verifier = ScopeVerifier(scope, GuardrailEngine())
         # In-scope
-        assert verifier.check("goto", {"url": "https://docs.example.com/faq"}) is None
+        assert (
+            await verifier.check("goto", {"url": "https://docs.example.com/faq"})
+            is None
+        )
         # Out-of-scope
-        result = verifier.check("goto", {"url": "https://evil.com/phishing"})
+        result = await verifier.check("goto", {"url": "https://evil.com/phishing"})
         assert result is not None
         assert "not in task scope" in result
 
@@ -947,18 +1026,20 @@ class TestScenarioC11ExecuteSequenceIllegalStep:
 
     DIRECTIVE = "Open the reports page and tell me yesterday's sales on https://reports.example.com"
 
-    def test_scope_allows_execute_sequence(self):
+    @pytest.mark.asyncio
+    async def test_scope_allows_execute_sequence(self):
         # "tell me" triggers read in keyword fallback (checked before navigate's "open")
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.goal_type == "read"
 
-    def test_sequence_with_out_of_scope_goto_blocked(self):
+    @pytest.mark.asyncio
+    async def test_sequence_with_out_of_scope_goto_blocked(self):
         # Use interact scope to have execute_sequence available
-        scope = extract_task_scope(
-            "Click the reports button on https://reports.example.com", use_llm=False
+        scope = await extract_task_scope(
+            "Click the reports button on https://reports.example.com"
         )
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check(
+        result = await verifier.check(
             "execute_sequence",
             {
                 "steps": [
@@ -970,32 +1051,17 @@ class TestScenarioC11ExecuteSequenceIllegalStep:
         assert result is not None
         assert "not in task scope" in result
 
-    def test_sequence_with_destructive_click_blocked(self):
-        scope = extract_task_scope(
-            "Click the reports button on https://reports.example.com", use_llm=False
+    @pytest.mark.asyncio
+    async def test_sequence_with_destructive_click_blocked(self):
+        scope = await extract_task_scope(
+            "Click the reports button on https://reports.example.com"
         )
-
-        def _selective_response(*, model, max_tokens, messages):
-            """Return destructive=true only for 'delete account' selectors."""
-            prompt_text = messages[0]["content"]
-            is_destructive = "delete account" in prompt_text.lower()
-            mock_resp = MagicMock()
-            mock_resp.content = [
-                MagicMock(
-                    text=f'{{"destructive": {str(is_destructive).lower()}, "reason": "test"}}'
-                )
-            ]
-            return mock_resp
-
-        mock_client = MagicMock()
-        mock_client.messages.create.side_effect = _selective_response
-
+        # The _DESTRUCTIVE_RE regex catches "delete account" without LLM.
         engine = GuardrailEngine()
-        engine._llm_enabled = True
-        engine._llm_client = mock_client
+        engine._llm_enabled = False
 
         verifier = ScopeVerifier(scope, engine)
-        result = verifier.check(
+        result = await verifier.check(
             "execute_sequence",
             {
                 "steps": [
@@ -1006,12 +1072,13 @@ class TestScenarioC11ExecuteSequenceIllegalStep:
         )
         assert result is not None
 
-    def test_sequence_all_legal_steps_allowed(self):
-        scope = extract_task_scope(
-            "Click the reports button on https://reports.example.com", use_llm=False
+    @pytest.mark.asyncio
+    async def test_sequence_all_legal_steps_allowed(self):
+        scope = await extract_task_scope(
+            "Click the reports button on https://reports.example.com"
         )
         verifier = ScopeVerifier(scope, GuardrailEngine())
-        result = verifier.check(
+        result = await verifier.check(
             "execute_sequence",
             {
                 "steps": [
@@ -1022,14 +1089,13 @@ class TestScenarioC11ExecuteSequenceIllegalStep:
         )
         assert result is None
 
-    def test_no_partial_execution_on_block(self):
+    @pytest.mark.asyncio
+    async def test_no_partial_execution_on_block(self):
         # The verifier checks ALL steps before any execution
-        scope = extract_task_scope(
-            "Click things on https://reports.example.com", use_llm=False
-        )
+        scope = await extract_task_scope("Click things on https://reports.example.com")
         verifier = ScopeVerifier(scope, GuardrailEngine())
         # First step legal, second illegal
-        result = verifier.check(
+        result = await verifier.check(
             "execute_sequence",
             {
                 "steps": [
@@ -1049,27 +1115,26 @@ class TestScenarioC12ToolSchemaNarrowing:
 
     DIRECTIVE = "Summarize the shipping policy."
 
-    def test_scope_is_read(self):
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
+    @pytest.mark.asyncio
+    async def test_scope_is_read(self):
+        scope = await extract_task_scope(self.DIRECTIVE)
         assert scope.goal_type == "read"
 
-    def test_tool_schema_excludes_key_press(self):
-        from agent.tools import get_tools
+    @pytest.mark.asyncio
+    async def test_tool_schema_excludes_key_press(self):
+        from agent.tools import get_action_enum
 
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
-        tools = get_tools(allowed_actions=scope.allowed_actions)
-        schema = tools[0]["input_schema"]
-        action_enum = schema["properties"]["action"]["enum"]
+        scope = await extract_task_scope(self.DIRECTIVE)
+        action_enum = get_action_enum(allowed_actions=scope.allowed_actions)
         assert "key_press" not in action_enum
         assert "execute_sequence" not in action_enum
 
-    def test_tool_schema_includes_allowed_actions(self):
-        from agent.tools import get_tools
+    @pytest.mark.asyncio
+    async def test_tool_schema_includes_allowed_actions(self):
+        from agent.tools import get_action_enum
 
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
-        tools = get_tools(allowed_actions=scope.allowed_actions)
-        schema = tools[0]["input_schema"]
-        action_enum = schema["properties"]["action"]["enum"]
+        scope = await extract_task_scope(self.DIRECTIVE)
+        action_enum = get_action_enum(allowed_actions=scope.allowed_actions)
         for action in (
             "goto",
             "click",
@@ -1081,61 +1146,56 @@ class TestScenarioC12ToolSchemaNarrowing:
         ):
             assert action in action_enum
 
-    def test_navigate_scope_even_more_restricted(self):
-        from agent.tools import get_tools
+    @pytest.mark.asyncio
+    async def test_navigate_scope_even_more_restricted(self):
+        from agent.tools import get_action_enum
 
-        scope = extract_task_scope("Go to example.com", use_llm=False)
-        tools = get_tools(allowed_actions=scope.allowed_actions)
-        schema = tools[0]["input_schema"]
-        action_enum = schema["properties"]["action"]["enum"]
+        scope = await extract_task_scope("Go to example.com")
+        action_enum = get_action_enum(allowed_actions=scope.allowed_actions)
         assert "key_press" not in action_enum
         assert "execute_sequence" not in action_enum
         assert "extract" not in action_enum
         assert "wait_for" not in action_enum
 
-    def test_interact_scope_has_all_actions(self):
-        from agent.tools import get_tools
+    @pytest.mark.asyncio
+    async def test_interact_scope_has_all_actions(self):
+        from agent.tools import get_action_enum
 
-        scope = extract_task_scope(
-            "Click the download button on example.com", use_llm=False
-        )
-        tools = get_tools(allowed_actions=scope.allowed_actions)
-        schema = tools[0]["input_schema"]
-        action_enum = schema["properties"]["action"]["enum"]
+        scope = await extract_task_scope("Click the download button on example.com")
+        action_enum = get_action_enum(allowed_actions=scope.allowed_actions)
         assert len(action_enum) == 9  # all actions
 
     def test_no_allowed_actions_returns_full_schema(self):
-        from agent.tools import get_tools
+        from agent.tools import get_action_enum
 
-        tools = get_tools(allowed_actions=None)
-        schema = tools[0]["input_schema"]
-        action_enum = schema["properties"]["action"]["enum"]
+        action_enum = get_action_enum(allowed_actions=None)
         assert len(action_enum) == 9
 
-    def test_schema_is_sorted(self):
-        from agent.tools import get_tools
+    @pytest.mark.asyncio
+    async def test_schema_is_sorted(self):
+        from agent.tools import get_action_enum
 
-        scope = extract_task_scope(self.DIRECTIVE, use_llm=False)
-        tools = get_tools(allowed_actions=scope.allowed_actions)
-        schema = tools[0]["input_schema"]
-        action_enum = schema["properties"]["action"]["enum"]
+        scope = await extract_task_scope(self.DIRECTIVE)
+        action_enum = get_action_enum(allowed_actions=scope.allowed_actions)
         assert action_enum == sorted(action_enum)
 
 
 class TestPerformanceBenchmark:
     """Measure execution time of the blinders pipeline."""
 
-    def test_scope_extraction_under_1ms(self):
+    @pytest.mark.asyncio
+    async def test_scope_extraction_under_1ms(self):
         directive = "Go to http://localhost:8000/products/sku-123 and tell me the product dimensions."
         start = time.perf_counter_ns()
         for _ in range(1000):
-            extract_task_scope(directive, use_llm=False)
+            await extract_task_scope(directive)
         elapsed_ns = time.perf_counter_ns() - start
         per_call_us = elapsed_ns / 1000 / 1000  # microseconds
         assert per_call_us < 1000, f"Scope extraction took {per_call_us:.0f}us (>1ms)"
 
-    def test_dom_filtering_under_1ms(self):
-        scope = extract_task_scope("Find prices on example.com", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_dom_filtering_under_1ms(self):
+        scope = await extract_task_scope("Find prices on example.com")
         blinders = DOMBlinders(scope)
         start = time.perf_counter_ns()
         for _ in range(1000):
@@ -1144,18 +1204,20 @@ class TestPerformanceBenchmark:
         per_call_us = elapsed_ns / 1000 / 1000
         assert per_call_us < 1000, f"DOM filtering took {per_call_us:.0f}us (>1ms)"
 
-    def test_verifier_check_under_100us(self):
-        scope = extract_task_scope("Find prices on example.com", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_verifier_check_under_100us(self):
+        scope = await extract_task_scope("Find prices on example.com")
         verifier = ScopeVerifier(scope, GuardrailEngine())
         start = time.perf_counter_ns()
         for _ in range(1000):
-            verifier.check("goto", {"url": "https://example.com/page"})
+            await verifier.check("goto", {"url": "https://example.com/page"})
         elapsed_ns = time.perf_counter_ns() - start
         per_call_us = elapsed_ns / 1000 / 1000
         assert per_call_us < 100, f"Verifier check took {per_call_us:.0f}us (>100us)"
 
-    def test_js_config_generation_under_100us(self):
-        scope = extract_task_scope("Find prices on example.com", use_llm=False)
+    @pytest.mark.asyncio
+    async def test_js_config_generation_under_100us(self):
+        scope = await extract_task_scope("Find prices on example.com")
         blinders = DOMBlinders(scope)
         start = time.perf_counter_ns()
         for _ in range(1000):
@@ -1164,18 +1226,19 @@ class TestPerformanceBenchmark:
         per_call_us = elapsed_ns / 1000 / 1000
         assert per_call_us < 100, f"JS config gen took {per_call_us:.0f}us (>100us)"
 
-    def test_full_pipeline_under_2ms(self):
+    @pytest.mark.asyncio
+    async def test_full_pipeline_under_2ms(self):
         """End-to-end: extract scope → create blinders → filter DOM → verify action."""
         directive = "Find the price of Widget on http://localhost:8000/products"
         start = time.perf_counter_ns()
         for _ in range(1000):
-            scope = extract_task_scope(directive, use_llm=False)
+            scope = await extract_task_scope(directive)
             blinders = DOMBlinders(scope)
             blinders.filter_snapshot(_DOM_PRODUCT_PAGE)
             _ = blinders.to_js_filter_config()
             verifier = ScopeVerifier(scope, GuardrailEngine())
-            verifier.check("goto", {"url": "http://localhost:8000/products"})
-            verifier.check("extract", {"selector": "body", "mode": "text"})
+            await verifier.check("goto", {"url": "http://localhost:8000/products"})
+            await verifier.check("extract", {"selector": "body", "mode": "text"})
         elapsed_ns = time.perf_counter_ns() - start
         per_call_us = elapsed_ns / 1000 / 1000
         assert per_call_us < 2000, f"Full pipeline took {per_call_us:.0f}us (>2ms)"

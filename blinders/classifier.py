@@ -1,4 +1,4 @@
-"""LLM-based scope classification using Haiku.
+"""LLM-based scope classification using Pydantic AI.
 
 Primary classification method for Cognitive Blinders. Uses a lightweight
 Haiku call to understand directive intent, with keyword matching as
@@ -7,19 +7,17 @@ a fast offline fallback when no API key is available.
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Any
 
-from anthropic import Anthropic
+from pydantic import BaseModel
+from pydantic_ai import Agent
 
-from settings import SAFETY_MODEL
+from settings import UTILITY_MODEL
 from telemetry import get_tracer
 from telemetry.spans import (
     ATTR_GENAI_INPUT_TOKENS,
     ATTR_GENAI_MODEL,
     ATTR_GENAI_OUTPUT_TOKENS,
-    ATTR_GENAI_SYSTEM,
 )
 
 log = logging.getLogger(__name__)
@@ -44,61 +42,50 @@ IMPORTANT rules:
 - If the task is ONLY reading/finding information but requires login first -> \
 still "fill_form" (login needs typing)
 - If unsure between read and fill_form, prefer "fill_form" (safer)
-- If unsure between navigate and interact, prefer "interact" (safer)
-
-Respond with ONLY a JSON object, no markdown:
-{"goal_type": "<type>", "needs_login": <true/false>}
-
-Directive: """
+- If unsure between navigate and interact, prefer "interact" (safer)"""
 
 
-def classify_directive(
-    directive: str,
-    client: Anthropic | None = None,
-) -> str:
+class ClassificationResult(BaseModel):
+    """Structured response from the directive classifier."""
+
+    goal_type: str
+    needs_login: bool = False
+
+
+_classifier = Agent[None, ClassificationResult](
+    UTILITY_MODEL,
+    output_type=ClassificationResult,
+    instructions=_CLASSIFICATION_PROMPT,
+    model_settings={"max_tokens": 100},
+)
+
+
+async def classify_directive(directive: str) -> str:
     """Classify a directive into a goal type using Haiku.
 
     Returns one of: "read", "navigate", "interact", "fill_form".
     Raises on API/auth errors so the caller can fall back to keyword matching.
     """
-    client = client or Anthropic()
     tracer = get_tracer()
 
     with tracer.start_as_current_span(
         "cua.blinders.classify",
         attributes={
-            ATTR_GENAI_SYSTEM: "anthropic",
-            ATTR_GENAI_MODEL: SAFETY_MODEL,
+            ATTR_GENAI_MODEL: UTILITY_MODEL,
             "cua.blinders.directive": directive,
         },
     ) as span:
-        response = client.messages.create(
-            model=SAFETY_MODEL,
-            max_tokens=100,
-            messages=[
-                {
-                    "role": "user",
-                    "content": _CLASSIFICATION_PROMPT + directive,
-                }
-            ],
-        )
+        result = await _classifier.run(directive)
+        usage = result.usage()
 
         span.set_attributes(
             {
-                ATTR_GENAI_INPUT_TOKENS: response.usage.input_tokens,
-                ATTR_GENAI_OUTPUT_TOKENS: response.usage.output_tokens,
+                ATTR_GENAI_INPUT_TOKENS: usage.input_tokens or 0,
+                ATTR_GENAI_OUTPUT_TOKENS: usage.output_tokens or 0,
             }
         )
 
-        block = response.content[0]
-        text: str = _extract_text(block)
-        text = text.strip()
-
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-        data = json.loads(text)
-        goal_type = data.get("goal_type", "interact")
+        goal_type = result.output.goal_type
 
         if goal_type not in _VALID_GOAL_TYPES:
             log.warning(
@@ -111,19 +98,12 @@ def classify_directive(
         span.set_attributes(
             {
                 "cua.blinders.goal_type": goal_type,
-                "cua.blinders.needs_login": data.get("needs_login", False),
+                "cua.blinders.needs_login": result.output.needs_login,
             }
         )
         log.info(
             "Classified directive as: %s (needs_login=%s)",
             goal_type,
-            data.get("needs_login"),
+            result.output.needs_login,
         )
         return goal_type
-
-
-def _extract_text(block: Any) -> str:
-    """Extract text from an Anthropic content block, handling union types."""
-    if hasattr(block, "text"):
-        return str(block.text)
-    return ""

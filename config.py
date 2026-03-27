@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -12,7 +12,7 @@ from exceptions import ConfigError
 from guardrails import GuardrailConfig
 from profiles.loader import Profile, apply_guardrail_overrides, load_profile
 from recording import RecordingConfig
-from settings import AGENT_MODEL, get_settings
+from settings import PRIMARY_MODEL, get_settings
 
 if TYPE_CHECKING:
     from api.models import RunConfig
@@ -22,9 +22,9 @@ class CUAConfig(BaseModel):
     """Complete runtime configuration for a CUA agent run."""
 
     directive: str
-    model: str = AGENT_MODEL
+    model: str = PRIMARY_MODEL
     max_steps: int = 50
-    thinking_budget: int = 4096
+    thinking: Literal["minimal", "low", "medium", "high", "xhigh"] = "high"
     width: int = 1920
     height: int = 1080
     start_url: str | None = None
@@ -90,7 +90,7 @@ class CUAConfig(BaseModel):
             directive=env.directive,
             model=env.model,
             max_steps=env.max_steps,
-            thinking_budget=env.thinking_budget,
+            thinking=env.thinking,
             width=env.width,
             height=env.height,
             start_url=env.start_url or None,
@@ -123,7 +123,7 @@ class CUAConfig(BaseModel):
             directive=rc.directive,
             model=rc.model,
             max_steps=rc.max_steps,
-            thinking_budget=rc.thinking_budget,
+            thinking=rc.thinking,
             width=rc.display_width,
             height=rc.display_height,
             start_url=rc.start_url,

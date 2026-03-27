@@ -43,20 +43,7 @@ sandbox_image = (
         "fonts-liberation",
         "fonts-noto-cjk",
     )
-    .pip_install(
-        "anthropic>=0.86",
-        "fastapi>=0.135.2",
-        "httpx>=0.28.1",
-        "opentelemetry-api>=1.40",
-        "opentelemetry-sdk>=1.40",
-        "opentelemetry-exporter-otlp-proto-grpc>=1.40",
-        "opentelemetry-instrumentation-fastapi>=0.61b0",
-        "patchright>=1.58.2",
-        "uvicorn>=0.42",
-    )
-    .run_commands(
-        "patchright install chromium",
-    )
+    .uv_sync("../")
     .add_local_dir("agent", "/opt/cua/agent")
     .add_local_dir("bridge", "/opt/cua/bridge")
     .add_local_dir("api", "/opt/cua/api")
@@ -64,6 +51,7 @@ sandbox_image = (
     .add_local_dir("sandbox", "/opt/cua/sandbox")
     .add_local_dir("profiles", "/opt/cua/profiles")
     .add_local_file("config.py", "/opt/cua/config.py")
+    .add_local_file("settings.py", "/opt/cua/settings.py")
     .add_local_file("exceptions.py", "/opt/cua/exceptions.py")
     .add_local_dir("blinders", "/opt/cua/blinders")
     .add_local_dir("guardrails", "/opt/cua/guardrails")
@@ -97,13 +85,13 @@ def create_cua_sandbox(
     ``extra_env`` is merged into the sandbox environment — used to propagate
     OTel trace context (TRACEPARENT, TRACESTATE) and OTel config vars.
     """
-    secrets: list[modal.Secret] = [modal.Secret.from_name("anthropic-secret")]
+    secrets: list[modal.Secret] = [modal.Secret.from_name("llm-secret")]
 
     env: dict[str, str | None] = {
         "DIRECTIVE": config.directive,
         "MODEL": config.model,
         "MAX_STEPS": str(config.max_steps),
-        "THINKING_BUDGET": str(config.thinking_budget),
+        "THINKING": config.thinking,
         "WIDTH": str(config.display_width),
         "HEIGHT": str(config.display_height),
         "PROFILE": config.profile,

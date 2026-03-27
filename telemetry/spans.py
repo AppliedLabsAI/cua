@@ -48,19 +48,18 @@ ATTR_BLINDERS_ACTIONS = "cua.blinders.allowed_actions"
 
 ATTR_ITER_NUMBER = "cua.iteration.number"
 ATTR_ITER_TOOL_CALLS = "cua.iteration.tool_call_count"
-ATTR_ITER_THINKING_BUDGET = "cua.iteration.thinking_budget"
+ATTR_ITER_THINKING = "cua.iteration.thinking"
 ATTR_ITER_STREAMING = "cua.iteration.is_streaming"
 
 # ---------------------------------------------------------------------------
 # Attribute keys — LLM (GenAI semantic conventions)
 # ---------------------------------------------------------------------------
 
-ATTR_GENAI_SYSTEM = "gen_ai.system"
 ATTR_GENAI_MODEL = "gen_ai.request.model"
 ATTR_GENAI_MAX_TOKENS = "gen_ai.request.max_tokens"
 ATTR_GENAI_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 ATTR_GENAI_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
-ATTR_GENAI_THINKING_BUDGET = "gen_ai.request.thinking_budget"
+ATTR_GENAI_THINKING = "gen_ai.request.thinking"
 ATTR_LLM_STREAMING = "cua.llm.streaming"
 ATTR_LLM_HAS_TOOL_CALLS = "cua.llm.has_tool_calls"
 ATTR_LLM_TEXT_RESPONSE = "cua.llm.text_response"

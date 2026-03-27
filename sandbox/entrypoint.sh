@@ -8,7 +8,7 @@
 #   DIRECTIVE       — natural language task for the agent
 #   MODEL           — Claude model ID
 #   MAX_STEPS       — maximum agent loop iterations
-#   THINKING_BUDGET — extended thinking token budget
+#   THINKING       — thinking effort level (minimal/low/medium/high/xhigh)
 #   START_URL       — optional URL to open on browser launch
 #   PROXY_URL       — optional residential proxy URL
 #   CREDENTIALS_JSON  — optional JSON-encoded credentials dict

@@ -114,27 +114,21 @@ def _extract_domains(directive: str) -> list[str]:
     return domains
 
 
-def _detect_goal_type(directive: str, *, use_llm: bool = True) -> str:
+async def _detect_goal_type(directive: str) -> str:
     """Classify the directive into a goal type.
 
     Primary: LLM-based classification via Haiku (accurate, handles edge cases).
-    Fallback: Minimal keyword matching (fast, for offline/test environments).
-
-    Args:
-        use_llm: If True (default), attempts Haiku LLM classification.
-                 Falls back to keyword matching if the LLM call fails.
-                 Set False to skip LLM entirely.
+    Fallback: Minimal keyword matching (when the LLM call fails).
     """
-    if use_llm:
-        try:
-            from blinders.classifier import classify_directive
+    try:
+        from blinders.classifier import classify_directive
 
-            return classify_directive(directive)
-        except Exception as exc:
-            log.warning("LLM classification unavailable, using degraded scope: %s", exc)
-            safety_degraded_total().add(
-                1, {"component": "scope_classifier", "fallback": "keyword_read"}
-            )
+        return await classify_directive(directive)
+    except Exception as exc:
+        log.warning("LLM classification unavailable, using degraded scope: %s", exc)
+        safety_degraded_total().add(
+            1, {"component": "scope_classifier", "fallback": "keyword_read"}
+        )
 
     return _detect_goal_type_fallback(directive)
 
@@ -213,36 +207,25 @@ def _default_actions(goal_type: str) -> frozenset[str]:
         return ALL_ACTIONS
 
 
-def extract_task_scope(
+def build_task_scope(
     directive: str,
+    goal_type: str,
     profile: Profile | None = None,
-    *,
-    use_llm: bool = True,
 ) -> TaskScope:
-    """Analyze directive to determine task scope.
+    """Build a TaskScope from a pre-classified goal type (sync).
 
-    Uses Haiku LLM for accurate classification by default.
-    Falls back to keyword matching if the LLM call fails.
-
-    The scope defines:
-    - What goal type the task is (read, navigate, interact, fill_form)
-    - Which domains are in scope (from URLs in the directive)
-    - Which actions are available (narrowed by goal type)
-    - What DOM elements are visible (adaptive by goal type)
+    Use this directly in tests with `_detect_goal_type_fallback`.
+    Production code should use `extract_task_scope` which classifies via LLM.
     """
-    goal_type = _detect_goal_type(directive, use_llm=use_llm)
     allowed_domains = _extract_domains(directive)
     visibility = _default_visibility(goal_type)
     allowed_actions = _default_actions(goal_type)
 
-    # Profile overrides can widen scope
     if profile and profile.guardrail_overrides:
         overrides = profile.guardrail_overrides
         updates: dict[str, bool] = {}
-        # Research profile disables LLM action check → widen visibility
         if overrides.get("enable_llm_action_check") is False:
             updates["show_action_buttons"] = True
-        # Higher URL limits suggest broader navigation needs
         if overrides.get("max_urls_visited", 50) > 50:
             updates["show_nav_links"] = True
         if updates:
@@ -254,3 +237,16 @@ def extract_task_scope(
         allowed_actions=allowed_actions,
         visibility=visibility,
     )
+
+
+async def extract_task_scope(
+    directive: str,
+    profile: Profile | None = None,
+) -> TaskScope:
+    """Analyze directive to determine task scope.
+
+    Uses Haiku LLM for accurate classification by default.
+    Falls back to keyword matching if the LLM call fails.
+    """
+    goal_type = await _detect_goal_type(directive)
+    return build_task_scope(directive, goal_type, profile)
