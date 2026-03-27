@@ -10,10 +10,27 @@ import json
 from pathlib import Path
 
 import modal
+from modal import FilePatternMatcher  # noqa: F401 — used in image definition
 
 from api.models import RunConfig
 
 _project_root = Path(__file__).resolve().parent.parent
+
+# Only include source files — invert matcher so everything else is ignored
+_exclude_dirs = FilePatternMatcher(
+    "output/**", "tests/**", "llm/**", ".git/**", "playbooks/definitions/**"
+)
+_include_exts = ~FilePatternMatcher(
+    "**/*.py",
+    "**/*.js",
+    "**/*.json",
+    "**/*.yaml",
+    "**/*.yml",
+    "**/*.toml",
+    "**/*.lock",
+    "**/*.sh",
+)
+_ignore = lambda path: _exclude_dirs(path) or _include_exts(path)  # noqa: E731
 
 recording_volume = modal.Volume.from_name(
     "cua-recordings", create_if_missing=True, version=2
@@ -55,20 +72,7 @@ sandbox_image = (
     .add_local_dir(
         str(_project_root),
         remote_path="/opt/cua",
-        ignore=[
-            ".git",
-            ".venv",
-            ".ruff_cache",
-            ".pytest_cache",
-            ".omc",
-            ".claude",
-            "__pycache__",
-            "tests",
-            "output",
-            "*.lock",
-            ".env*",
-            ".git*",
-        ],
+        ignore=_ignore,
     )
 )
 

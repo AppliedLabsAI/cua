@@ -16,6 +16,7 @@ import modal
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from modal import FilePatternMatcher
 from opentelemetry import trace as otel_trace  # StatusCode used below
 from starlette.responses import Response
 
@@ -48,6 +49,20 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _project_root = Path(__file__).resolve().parent.parent
+_exclude_dirs = FilePatternMatcher(
+    "output/**", "tests/**", "llm/**", ".git/**", "playbooks/definitions/**"
+)
+_include_exts = ~FilePatternMatcher(
+    "**/*.py",
+    "**/*.js",
+    "**/*.json",
+    "**/*.yaml",
+    "**/*.yml",
+    "**/*.toml",
+    "**/*.lock",
+    "**/*.sh",
+)
+_ignore = lambda path: _exclude_dirs(path) or _include_exts(path)  # noqa: E731
 
 api_image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -56,37 +71,13 @@ api_image = (
         str(_project_root),
         remote_path="/opt/cua",
         copy=True,
-        ignore=[
-            ".git",
-            ".venv",
-            ".ruff_cache",
-            ".pytest_cache",
-            ".omc",
-            ".claude",
-            "__pycache__",
-            "tests",
-            "output",
-            ".env*",
-            ".git*",
-        ],
+        ignore=_ignore,
     )
     .env({"PYTHONPATH": "/opt/cua"})
     .uv_sync(str(_project_root))
 )
 
 modal_app = modal.App("cua")
-
-
-# Force sandbox image to be pre-built at deploy time by registering a
-# function that uses it. Without this, the image is only built on first
-# sandbox creation, which adds minutes of latency and can fail silently.
-from sandbox.image import sandbox_image  # noqa: E402
-
-
-@modal_app.function(image=sandbox_image, include_source=False)
-def _sandbox_image_warmup():
-    """Dummy function to force sandbox image pre-build at deploy time."""
-    pass
 
 
 @modal_app.function(
