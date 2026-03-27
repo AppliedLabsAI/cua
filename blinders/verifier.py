@@ -48,7 +48,7 @@ class ScopeVerifier:
             else (ActionValidator(directive) if directive else None)
         )
 
-    def check(
+    async def check(
         self,
         action: str,
         tool_input: dict,
@@ -100,7 +100,7 @@ class ScopeVerifier:
 
         # 3. Destructive action check — skip when ActionValidator is active
         #    (it subsumes destructive detection with directive context).
-        action_check = self.guardrails.check_action(
+        action_check = await self.guardrails.check_action(
             action, tool_input, skip_llm=bool(self._validator)
         )
         if not action_check.allowed:
@@ -112,7 +112,7 @@ class ScopeVerifier:
             for step in tool_input.get("steps", []):
                 if isinstance(step, dict):
                     step_action = step.get("action", "")
-                    result = self.check(
+                    result = await self.check(
                         step_action,
                         step,
                         page_url=page_url,
@@ -127,7 +127,7 @@ class ScopeVerifier:
         # Validates the top-level action (or whole sequence) in ONE call.
         # Skipped for sub-steps inside execute_sequence (_skip_llm=True).
         if self._validator and not _skip_llm:
-            llm_block = self._validator.validate(
+            llm_block = await self._validator.validate(
                 action,
                 tool_input,
                 page_url=page_url,

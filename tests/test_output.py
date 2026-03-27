@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -74,160 +74,100 @@ class TestCollectExtractedTexts:
 # ---------------------------------------------------------------------------
 
 
+def _mock_run_result(
+    output: dict | list | str, in_tokens: int = 100, out_tokens: int = 50
+):
+    """Build a mock PydanticAI RunResult with controlled output and usage."""
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = in_tokens
+    mock_usage.output_tokens = out_tokens
+    mock_result = MagicMock()
+    mock_result.output = output
+    mock_result.usage.return_value = mock_usage
+    return mock_result
+
+
 class TestExtractStructuredOutput:
     @pytest.mark.asyncio
-    async def test_extracts_json_from_llm_response(self):
-        mock_client = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.usage.input_tokens = 100
-        mock_response.usage.output_tokens = 50
-        mock_block = MagicMock()
-        mock_block.type = "text"
-        mock_block.text = '{"product": "iPhone", "price": "$799"}'
-        mock_response.content = [mock_block]
-        mock_client.messages.create.return_value = mock_response
-
-        schema = {
-            "type": "object",
-            "properties": {
-                "product": {"type": "string"},
-                "price": {"type": "string"},
-            },
-        }
-
-        data, in_tok, out_tok = await extract_structured_output(
-            summary="Found iPhone 16 for $799",
-            extracted_texts=["iPhone 16 - $799"],
-            output_schema=schema,
-            client=mock_client,
+    async def test_extracts_dict_from_agent(self):
+        result = _mock_run_result(
+            {"product": "iPhone", "price": "$799"}, in_tokens=100, out_tokens=50
         )
-
+        with patch("agent.output.Agent") as mock_agent:
+            mock_agent.return_value.run = AsyncMock(return_value=result)
+            data, in_tok, out_tok = await extract_structured_output(
+                summary="Found iPhone 16 for $799",
+                extracted_texts=["iPhone 16 - $799"],
+                output_schema={
+                    "type": "object",
+                    "properties": {
+                        "product": {"type": "string"},
+                        "price": {"type": "string"},
+                    },
+                },
+            )
         assert data == {"product": "iPhone", "price": "$799"}
         assert in_tok == 100
         assert out_tok == 50
-        mock_client.messages.create.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_strips_markdown_fences(self):
-        mock_client = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.usage.input_tokens = 50
-        mock_response.usage.output_tokens = 30
-        mock_block = MagicMock()
-        mock_block.type = "text"
-        mock_block.text = '```json\n{"key": "value"}\n```'
-        mock_response.content = [mock_block]
-        mock_client.messages.create.return_value = mock_response
-
-        data, in_tok, out_tok = await extract_structured_output(
-            summary="test",
-            extracted_texts=[],
-            output_schema={"type": "object"},
-            client=mock_client,
-        )
-
-        assert data == {"key": "value"}
-        assert in_tok == 50
-        assert out_tok == 30
-
-    @pytest.mark.asyncio
-    async def test_returns_none_on_invalid_json(self):
-        mock_client = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.usage.input_tokens = 50
-        mock_response.usage.output_tokens = 30
-        mock_block = MagicMock()
-        mock_block.type = "text"
-        mock_block.text = "not valid json"
-        mock_response.content = [mock_block]
-        mock_client.messages.create.return_value = mock_response
-
-        data, in_tok, out_tok = await extract_structured_output(
-            summary="test",
-            extracted_texts=[],
-            output_schema={"type": "object"},
-            client=mock_client,
-        )
-
-        assert data is None
-        # Tokens are still counted even when JSON parsing fails
-        assert in_tok == 50
-        assert out_tok == 30
 
     @pytest.mark.asyncio
     async def test_returns_none_on_empty_context(self):
-        mock_client = AsyncMock()
-
         data, in_tok, out_tok = await extract_structured_output(
             summary="",
             extracted_texts=[],
             output_schema={"type": "object"},
-            client=mock_client,
         )
-
         assert data is None
         assert in_tok == 0
         assert out_tok == 0
-        mock_client.messages.create.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_non_object_json(self):
-        mock_client = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.usage.input_tokens = 50
-        mock_response.usage.output_tokens = 30
-        mock_block = MagicMock()
-        mock_block.type = "text"
-        mock_block.text = '["a", "b"]'
-        mock_response.content = [mock_block]
-        mock_client.messages.create.return_value = mock_response
-
-        data, in_tok, out_tok = await extract_structured_output(
-            summary="test",
-            extracted_texts=[],
-            output_schema={"type": "object"},
-            client=mock_client,
-        )
-
+    async def test_returns_none_on_non_dict_output(self):
+        result = _mock_run_result("not a dict", in_tokens=50, out_tokens=30)
+        with patch("agent.output.Agent") as mock_agent:
+            mock_agent.return_value.run = AsyncMock(return_value=result)
+            data, in_tok, out_tok = await extract_structured_output(
+                summary="test",
+                extracted_texts=[],
+                output_schema={"type": "object"},
+            )
         assert data is None
         assert in_tok == 50
         assert out_tok == 30
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_api_error(self):
-        mock_client = AsyncMock()
-        mock_client.messages.create.side_effect = RuntimeError("API down")
-
-        data, in_tok, out_tok = await extract_structured_output(
-            summary="test",
-            extracted_texts=["data"],
-            output_schema={"type": "object"},
-            client=mock_client,
-        )
-
+    async def test_returns_none_on_agent_error(self):
+        with patch("agent.output.Agent") as mock_agent:
+            mock_agent.return_value.run = AsyncMock(
+                side_effect=RuntimeError("API down")
+            )
+            data, in_tok, out_tok = await extract_structured_output(
+                summary="test",
+                extracted_texts=["data"],
+                output_schema={"type": "object"},
+            )
         assert data is None
         assert in_tok == 0
         assert out_tok == 0
 
     @pytest.mark.asyncio
     async def test_works_with_default_schema(self):
-        mock_client = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.usage.input_tokens = 80
-        mock_response.usage.output_tokens = 40
-        mock_block = MagicMock()
-        mock_block.type = "text"
-        mock_block.text = '{"summary": "Found the price.", "result": "The price is $799", "details": {"price": "$799"}}'
-        mock_response.content = [mock_block]
-        mock_client.messages.create.return_value = mock_response
-
-        data, in_tok, out_tok = await extract_structured_output(
-            summary="Found the price",
-            extracted_texts=["$799"],
-            output_schema=DEFAULT_OUTPUT_SCHEMA,
-            client=mock_client,
+        result = _mock_run_result(
+            {
+                "summary": "Found the price.",
+                "result": "The price is $799",
+                "details": {"price": "$799"},
+            },
+            in_tokens=80,
+            out_tokens=40,
         )
-
+        with patch("agent.output.Agent") as mock_agent:
+            mock_agent.return_value.run = AsyncMock(return_value=result)
+            data, in_tok, out_tok = await extract_structured_output(
+                summary="Found the price",
+                extracted_texts=["$799"],
+                output_schema=DEFAULT_OUTPUT_SCHEMA,
+            )
         assert data is not None
         assert data["summary"] == "Found the price."
         assert data["result"] == "The price is $799"

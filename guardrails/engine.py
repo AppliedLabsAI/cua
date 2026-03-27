@@ -9,22 +9,21 @@ from __future__ import annotations
 import concurrent.futures
 import fnmatch
 import ipaddress
-import json
 import logging
 import re
 import socket
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic_ai import Agent
 
-from settings import SAFETY_MODEL
+from settings import UTILITY_MODEL
 from telemetry import get_tracer
 from telemetry.metrics import safety_degraded_total
 from telemetry.spans import (
     ATTR_GENAI_INPUT_TOKENS,
     ATTR_GENAI_MODEL,
     ATTR_GENAI_OUTPUT_TOKENS,
-    ATTR_GENAI_SYSTEM,
     ATTR_GUARD_ALLOWED,
     ATTR_GUARD_REASON,
     ATTR_GUARD_USED_LLM,
@@ -117,6 +116,21 @@ A click is NOT destructive if it:
 Respond with ONLY a JSON object:
 {{"destructive": true, "reason": "brief reason"}} or \
 {{"destructive": false, "reason": "brief reason"}}"""
+
+
+class DestructiveCheckResult(BaseModel):
+    """Structured response from the destructive click checker."""
+
+    destructive: bool = False
+    reason: str = ""
+
+
+_destructive_checker = Agent[None, DestructiveCheckResult](
+    UTILITY_MODEL,
+    output_type=DestructiveCheckResult,
+    instructions=_DESTRUCTIVE_CHECK_PROMPT,
+    model_settings={"max_tokens": 100},
+)
 
 
 class GuardrailConfig(BaseModel):
@@ -277,7 +291,6 @@ class GuardrailEngine:
         self.urls_visited: set[str] = set()
         self.consecutive_errors: int = 0
         self._llm_enabled = self.config.enable_llm_action_check
-        self._llm_client = None
         self._approved_selectors: set[str] = set()
         self._pending_confirmations: set[str] = set()
         self._tracer = get_tracer()
@@ -334,14 +347,7 @@ class GuardrailEngine:
         self.urls_visited.add(url)
         return self.check_url(url)
 
-    def _get_llm_client(self):
-        if self._llm_client is None:
-            from anthropic import Anthropic
-
-            self._llm_client = Anthropic()
-        return self._llm_client
-
-    def _check_destructive_llm(self, selector: str) -> GuardrailResult:
+    async def _check_destructive_llm(self, selector: str) -> GuardrailResult:
         """Check if a click selector targets a destructive action.
 
         Layer 1 (always runs): Regex patterns catch obvious destructive/safe
@@ -380,36 +386,24 @@ class GuardrailEngine:
         with self._tracer.start_as_current_span(
             GUARDRAIL_LLM,
             attributes={
-                ATTR_GENAI_SYSTEM: "anthropic",
-                ATTR_GENAI_MODEL: SAFETY_MODEL,
+                ATTR_GENAI_MODEL: UTILITY_MODEL,
                 ATTR_GUARD_USED_LLM: True,
             },
         ) as llm_span:
             try:
-                prompt = _DESTRUCTIVE_CHECK_PROMPT.format(selector=selector)
-                response = self._get_llm_client().messages.create(
-                    model=SAFETY_MODEL,
-                    max_tokens=100,
-                    messages=[{"role": "user", "content": prompt}],
-                )
+                prompt = f"Proposed click target: {selector}"
+                result = await _destructive_checker.run(prompt)
+                usage = result.usage()
 
                 llm_span.set_attributes(
                     {
-                        ATTR_GENAI_INPUT_TOKENS: response.usage.input_tokens,
-                        ATTR_GENAI_OUTPUT_TOKENS: response.usage.output_tokens,
+                        ATTR_GENAI_INPUT_TOKENS: usage.input_tokens or 0,
+                        ATTR_GENAI_OUTPUT_TOKENS: usage.output_tokens or 0,
                     }
                 )
 
-                block = response.content[0]
-                text: str = str(block.text) if hasattr(block, "text") else ""
-                text = text.strip()
-
-                if text.startswith("```"):
-                    text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-                data = json.loads(text)
-                is_destructive = data.get("destructive", False)
-                reason = data.get("reason", "")
+                is_destructive = result.output.destructive
+                reason = result.output.reason
 
                 if is_destructive:
                     log.warning(
@@ -452,7 +446,7 @@ class GuardrailEngine:
                     reason=("Safety validation unavailable for ambiguous click action"),
                 )
 
-    def check_action(
+    async def check_action(
         self, action: str, tool_input: dict, *, skip_llm: bool = False
     ) -> GuardrailResult:
         """Check clicks for destructive intent using Haiku with confirmation flow.
@@ -480,7 +474,7 @@ class GuardrailEngine:
 
         # Haiku LLM check
         if not skip_llm:
-            llm_result = self._check_destructive_llm(selector)
+            llm_result = await self._check_destructive_llm(selector)
             if not llm_result.allowed:
                 if llm_result.needs_confirmation:
                     self._pending_confirmations.add(normalized)

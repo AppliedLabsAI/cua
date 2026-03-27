@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from guardrails import GuardrailConfig, GuardrailEngine, _check_ssrf
 
@@ -113,25 +113,27 @@ class TestNavigationTracking:
 
 
 class TestActionClassification:
-    def test_allows_non_click_actions(self):
+    async def test_allows_non_click_actions(self):
         engine = GuardrailEngine()
-        result = engine.check_action("goto", {"url": "https://example.com"})
+        result = await engine.check_action("goto", {"url": "https://example.com"})
         assert result.allowed
 
-    def test_skip_llm_allows_all_clicks(self):
+    async def test_skip_llm_allows_all_clicks(self):
         """skip_llm=True means no destructive check — all clicks pass."""
         engine = GuardrailEngine()
-        result = engine.check_action(
+        result = await engine.check_action(
             "click", {"selector": "text=Delete Account"}, skip_llm=True
         )
         assert result.allowed
 
-    def test_disabled_llm_check(self):
+    async def test_disabled_llm_check(self):
         """With LLM disabled intentionally, regex-only behavior stays enabled."""
         config = GuardrailConfig(enable_llm_action_check=False)
         engine = GuardrailEngine(config)
         # Use a selector that is ambiguous (bypasses both regex patterns)
-        result = engine.check_action("click", {"selector": "text=Process Batch #42"})
+        result = await engine.check_action(
+            "click", {"selector": "text=Process Batch #42"}
+        )
         assert result.allowed
 
 
@@ -183,120 +185,124 @@ class TestGuardrailConfigFromDict:
 class TestHaikuDestructiveCheck:
     """Tests for Haiku-based destructive action detection."""
 
-    def test_skipped_when_disabled_in_config(self):
+    async def test_skipped_when_disabled_in_config(self):
         """enable_llm_action_check=False disables the LLM layer."""
         config = GuardrailConfig(enable_llm_action_check=False)
         engine = GuardrailEngine(config)
         # Use ambiguous selector that bypasses regex
-        result = engine.check_action("click", {"selector": "text=Finalize Changes"})
+        result = await engine.check_action(
+            "click", {"selector": "text=Finalize Changes"}
+        )
         assert result.allowed
 
-    def test_skip_llm_flag(self):
+    async def test_skip_llm_flag(self):
         """skip_llm=True skips the Haiku check."""
         engine = GuardrailEngine()
-        result = engine.check_action(
+        result = await engine.check_action(
             "click", {"selector": "text=Finalize Changes"}, skip_llm=True
         )
         assert result.allowed
 
-    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
-    def test_flags_destructive_via_haiku_for_confirmation(self, mock_client_fn):
+    @patch("guardrails.engine._destructive_checker")
+    async def test_flags_destructive_via_haiku_for_confirmation(self, mock_agent):
         """Haiku returning destructive=true flags for confirmation."""
-        mock_response = MagicMock()
-        mock_response.content = [
-            MagicMock(
-                text='{"destructive": true, "reason": "confirms account deletion"}'
-            )
-        ]
-        mock_response.usage = MagicMock(input_tokens=50, output_tokens=20)
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_response
-        mock_client_fn.return_value = mock_client
+        from guardrails.engine import DestructiveCheckResult
+
+        mock_result = MagicMock()
+        mock_result.output = DestructiveCheckResult(
+            destructive=True, reason="confirms account deletion"
+        )
+        mock_result.usage.return_value = MagicMock(input_tokens=50, output_tokens=20)
+        mock_agent.run = AsyncMock(return_value=mock_result)
 
         engine = GuardrailEngine()
         # Use ambiguous selector that bypasses regex → reaches Haiku
-        result = engine.check_action("click", {"selector": "text=Proceed with action"})
+        result = await engine.check_action(
+            "click", {"selector": "text=Proceed with action"}
+        )
         assert not result.allowed
         assert result.needs_confirmation
         assert "LLM" in (result.reason or "")
 
-    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
-    def test_blocks_ambiguous_click_when_haiku_unavailable(self, mock_client_fn):
-        mock_client = MagicMock()
-        mock_client.messages.create.side_effect = RuntimeError("network down")
-        mock_client_fn.return_value = mock_client
+    @patch("guardrails.engine._destructive_checker")
+    async def test_blocks_ambiguous_click_when_haiku_unavailable(self, mock_agent):
+        mock_agent.run = AsyncMock(side_effect=RuntimeError("network down"))
 
         engine = GuardrailEngine()
-        result = engine.check_action("click", {"selector": "text=Proceed with action"})
+        result = await engine.check_action(
+            "click", {"selector": "text=Proceed with action"}
+        )
         assert not result.allowed
         assert not result.needs_confirmation
         assert "validation unavailable" in (result.reason or "")
 
-    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
-    def test_retry_confirms_haiku_flagged_action(self, mock_client_fn):
+    @patch("guardrails.engine._destructive_checker")
+    async def test_retry_confirms_haiku_flagged_action(self, mock_agent):
         """Agent retry of Haiku-flagged action confirms and allows it."""
-        mock_response = MagicMock()
-        mock_response.content = [
-            MagicMock(text='{"destructive": true, "reason": "confirms deletion"}')
-        ]
-        mock_response.usage = MagicMock(input_tokens=50, output_tokens=20)
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_response
-        mock_client_fn.return_value = mock_client
+        from guardrails.engine import DestructiveCheckResult
+
+        mock_result = MagicMock()
+        mock_result.output = DestructiveCheckResult(
+            destructive=True, reason="confirms deletion"
+        )
+        mock_result.usage.return_value = MagicMock(input_tokens=50, output_tokens=20)
+        mock_agent.run = AsyncMock(return_value=mock_result)
 
         engine = GuardrailEngine()
         # First: flagged (ambiguous selector bypasses regex)
-        result1 = engine.check_action("click", {"selector": "text=Proceed with action"})
+        result1 = await engine.check_action(
+            "click", {"selector": "text=Proceed with action"}
+        )
         assert not result1.allowed
         assert result1.needs_confirmation
         # Retry: confirmed
-        result2 = engine.check_action("click", {"selector": "text=Proceed with action"})
+        result2 = await engine.check_action(
+            "click", {"selector": "text=Proceed with action"}
+        )
         assert result2.allowed
 
-    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
-    def test_allows_safe_via_haiku(self, mock_client_fn):
+    @patch("guardrails.engine._destructive_checker")
+    async def test_allows_safe_via_haiku(self, mock_agent):
         """Haiku returning destructive=false allows the action."""
-        mock_response = MagicMock()
-        mock_response.content = [
-            MagicMock(text='{"destructive": false, "reason": "navigation link"}')
-        ]
-        mock_response.usage = MagicMock(input_tokens=50, output_tokens=20)
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_response
-        mock_client_fn.return_value = mock_client
+        from guardrails.engine import DestructiveCheckResult
+
+        mock_result = MagicMock()
+        mock_result.output = DestructiveCheckResult(
+            destructive=False, reason="navigation link"
+        )
+        mock_result.usage.return_value = MagicMock(input_tokens=50, output_tokens=20)
+        mock_agent.run = AsyncMock(return_value=mock_result)
 
         engine = GuardrailEngine()
         # Use ambiguous selector that bypasses regex → reaches Haiku
-        result = engine.check_action("click", {"selector": "text=Continue to step 2"})
+        result = await engine.check_action(
+            "click", {"selector": "text=Continue to step 2"}
+        )
         assert result.allowed
 
-    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
-    def test_caches_approved_selectors(self, mock_client_fn):
+    @patch("guardrails.engine._destructive_checker")
+    async def test_caches_approved_selectors(self, mock_agent):
         """Second call with same selector uses cache, not API."""
-        mock_response = MagicMock()
-        mock_response.content = [
-            MagicMock(text='{"destructive": false, "reason": "safe"}')
-        ]
-        mock_response.usage = MagicMock(input_tokens=50, output_tokens=20)
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_response
-        mock_client_fn.return_value = mock_client
+        from guardrails.engine import DestructiveCheckResult
+
+        mock_result = MagicMock()
+        mock_result.output = DestructiveCheckResult(destructive=False, reason="safe")
+        mock_result.usage.return_value = MagicMock(input_tokens=50, output_tokens=20)
+        mock_agent.run = AsyncMock(return_value=mock_result)
 
         engine = GuardrailEngine()
         # Use ambiguous selector that bypasses regex → reaches Haiku
-        engine.check_action("click", {"selector": "text=Run analysis"})
-        engine.check_action("click", {"selector": "text=Run analysis"})
-        assert mock_client.messages.create.call_count == 1
+        await engine.check_action("click", {"selector": "text=Run analysis"})
+        await engine.check_action("click", {"selector": "text=Run analysis"})
+        assert mock_agent.run.call_count == 1
 
-    @patch("guardrails.engine.GuardrailEngine._get_llm_client")
-    def test_blocks_on_api_error_in_degraded_mode(self, mock_client_fn):
+    @patch("guardrails.engine._destructive_checker")
+    async def test_blocks_on_api_error_in_degraded_mode(self, mock_agent):
         """API errors block ambiguous actions in degraded mode."""
-        mock_client = MagicMock()
-        mock_client.messages.create.side_effect = Exception("API timeout")
-        mock_client_fn.return_value = mock_client
+        mock_agent.run = AsyncMock(side_effect=Exception("API timeout"))
 
         engine = GuardrailEngine()
         # Use ambiguous selector that bypasses regex → reaches Haiku (which errors)
-        result = engine.check_action("click", {"selector": "text=Finalize batch"})
+        result = await engine.check_action("click", {"selector": "text=Finalize batch"})
         assert not result.allowed
         assert "validation unavailable" in (result.reason or "")

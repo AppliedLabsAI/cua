@@ -171,10 +171,11 @@ class TestD13LoginPage:
         "conversation, then tell me the shop opening hours."
     )
 
-    def test_scope_is_fill_form(self):
+    @pytest.mark.asyncio
+    async def test_scope_is_fill_form(self):
         # "log in" → has no fill_form keyword, but "find" → read
         # Actually "tell me" → read. Let's check what we get.
-        scope = extract_task_scope(self.DIRECTIVE)
+        scope = await extract_task_scope(self.DIRECTIVE)
         # The directive mentions "find" and "tell me" → read
         # But it also requires login. The scope should still allow forms
         # if we detect login-related keywords.
@@ -192,7 +193,7 @@ class TestD13LoginPage:
     @pytest.mark.asyncio
     async def test_login_form_hidden_with_read_blinders(self, server_port):
         """Read scope blinders should hide form fields."""
-        scope = extract_task_scope("Find info on example.com")
+        scope = await extract_task_scope("Find info on example.com")
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
 
@@ -206,7 +207,9 @@ class TestD13LoginPage:
     @pytest.mark.asyncio
     async def test_login_form_visible_with_fill_form_blinders(self, server_port):
         """Fill-form scope should allow form fields through."""
-        scope = extract_task_scope("Fill out the form and submit it on example.com")
+        scope = await extract_task_scope(
+            "Fill out the form and submit it on example.com"
+        )
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
 
@@ -242,7 +245,7 @@ class TestD13AdminDashboard:
     @pytest.mark.asyncio
     async def test_filtered_dom_hides_dangerous_buttons(self, server_port):
         """Read scope blinders should hide dangerous action buttons."""
-        scope = extract_task_scope("Find the opening hours")
+        scope = await extract_task_scope("Find the opening hours")
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
 
@@ -259,7 +262,7 @@ class TestD13AdminDashboard:
     @pytest.mark.asyncio
     async def test_filtered_dom_preserves_content(self, server_port):
         """Read scope should preserve headings and navigation links."""
-        scope = extract_task_scope("Find the opening hours")
+        scope = await extract_task_scope("Find the opening hours")
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
 
@@ -275,7 +278,7 @@ class TestD13AdminDashboard:
     @pytest.mark.asyncio
     async def test_account_controls_hidden(self, server_port):
         """Account controls (Sign Out, Settings) should be hidden for read scope."""
-        scope = extract_task_scope("Find the opening hours")
+        scope = await extract_task_scope("Find the opening hours")
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
 
@@ -309,7 +312,7 @@ class TestD13ShopPage:
     @pytest.mark.asyncio
     async def test_filtered_dom_has_opening_hours(self, server_port):
         """Filtered DOM should preserve the target data (opening hours)."""
-        scope = extract_task_scope("Find the opening hours")
+        scope = await extract_task_scope("Find the opening hours")
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
 
@@ -325,7 +328,7 @@ class TestD13ShopPage:
     @pytest.mark.asyncio
     async def test_filtered_dom_hides_dangerous_buttons(self, server_port):
         """Dangerous admin actions should be hidden by blinders."""
-        scope = extract_task_scope("Find the opening hours")
+        scope = await extract_task_scope("Find the opening hours")
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
 
@@ -341,7 +344,7 @@ class TestD13ShopPage:
     @pytest.mark.asyncio
     async def test_python_postfilter_on_real_dom(self, server_port):
         """Python post-filter should add provenance markers to real DOM."""
-        scope = extract_task_scope("Find the opening hours")
+        scope = await extract_task_scope("Find the opening hours")
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
 
@@ -361,18 +364,18 @@ class TestD13ShopPage:
     async def test_verifier_blocks_out_of_scope_domain(self, server_port):
         """Scope verifier should block navigation to external domains."""
         directive = f"Find hours on http://127.0.0.1:{server_port}/admin"
-        scope = extract_task_scope(directive)
+        scope = await extract_task_scope(directive)
         verifier = ScopeVerifier(scope, GuardrailEngine())
 
         # In-scope (but SSRF may block 127.0.0.1)
-        result = verifier.check(
+        result = await verifier.check(
             "goto", {"url": f"http://127.0.0.1:{server_port}/admin/shops"}
         )
         # 127.0.0.1 is a private IP, so SSRF blocks it
         assert result is not None  # blocked by SSRF
 
         # Out-of-scope domain
-        result = verifier.check("goto", {"url": "https://evil.com/steal"})
+        result = await verifier.check("goto", {"url": "https://evil.com/steal"})
         assert result is not None
         assert "not in task scope" in result
 
@@ -388,7 +391,7 @@ class TestD13FullPipelineComparison:
     @pytest.mark.asyncio
     async def test_filtered_dom_is_smaller(self, server_port):
         """Filtered DOM should contain fewer elements than raw DOM."""
-        scope = extract_task_scope("Find the opening hours")
+        scope = await extract_task_scope("Find the opening hours")
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
 
@@ -405,7 +408,7 @@ class TestD13FullPipelineComparison:
     @pytest.mark.asyncio
     async def test_dangerous_element_count_reduced(self, server_port):
         """Count dangerous keywords in raw vs filtered DOM."""
-        scope = extract_task_scope("Find the opening hours")
+        scope = await extract_task_scope("Find the opening hours")
         blinders = DOMBlinders(scope)
         config = blinders.to_js_filter_config()
 

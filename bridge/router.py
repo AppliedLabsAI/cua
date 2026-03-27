@@ -133,7 +133,9 @@ class ActionRouter:
         start = time.monotonic()
 
         with self._tracer.start_as_current_span(GUARDRAIL_CHECK) as guard_span:
-            guardrail_result = self._check_guardrails(tool_name, action, tool_input)
+            guardrail_result = await self._check_guardrails(
+                tool_name, action, tool_input
+            )
             guardrail_block = (
                 guardrail_result.reason
                 if guardrail_result and not guardrail_result.allowed
@@ -262,7 +264,7 @@ class ActionRouter:
 
         return tool_result
 
-    def _check_guardrails(
+    async def _check_guardrails(
         self, tool_name: str, action: str, tool_input: dict
     ) -> GuardrailResult | None:
         """Run guardrail checks. Returns GuardrailResult if blocked, None if allowed.
@@ -282,7 +284,7 @@ class ActionRouter:
                 page_title = ""  # title requires async; URL is sufficient context
             except RuntimeError:
                 pass  # browser not launched yet
-            reason = self._verifier.check(
+            reason = await self._verifier.check(
                 action,
                 tool_input,
                 page_url=page_url,
@@ -293,7 +295,7 @@ class ActionRouter:
             return None
 
         # Fallback: legacy guardrail checks when no blinders configured
-        action_check = self.guardrails.check_action(action, tool_input)
+        action_check = await self.guardrails.check_action(action, tool_input)
         if not action_check.allowed:
             return action_check
 
@@ -305,7 +307,7 @@ class ActionRouter:
         elif action == "execute_sequence":
             for step in tool_input.get("steps", []):
                 step_action = step.get("action", "")
-                step_check = self.guardrails.check_action(step_action, step)
+                step_check = await self.guardrails.check_action(step_action, step)
                 if not step_check.allowed:
                     return step_check
                 if step_action == "goto":

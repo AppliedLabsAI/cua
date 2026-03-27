@@ -28,7 +28,7 @@ python scripts/run_local.py --directive "Go to example.com" --profile default
 ### Running via Docker
 
 ```bash
-ANTHROPIC_API_KEY=sk-... DIRECTIVE="Go to example.com" docker compose up
+ANTHROPIC_API_KEY=sk-... DIRECTIVE="Go to example.com" docker compose up  # or OPENAI_API_KEY, GOOGLE_API_KEY
 ```
 
 ## Code Style

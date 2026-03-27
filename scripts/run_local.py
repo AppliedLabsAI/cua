@@ -7,30 +7,27 @@ Usage:
 Requires:
 - Linux with Xvfb running (or a real X display)
 - Chromium + Patchright installed (`patchright install chromium`)
-- ANTHROPIC_API_KEY set in environment
+- LLM API key set in environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY)
 """
 
 from __future__ import annotations
 
-import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import Any, Literal
+
+import click
 
 # Add project root to path — must precede project imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bridge.browser import BrowserManager
 from recording.manager import RecordingManager
-
-if TYPE_CHECKING:
-    from profiles.loader import Profile
-
-import contextlib
-
+from settings import PRIMARY_MODEL
 from telemetry.logging import setup_logging
 
 setup_logging()
@@ -40,105 +37,56 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("cua.local")
 
 
-async def run(args: argparse.Namespace) -> int:
-    from profiles.loader import load_profile
+async def _launch_browser(
+    display: str, width: int, height: int, start_url: str | None, proxy: str | None
+) -> BrowserManager:
+    os.environ["DISPLAY"] = display
+    browser = BrowserManager()
+    await browser.launch(width=width, height=height, start_url=start_url, proxy=proxy)
+    log.info("Browser launched")
+    return browser
+
+
+async def _init_recording(browser: BrowserManager) -> tuple[RecordingManager, str]:
     from recording import RecordingConfig
 
-    os.environ["DISPLAY"] = args.display
-
-    profile = load_profile(args.profile)
-    log.info(
-        "Display: %s (%dx%d), profile: %s",
-        args.display,
-        args.width,
-        args.height,
-        args.profile,
-    )
-    log.info("Directive: %s", args.directive)
-
-    # Launch browser
-    browser = BrowserManager()
-    try:
-        await browser.launch(
-            width=args.width,
-            height=args.height,
-            start_url=args.start_url,
-            proxy=args.proxy,
-        )
-        log.info("Browser launched")
-    except Exception as e:
-        log.error("Failed to launch browser: %s", e)
-        return 1
-
-    # Initialize recording
-    local_output_dir = os.path.join(
+    output_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output"
     )
-    recording_config = RecordingConfig(output_dir=local_output_dir, upload=False)
-    recording = RecordingManager(recording_config, run_id="local")
+    config = RecordingConfig(output_dir=output_dir, upload=False)
+    recording = RecordingManager(config, run_id="local")
     await recording.start(browser.context)
-    log.info("Session recording started: %s", local_output_dir)
-
-    credentials = None
-    if args.credentials:
-        try:
-            credentials = json.loads(args.credentials)
-        except json.JSONDecodeError as exc:
-            log.error("Invalid --credentials JSON: %s", exc)
-            with contextlib.suppress(Exception):
-                await recording.stop()
-            await browser.close()
-            return 1
-
-    # --- Playbook path (deterministic, no LLM loop) ---
-    # Skips blinders, scope extraction, guardrails, and ActionRouter entirely.
-    if args.playbook:
-        return await _run_playbook(args, browser, recording, credentials)
-
-    # --- Standard LLM agent path ---
-    output_schema = None
-    if args.output_schema:
-        try:
-            output_schema = json.loads(args.output_schema)
-        except json.JSONDecodeError as exc:
-            log.error("Invalid --output-schema JSON: %s", exc)
-            with contextlib.suppress(Exception):
-                await recording.stop()
-            await browser.close()
-            return 1
-
-    return await _run_agent(
-        args, browser, profile, recording, credentials, local_output_dir, output_schema
-    )
+    log.info("Session recording started: %s", output_dir)
+    return recording, output_dir
 
 
 async def _run_playbook(
-    args: argparse.Namespace,
+    directive: str,
+    playbook_id: str,
+    playbook_params: str | None,
     browser: BrowserManager,
     recording: RecordingManager,
     credentials: dict | None,
 ) -> int:
-    """Execute a playbook deterministically — no blinders, no guardrails, no LLM loop."""
+    """Execute a playbook deterministically."""
     from playbooks.auth import DashboardAuth
     from playbooks.runner import PlaybookRunner
     from playbooks.store import PlaybookStore
 
     store = PlaybookStore()
-    playbook = store.load(args.playbook)
+    playbook = store.load(playbook_id)
     log.info("Loaded playbook: %s (%d steps)", playbook.id, len(playbook.steps))
 
-    # Parse playbook params from --playbook-params or directive
     pb_params: dict = {}
-    if args.playbook_params:
-        pb_params = json.loads(args.playbook_params)
+    if playbook_params:
+        pb_params = json.loads(playbook_params)
     elif playbook.parameters:
         from playbooks.parser import DirectiveParser
 
-        parsed = DirectiveParser(store).parse(args.directive)
+        parsed = DirectiveParser(store).parse(directive)
         if parsed:
             _, pb_params = parsed
 
-    # Authenticate if needed (attempt session restore even without fresh credentials)
     if playbook.auth_required:
         auth = DashboardAuth(browser, credentials or {})
         login_url = playbook.start_url or ""
@@ -152,7 +100,6 @@ async def _run_playbook(
     runner = PlaybookRunner(browser, recording)
     pb_result = await runner.execute(playbook, pb_params)
 
-    # Print results
     print("\n" + "=" * 60)
     print(f"Status:  {'SUCCESS' if pb_result.success else 'FAILED'}")
     print(f"Playbook: {pb_result.playbook_id}")
@@ -185,12 +132,16 @@ async def _run_playbook(
 
 
 async def _run_agent(
-    args: argparse.Namespace,
+    directive: str,
+    model: str,
+    max_steps: int,
+    thinking: Literal["minimal", "low", "medium", "high", "xhigh"],
     browser: BrowserManager,
-    profile: Profile,
+    profile: Any,
     recording: RecordingManager,
-    credentials: dict | None,
     output_dir: str,
+    credentials: dict | None,
+    allow_private_networks: bool,
     output_schema: dict[str, Any] | None = None,
 ) -> int:
     """Run the full LLM agent loop with blinders, guardrails, and scope extraction."""
@@ -203,10 +154,10 @@ async def _run_agent(
     from profiles.loader import apply_guardrail_overrides
 
     guardrail_config = apply_guardrail_overrides(profile)
-    if args.allow_private_networks:
+    if allow_private_networks:
         guardrail_config.allow_private_networks = True
 
-    scope = extract_task_scope(args.directive, profile, use_llm=False)
+    scope = await extract_task_scope(directive, profile)
     blinders = DOMBlinders(scope)
     log.info(
         "Blinders: goal_type=%s, actions=%d",
@@ -218,17 +169,17 @@ async def _run_agent(
         browser=browser,
         guardrail_config=guardrail_config,
         blinders=blinders,
-        directive=args.directive,
+        directive=directive,
         recording=recording,
     )
 
     try:
         result = await run_agent(
-            directive=args.directive,
+            directive=directive,
             bridge=bridge,
-            model=args.model,
-            max_steps=args.max_steps,
-            thinking_budget=args.thinking_budget,
+            model=model,
+            max_steps=max_steps,
+            thinking=thinking,
             credentials=credentials,
             profile_prompt=profile.prompt_extension,
             on_action=lambda a: log.info(
@@ -253,13 +204,11 @@ async def _run_agent(
         await browser.close()
         log.info("Browser closed")
 
-    # Build structured output
     output = agent_result_to_output(result)
     print("\n" + "=" * 60)
     print(json.dumps(output.model_dump(), indent=2, ensure_ascii=False))
     print("=" * 60)
 
-    # Save action log
     os.makedirs(output_dir, exist_ok=True)
     log_path = os.path.join(output_dir, "action_log.json")
     await save_action_log(result.action_log, log_path)
@@ -268,56 +217,114 @@ async def _run_agent(
     return 0 if result.success else 1
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run CUA agent locally (no Modal)")
-    parser.add_argument("--directive", required=True, help="Task for the agent")
-    from settings import AGENT_MODEL
+@click.command()
+@click.option("--directive", required=True, help="Task for the agent")
+@click.option(
+    "--model", default=PRIMARY_MODEL, help="Model ID (any PydanticAI-supported model)"
+)
+@click.option("--max-steps", default=50, type=int, help="Max tool-call iterations")
+@click.option(
+    "--thinking",
+    type=click.Choice(["minimal", "low", "medium", "high", "xhigh"]),
+    help="Thinking effort level",
+)
+@click.option("--width", default=1280, type=int, help="Display width")
+@click.option("--height", default=720, type=int, help="Display height")
+@click.option("--display", default=":99", help="X display")
+@click.option("--start-url", default=None, help="URL to open on browser launch")
+@click.option("--proxy", default=None, help="Proxy URL (http://user:pass@host:port)")
+@click.option("--credentials", default=None, help="JSON credentials dict")
+@click.option("--profile", default="default", help="Agent profile name")
+@click.option(
+    "--allow-private-networks",
+    is_flag=True,
+    help="Disable SSRF protection (allow localhost and private IPs)",
+)
+@click.option(
+    "--output-schema", default=None, help="JSON Schema for structured output extraction"
+)
+@click.option(
+    "--playbook", default=None, help="Playbook ID to execute (skips LLM agent loop)"
+)
+@click.option(
+    "--playbook-params", default=None, help="JSON dict of playbook parameters"
+)
+def main(
+    directive: str,
+    model: str,
+    max_steps: int,
+    thinking: Literal["minimal", "low", "medium", "high", "xhigh"],
+    width: int,
+    height: int,
+    display: str,
+    start_url: str | None,
+    proxy: str | None,
+    credentials: str | None,
+    profile: str,
+    allow_private_networks: bool,
+    output_schema: str | None,
+    playbook: str | None,
+    playbook_params: str | None,
+) -> None:
+    """Run CUA agent locally (no Modal)."""
 
-    parser.add_argument("--model", default=AGENT_MODEL, help="Claude model ID")
-    parser.add_argument(
-        "--max-steps", type=int, default=50, help="Max tool-call iterations"
-    )
-    parser.add_argument(
-        "--thinking-budget", type=int, default=4096, help="Extended thinking tokens"
-    )
-    parser.add_argument("--width", type=int, default=1280, help="Display width")
-    parser.add_argument("--height", type=int, default=720, help="Display height")
-    parser.add_argument("--display", default=":99", help="X display (default: :99)")
-    parser.add_argument(
-        "--start-url", default=None, help="URL to open on browser launch"
-    )
-    parser.add_argument(
-        "--proxy", default=None, help="Proxy URL (http://user:pass@host:port)"
-    )
-    parser.add_argument("--credentials", default=None, help="JSON credentials dict")
-    parser.add_argument(
-        "--profile",
-        default="default",
-        help="Agent profile name (default, research, form_filling)",
-    )
-    parser.add_argument(
-        "--allow-private-networks",
-        action="store_true",
-        help="Disable SSRF protection (allow localhost and private IPs)",
-    )
-    parser.add_argument(
-        "--output-schema",
-        default=None,
-        help='JSON Schema for structured output extraction (e.g., \'{"type": "object", "properties": {"price": {"type": "string"}}}\')',
-    )
-    parser.add_argument(
-        "--playbook",
-        default=None,
-        help="Playbook ID to execute (e.g., cancel_order). Skips LLM agent loop.",
-    )
-    parser.add_argument(
-        "--playbook-params",
-        default=None,
-        help='JSON dict of playbook parameters (e.g., \'{"order_id": "12345"}\')',
-    )
+    async def _main() -> int:
+        from profiles.loader import load_profile
 
-    args = parser.parse_args()
-    sys.exit(asyncio.run(run(args)))
+        prof = load_profile(profile)
+        log.info("Display: %s (%dx%d), profile: %s", display, width, height, profile)
+        log.info("Directive: %s", directive)
+
+        try:
+            browser = await _launch_browser(display, width, height, start_url, proxy)
+        except Exception as e:
+            log.error("Failed to launch browser: %s", e)
+            return 1
+
+        recording, output_dir = await _init_recording(browser)
+
+        creds = None
+        if credentials:
+            try:
+                creds = json.loads(credentials)
+            except json.JSONDecodeError as exc:
+                log.error("Invalid --credentials JSON: %s", exc)
+                with contextlib.suppress(Exception):
+                    await recording.stop()
+                await browser.close()
+                return 1
+
+        if playbook:
+            return await _run_playbook(
+                directive, playbook, playbook_params, browser, recording, creds
+            )
+
+        parsed_schema = None
+        if output_schema:
+            try:
+                parsed_schema = json.loads(output_schema)
+            except json.JSONDecodeError as exc:
+                log.error("Invalid --output-schema JSON: %s", exc)
+                with contextlib.suppress(Exception):
+                    await recording.stop()
+                await browser.close()
+                return 1
+
+        return await _run_agent(
+            directive=directive,
+            model=model,
+            max_steps=max_steps,
+            thinking=thinking,
+            browser=browser,
+            profile=prof,
+            recording=recording,
+            output_dir=output_dir,
+            credentials=creds,
+            allow_private_networks=allow_private_networks,
+            output_schema=parsed_schema,
+        )
+
+    sys.exit(asyncio.run(_main()))
 
 
 if __name__ == "__main__":

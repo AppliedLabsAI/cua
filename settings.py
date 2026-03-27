@@ -8,6 +8,7 @@ hardcoded model strings across the codebase.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings
 
@@ -15,8 +16,8 @@ from pydantic_settings import BaseSettings
 # Model constants — change here to switch everywhere
 # ---------------------------------------------------------------------------
 
-AGENT_MODEL = "claude-sonnet-4-6"
-SAFETY_MODEL = "claude-haiku-4-5"
+PRIMARY_MODEL = "google-gla:gemini-3-flash-preview"
+UTILITY_MODEL = "google-gla:gemini-3.1-flash-lite-preview"
 
 # ---------------------------------------------------------------------------
 # Timeout constants (milliseconds unless noted) — change here to tune globally
@@ -49,14 +50,11 @@ class Settings(BaseSettings):
 
     environment: str = "local"
 
-    # Anthropic API
-    anthropic_api_key: str = ""
-
     # Agent runtime
     directive: str = ""
-    model: str = AGENT_MODEL
+    model: str = PRIMARY_MODEL
     max_steps: int = 50
-    thinking_budget: int = 4096
+    thinking: Literal["minimal", "low", "medium", "high", "xhigh"] = "high"
     width: int = 1920
     height: int = 1080
     start_url: str = ""

@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
+from pydantic_ai import Agent
 
 from actionlog.actions import ActionLog
-from settings import AGENT_MODEL
+from settings import PRIMARY_MODEL
 
 if TYPE_CHECKING:
-    from anthropic import AsyncAnthropic
-
     from agent.result import AgentResult
     from playbooks.schema import PlaybookResult
 
@@ -42,6 +40,12 @@ DEFAULT_OUTPUT_SCHEMA: dict[str, Any] = {
     "required": ["summary", "result"],
 }
 
+_EXTRACTION_INSTRUCTIONS = (
+    "Given information gathered during browser automation, "
+    "extract structured data matching the requested schema. "
+    "Be concise and accurate."
+)
+
 
 class CuaOutput(BaseModel):
     """Structured, machine-readable result of a CUA run."""
@@ -67,8 +71,7 @@ async def extract_structured_output(
     summary: str,
     extracted_texts: list[str],
     output_schema: dict[str, Any],
-    client: AsyncAnthropic,
-    model: str = AGENT_MODEL,
+    model: str = PRIMARY_MODEL,
 ) -> tuple[dict[str, Any] | None, int, int]:
     """Post-loop LLM call to extract structured data matching output_schema.
 
@@ -85,53 +88,30 @@ async def extract_structured_output(
         return None, 0, 0
 
     context = "\n\n".join(context_parts)
-    schema_str = json.dumps(output_schema, separators=(",", ":"))
-
-    prompt = (
-        "Given the following information gathered during browser automation:\n\n"
-        f"{context}\n\n"
-        "Extract structured data matching this JSON Schema. "
-        f"Respond ONLY with valid JSON, no markdown fences or explanation.\n\n"
-        f"Schema:\n{schema_str}"
-    )
-
-    ext_input_tokens = 0
-    ext_output_tokens = 0
 
     try:
-        response = await client.messages.create(
-            model=model,
-            max_tokens=_EXTRACTION_MAX_TOKENS,
-            messages=[{"role": "user", "content": prompt}],
+        from pydantic_ai import StructuredDict
+
+        dynamic_type = StructuredDict(output_schema, name="ExtractionResult")
+        extractor = Agent(
+            model,
+            output_type=dynamic_type,
+            instructions=_EXTRACTION_INSTRUCTIONS,
+            model_settings={"max_tokens": _EXTRACTION_MAX_TOKENS},
         )
 
-        ext_input_tokens = response.usage.input_tokens or 0
-        ext_output_tokens = response.usage.output_tokens or 0
+        result = await extractor.run(context)
+        usage = result.usage()
+        ext_input_tokens = usage.input_tokens or 0
+        ext_output_tokens = usage.output_tokens or 0
 
-        text = ""
-        for block in response.content:
-            if block.type == "text":
-                text += getattr(block, "text", "")
-
-        text = text.strip()
-        # Strip markdown fences if present
-        if text.startswith("```"):
-            lines = text.split("\n")
-            lines = lines[1:]  # remove opening fence
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
-
-        data = json.loads(text)
+        data = result.output
         if not isinstance(data, dict):
-            log.warning("Extraction returned non-object JSON: %s", type(data).__name__)
+            log.warning("Extraction returned non-object: %s", type(data).__name__)
             return None, ext_input_tokens, ext_output_tokens
 
         return data, ext_input_tokens, ext_output_tokens
 
-    except json.JSONDecodeError as e:
-        log.warning("Extraction produced invalid JSON: %s", e)
-        return None, ext_input_tokens, ext_output_tokens
     except Exception as e:
         log.warning("Structured extraction failed: %s", e)
         return None, 0, 0
