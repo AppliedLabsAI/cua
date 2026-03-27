@@ -15,13 +15,15 @@ from playbooks.schema import (
     StepResult,
     StepVerification,
 )
+from settings import (
+    ACTION_TIMEOUT_MS,
+    NAVIGATION_TIMEOUT_MS,
+    SELECTOR_PROBE_TIMEOUT_MS,
+    SETTLE_SLEEP_S,
+    SETTLE_TIMEOUT_MS,
+)
 
 log = logging.getLogger(__name__)
-
-ACTION_TIMEOUT_MS = 5_000
-NAVIGATION_TIMEOUT_MS = 7_000
-SELECTOR_PROBE_TIMEOUT_MS = 800
-DOM_SETTLE_DELAY_S = 0.3
 
 
 class PlaybookStepExecutor:
@@ -36,8 +38,8 @@ class PlaybookStepExecutor:
             type_delay_ms=50,
             settle_after_click=True,
             settle_after_evaluate=True,
-            settle_timeout_ms=3_000,
-            settle_sleep_s=DOM_SETTLE_DELAY_S,
+            settle_timeout_ms=SETTLE_TIMEOUT_MS,
+            settle_sleep_s=SETTLE_SLEEP_S,
             smart_body_extract=True,
         )
 
@@ -136,7 +138,7 @@ class PlaybookStepExecutor:
             while time.monotonic() < deadline:
                 if verification.expect_url_contains in page.url:
                     break
-                await asyncio.sleep(DOM_SETTLE_DELAY_S)
+                await asyncio.sleep(SETTLE_SLEEP_S)
             else:
                 raise AssertionError(
                     f"URL '{page.url}' does not contain '{verification.expect_url_contains}'"

@@ -18,6 +18,17 @@ from pydantic_settings import BaseSettings
 AGENT_MODEL = "claude-sonnet-4-6"
 SAFETY_MODEL = "claude-haiku-4-5-20251001"
 
+# ---------------------------------------------------------------------------
+# Timeout constants (milliseconds unless noted) — change here to tune globally
+# ---------------------------------------------------------------------------
+
+ACTION_TIMEOUT_MS = 5_000  # clicks, fills, selects
+NAVIGATION_TIMEOUT_MS = 7_000  # page loads / goto
+LOGIN_TIMEOUT_MS = 15_000  # auth login flow (longer for SSO redirects)
+SELECTOR_PROBE_TIMEOUT_MS = 800  # wait for a selector to appear
+SETTLE_TIMEOUT_MS = 3_000  # DOM stabilization after actions
+SETTLE_SLEEP_S = 0.3  # sleep between DOM stability checks
+
 
 # ---------------------------------------------------------------------------
 # Environment-backed settings (reads from env vars automatically)

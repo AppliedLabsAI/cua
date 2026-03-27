@@ -1,8 +1,10 @@
-# CUA — Computer Use Agent for Internal Dashboard Automation
+# CUA — Computer Use Agent
 
-Deterministic browser automation for internal dashboards, powered by Claude. CUA automates actions that can only be performed through a dashboard UI — replacing manual work when building external API endpoints is impractical due to linked business logic and side effects.
+Browser automation powered by Claude. CUA is built for **internal dashboard operations** — the kind of tasks that live behind a login, lack API coverage, and require clicking through UI flows manually. Define known workflows as deterministic YAML playbooks; for everything else, the LLM agent drives the browser autonomously.
 
-CUA uses a **playbook-first architecture**: define workflows as YAML playbooks with selector fallback chains and step verification, then execute them deterministically via Playwright. When a playbook step fails twice, CUA hands off **all remaining steps** to the full LLM agent, which takes complete control of the browser to finish the task.
+While optimized for internal tooling (session persistence, private network access, auth handling), CUA works as a general-purpose browser agent for any web-based task.
+
+**Playbook-first architecture**: known workflows run deterministically via Playwright with zero LLM calls. If a step breaks (UI changed, selector stale), CUA hands off all remaining steps to the full LLM agent to finish the job.
 
 ```text
 Directive → Playbook Lookup → PlaybookRunner (deterministic) → Result
@@ -95,76 +97,29 @@ Intermediate steps skip screenshots for speed. Only the final step captures the 
 
 Playbooks define deterministic action sequences for known dashboard workflows. Each step has a selector fallback chain and post-action verification.
 
-### Defining a playbook
+### Creating a playbook from a recording
 
-Create a YAML file in `playbooks/definitions/`:
+Instead of writing YAML by hand, use the `/create-playbook` Claude Code skill to record a browser session and generate a playbook automatically:
 
-```yaml
-id: cancel_order
-name: Cancel Order
-description: Find order by ID and cancel it
-tags: ["cancel", "cancel order"]
-auth_required: true
-guardrails:
-  allow_private_networks: true       # for localhost dashboards
-  enable_llm_action_check: false     # pre-approved flows
-  max_urls_visited: 200
-  max_consecutive_errors: 10
-parameters:
-  - name: order_id
-    type: string
-    description: The order ID to cancel
-    pattern: "#?(\\d{3,})"
+1. Run `/create-playbook` in Claude Code
+2. Provide a directive (e.g., "Cancel order #12345") and the dashboard URL
+3. A browser window opens — perform the workflow manually
+4. Close the browser or press Ctrl+Shift+S when done
+5. Claude reads the recorded interactions and generates an optimized playbook with selector fallback chains, verification steps, and parameterized values
 
-steps:
-  - action: goto
-    params:
-      url: "https://dashboard.internal/orders"
-    verify:
-      expect_url_contains: "/orders"
-      expect_element_visible: "table"
-    description: Navigate to orders page
+The recording captures clicks, typing, navigation, and selections, then generates multiple selector candidates per element (role, text, attribute, structural) for resilience against UI changes.
 
-  - action: click
-    selector:
-      primary: "input[placeholder*='Search']"
-      fallbacks:
-        - "role=searchbox"
-        - "input[type='search']"
-    description: Click search box
+You can also record standalone without the skill:
 
-  - action: key_press
-    params:
-      text: "{order_id}"
-    description: Type order ID
-
-  - action: key_press
-    params:
-      key: Enter
-    verify:
-      expect_element_visible: "table tbody tr"
-    description: Submit search
-
-  - action: click
-    selector:
-      primary: "text=Cancel"
-      fallbacks:
-        - "button.cancel-btn"
-        - "role=button[name*='Cancel']"
-    verify:
-      expect_element_visible: "text=Are you sure"
-    description: Click cancel button
-
-  - action: click
-    selector:
-      primary: "text=Confirm"
-      fallbacks:
-        - "button.confirm-btn"
-        - ".modal button.primary"
-    verify:
-      expect_text_on_page: "cancelled"
-    description: Confirm cancellation
+```bash
+python scripts/record_interaction.py \
+  --start-url https://dashboard.internal/orders \
+  --output output/recording.json
 ```
+
+### Defining a playbook manually
+
+You can also write playbooks by hand. See the examples in `playbooks/definitions/` for the full YAML schema — each file demonstrates steps, selector fallback chains, parameter injection, and verification.
 
 ### Available actions
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from bridge.js_helpers import EXTRACT_VALUE_INIT_JS, SMART_EXTRACT_INIT_JS
+from settings import SETTLE_SLEEP_S, SETTLE_TIMEOUT_MS
 
 SMART_EXTRACT_CALL_JS = """(initJS) => {
     if (!window.__smartExtract) new Function(initJS)();
@@ -34,8 +35,8 @@ class PageActionConfig:
     type_delay_ms: int = 0
     settle_after_click: bool = True
     settle_after_evaluate: bool = True
-    settle_timeout_ms: int = 3000
-    settle_sleep_s: float = 0.3
+    settle_timeout_ms: int = SETTLE_TIMEOUT_MS
+    settle_sleep_s: float = SETTLE_SLEEP_S
     smart_body_extract: bool = True
 
 

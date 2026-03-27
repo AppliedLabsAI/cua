@@ -24,9 +24,8 @@ from bridge.js_helpers import (
     EXTRACT_VALUE_INIT_JS,
     SMART_EXTRACT_INIT_JS,
 )
+from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS
 
-_DEFAULT_TIMEOUT = 3000  # 3s for clicks/waits/selectors — fail fast on bad selectors
-_NAVIGATION_TIMEOUT = 7_000  # 7s for page loads — real sites need more time
 _DOM_MAX_CHARS = 3500
 # Compact DOM auto-attached to goto/click responses
 _AUTO_DOM_MAX_CHARS = 2500  # Leave room for nav text + content summary
@@ -74,7 +73,7 @@ class BrowserManager:
             context_kwargs["user_agent"] = user_agent
 
         self._context = await self._browser.new_context(**context_kwargs)
-        self._context.set_default_timeout(_DEFAULT_TIMEOUT)
+        self._context.set_default_timeout(ACTION_TIMEOUT_MS)
 
         # Pre-load JS helpers on every page (survives navigations)
         await self._context.add_init_script(script=DOM_SNAPSHOT_INIT_JS)
@@ -88,7 +87,7 @@ class BrowserManager:
             await self._page.goto(
                 start_url,
                 wait_until="domcontentloaded",
-                timeout=_NAVIGATION_TIMEOUT,
+                timeout=NAVIGATION_TIMEOUT_MS,
             )
 
     @property
