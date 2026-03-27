@@ -1,8 +1,6 @@
 name: default
 description: >
   General-purpose browser automation agent with safe defaults.
-  Use the 'dashboard' profile for trusted internal dashboards
-  that need private network access and relaxed safety checks.
 prompt_extension: |
   Be precise: verify each action succeeded before proceeding.
   Use execute_sequence to batch related actions on the same page.

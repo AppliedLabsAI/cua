@@ -53,7 +53,7 @@ _security = HTTPBearer(auto_error=False)
 async def _verify_api_key(
     credentials: HTTPAuthorizationCredentials | None = Depends(_security),  # noqa: B008
 ) -> None:
-    """Verify Bearer token. Auth is required unless environment=development."""
+    """Verify Bearer token. Auth is required unless environment=local."""
     if not _API_KEY:
         if get_settings().environment == "local":
             return  # No auth configured — local dev mode
@@ -174,7 +174,7 @@ async def create_run(config: RunConfig) -> RunResponse:
                     "error": "Failed to create sandbox",
                     "run_id": run_id,
                     "message": error_msg
-                    if get_settings().environment == "development"
+                    if get_settings().environment == "local"
                     else "Internal error — check server logs",
                 },
             ) from exc

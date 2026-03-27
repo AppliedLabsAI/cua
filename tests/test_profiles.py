@@ -13,7 +13,7 @@ class TestLoadProfile:
         profile = load_profile("default")
         assert profile.name == "default"
         assert profile.prompt_extension is not None
-        assert "Dashboard" in profile.prompt_extension
+        assert "Be precise" in profile.prompt_extension
 
     def test_missing_profile_raises(self):
         with pytest.raises(ValueError, match="not found"):
@@ -27,13 +27,13 @@ class TestListProfiles:
 
 
 class TestApplyGuardrailOverrides:
-    def test_default_profile_has_dashboard_overrides(self):
+    def test_default_profile_keeps_safe_guardrails(self):
         profile = load_profile("default")
         config = apply_guardrail_overrides(profile)
-        assert config.enable_llm_action_check is False
-        assert config.allow_private_networks is True
-        assert config.max_urls_visited == 200
-        assert config.max_consecutive_errors == 10
+        assert config.enable_llm_action_check is True
+        assert config.allow_private_networks is False
+        assert config.max_urls_visited == 50
+        assert config.max_consecutive_errors == 5
 
     def test_overrides_merge_with_base(self):
         profile = load_profile("default")
@@ -41,5 +41,5 @@ class TestApplyGuardrailOverrides:
         config = apply_guardrail_overrides(profile, base)
         # Explicit base value takes precedence over profile override
         assert config.max_urls_visited == 100
-        # Profile override applied where base uses defaults
-        assert config.max_consecutive_errors == 10
+        # No profile overrides exist, so base values are preserved.
+        assert config.max_consecutive_errors == 5
