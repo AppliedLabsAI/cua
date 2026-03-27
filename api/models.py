@@ -59,7 +59,7 @@ class ActionEvent(BaseModel):
 class RunConfig(BaseModel):
     """POST /runs request body."""
 
-    directive: str
+    directive: str = Field(..., max_length=10_000)
     model: str = AGENT_MODEL
     max_steps: int = Field(default=50, ge=1, le=200)
     timeout_seconds: int = Field(default=600, ge=30, le=3600)

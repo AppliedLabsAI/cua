@@ -16,6 +16,7 @@ from api.models import ActionEvent
 
 _LOG_DIR = "/tmp/cua-actions"
 os.makedirs(_LOG_DIR, exist_ok=True)
+os.chmod(_LOG_DIR, 0o700)
 
 # Fields in tool_input that may contain large content — truncated before logging
 _LARGE_FIELDS = {"text"}

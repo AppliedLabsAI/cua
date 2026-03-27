@@ -6,6 +6,7 @@ the agent for different use cases without changing the tools or agent loop.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +27,9 @@ class Profile:
     guardrail_overrides: dict = field(default_factory=dict)
 
 
+_PROFILE_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
 def load_profile(name: str) -> Profile:
     """Load a profile by name from the profiles/ directory.
 
@@ -33,8 +37,13 @@ def load_profile(name: str) -> Profile:
         name: Profile name (without .yaml extension).
 
     Raises:
-        ValueError: If the profile file doesn't exist.
+        ValueError: If the profile name is invalid or file doesn't exist.
     """
+    if not _PROFILE_NAME_RE.match(name):
+        raise ValueError(
+            f"Invalid profile name '{name}': must contain only alphanumeric "
+            "characters, hyphens, and underscores"
+        )
     path = _PROFILES_DIR / f"{name}.yaml"
     if not path.exists():
         available = list_profiles()
