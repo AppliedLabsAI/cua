@@ -4,7 +4,7 @@ Deterministic browser automation for internal dashboards, powered by Claude. CUA
 
 CUA uses a **playbook-first architecture**: define workflows as YAML playbooks with selector fallback chains and step verification, then execute them deterministically via Playwright. When a playbook step fails twice, CUA hands off **all remaining steps** to the full LLM agent, which takes complete control of the browser to finish the task.
 
-```
+```text
 Directive → Playbook Lookup → PlaybookRunner (deterministic) → Result
                  ↓ (miss)              ↓ (step fails 2x)
             Full LLM Agent    LLM Agent completes remaining steps
@@ -178,7 +178,6 @@ Playbooks support these actions (same as the LLM agent's `browser_dom` tool):
 | `scroll(direction, amount)` | Scroll the page | Direction: up/down/left/right |
 | `wait_for(selector, state)` | Wait for element state | Comma-separated selectors supported |
 | `extract(selector, mode)` | Extract text, HTML, or form values | Modes: `text` (default), `html`, `value`. Output shown in results |
-| `evaluate(script)` | Execute JavaScript on the page | For reading DOM values, navigating via JS |
 | `select(selector, value)` | Select a dropdown option | Uses selector fallback chain |
 
 ### Playbook features
@@ -186,8 +185,9 @@ Playbooks support these actions (same as the LLM agent's `browser_dom` tool):
 - **Selector fallback chains**: Each step tries `primary` selector first, then `fallbacks` in order (800ms timeout per selector). Handles dashboard UI changes without playbook edits.
 - **Step verification**: Assert expected state after every action — `expect_url_contains`, `expect_element_visible`, `expect_element_gone`, `expect_text_on_page`. Catches failures immediately.
 - **Parameter injection**: `{param_name}` placeholders in selectors, params, descriptions, and verification are replaced at runtime.
+- **Step outputs**: `extract` steps can set `store_as` and later steps can reference `{stored_value}` in URLs, selectors, and verification without custom JavaScript.
 - **Data extraction**: `extract` steps capture text from elements and display it in the output.
-- **JavaScript evaluation**: `evaluate` steps run arbitrary JS for complex DOM interactions (e.g., reading FK select values and navigating to detail pages).
+- **Declarative navigation**: Prefer `extract` + `store_as` + `goto` over raw JavaScript for FK traversal and similar flows.
 - **Per-playbook guardrails**: Each playbook can specify its own `guardrails` config (private networks, LLM checks, URL limits). Used both during playbook execution and when falling back to the LLM agent.
 - **Failure handling**: Each step can specify `on_failure`:
   - `llm_recover` (default) — after 2 failures, hands off ALL remaining steps to the full LLM agent

@@ -3,6 +3,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, Literal
+
+PlaybookAction = Literal[
+    "goto",
+    "click",
+    "key_press",
+    "scroll",
+    "wait_for",
+    "select",
+    "evaluate",
+    "extract",
+]
+OnFailureMode = Literal["llm_recover", "retry", "abort"]
+ParameterType = Literal["string", "int", "selector_text"]
+
+KNOWN_PLAYBOOK_ACTIONS: tuple[PlaybookAction, ...] = (
+    "goto",
+    "click",
+    "key_press",
+    "scroll",
+    "wait_for",
+    "select",
+    "evaluate",
+    "extract",
+)
+KNOWN_FAILURE_MODES: tuple[OnFailureMode, ...] = ("llm_recover", "retry", "abort")
+KNOWN_PARAMETER_TYPES: tuple[ParameterType, ...] = ("string", "int", "selector_text")
 
 
 @dataclass
@@ -36,15 +63,61 @@ class StepVerification:
 
 
 @dataclass
+class PlaybookGuardrails:
+    """Optional per-playbook guardrail overrides for LLM handoff."""
+
+    allowed_domains: list[str] | None = None
+    blocked_domains: list[str] | None = None
+    max_urls_visited: int | None = None
+    max_consecutive_errors: int | None = None
+    allow_private_networks: bool | None = None
+    enable_llm_action_check: bool | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> PlaybookGuardrails:
+        payload = data or {}
+        known_fields = cls.__dataclass_fields__
+        unknown_fields = sorted(set(payload) - set(known_fields))
+        if unknown_fields:
+            raise ValueError(
+                f"Unknown playbook guardrail overrides: {', '.join(unknown_fields)}"
+            )
+        filtered = {key: value for key, value in payload.items() if key in known_fields}
+        return cls(**filtered)
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for field_name in self.__dataclass_fields__:
+            value = getattr(self, field_name)
+            if value is not None:
+                result[field_name] = value
+        return result
+
+    def has_overrides(self) -> bool:
+        return any(
+            getattr(self, field_name) is not None
+            for field_name in self.__dataclass_fields__
+        )
+
+    def to_runtime_config(self):
+        from guardrails import GuardrailConfig
+
+        if not self.has_overrides():
+            return GuardrailConfig()
+        return GuardrailConfig.from_dict(self.to_dict())
+
+
+@dataclass
 class PlaybookStep:
     """Single action in a playbook."""
 
-    action: str  # goto, click, key_press, scroll, wait_for
-    params: dict = field(default_factory=dict)
+    action: PlaybookAction
+    params: dict[str, Any] = field(default_factory=dict)
     selector: SelectorStrategy | None = None
     verify: StepVerification | None = None
     description: str = ""
-    on_failure: str = "llm_recover"  # "llm_recover" | "retry" | "abort"
+    on_failure: OnFailureMode = "llm_recover"
+    store_as: str = ""  # Save extracted output for later {param} substitution
 
 
 @dataclass
@@ -52,7 +125,7 @@ class PlaybookParameter:
     """Variable slot in a playbook template."""
 
     name: str
-    type: str = "string"  # "string" | "int" | "selector_text"
+    type: ParameterType = "string"
     description: str = ""
     inject_into: str = ""  # Dot-path: "steps.2.params.text"
     pattern: str = ""  # Regex for extraction from directive
@@ -70,9 +143,7 @@ class Playbook:
     steps: list[PlaybookStep] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     start_url: str = ""  # Override start URL for this playbook
-    guardrails: dict = field(
-        default_factory=dict
-    )  # GuardrailConfig overrides for LLM handoff
+    guardrails: PlaybookGuardrails = field(default_factory=PlaybookGuardrails)
 
 
 @dataclass

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from patchright.async_api import Page
 
-from bridge.browser import _CAPTCHA_DETECT_INIT_JS
+from bridge.js_helpers import CAPTCHA_DETECT_INIT_JS
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class CaptchaHandleResult:
 async def detect_captcha(page: Page) -> CaptchaDetection:
     """Fast DOM check (<100ms) for known CAPTCHA patterns."""
     try:
-        result = await page.evaluate(_DETECT_JS, _CAPTCHA_DETECT_INIT_JS)
+        result = await page.evaluate(_DETECT_JS, CAPTCHA_DETECT_INIT_JS)
     except Exception as exc:
         log.debug("detect_captcha failed during page.evaluate: %s", exc)
         return CaptchaDetection(detected=False)
@@ -98,7 +98,7 @@ async def wait_for_captcha_resolution(
         await asyncio.sleep(_POLL_INTERVAL_MS / 1000)
         try:
             still_present = await page.evaluate(
-                _STILL_PRESENT_JS, _CAPTCHA_DETECT_INIT_JS
+                _STILL_PRESENT_JS, CAPTCHA_DETECT_INIT_JS
             )
             if not still_present:
                 return True

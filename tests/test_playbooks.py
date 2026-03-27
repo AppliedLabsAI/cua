@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from playbooks.params import materialize_playbook
 from playbooks.parser import DirectiveParser
 from playbooks.schema import (
     Playbook,
+    PlaybookGuardrails,
+    PlaybookParameter,
     PlaybookStep,
     SelectorStrategy,
+    StepResult,
     StepVerification,
 )
 from playbooks.store import PlaybookStore
@@ -46,12 +52,18 @@ class TestPlaybookSchema:
         assert pb.tags == []
         assert pb.parameters == []
         assert pb.start_url == ""
+        assert pb.guardrails.has_overrides() is False
 
     def test_step_defaults(self):
         step = PlaybookStep(action="click")
         assert step.on_failure == "llm_recover"
         assert step.selector is None
         assert step.verify is None
+
+    def test_guardrails_to_runtime_config(self):
+        guardrails = PlaybookGuardrails(allow_private_networks=True)
+        runtime = guardrails.to_runtime_config()
+        assert runtime.allow_private_networks is True
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +276,45 @@ class TestDirectiveParser:
         _, params = result
         assert params["amount"] == "500"
 
+    def test_materialize_playbook_applies_inject_path(self):
+        playbook = Playbook(
+            id="cancel",
+            name="Cancel",
+            parameters=[
+                PlaybookParameter(
+                    name="order_id",
+                    inject_into="steps.1.params.text",
+                )
+            ],
+            steps=[
+                PlaybookStep(action="goto", params={"url": "https://example.com"}),
+                PlaybookStep(action="key_press", params={"text": "placeholder"}),
+            ],
+        )
+
+        bound = materialize_playbook(playbook, {"order_id": "12345"})
+        assert bound.steps[1].params["text"] == "12345"
+
+    def test_save_and_reload_preserves_store_as(self, tmp_path: Path):
+        playbook = Playbook(
+            id="extractor",
+            name="Extractor",
+            steps=[
+                PlaybookStep(
+                    action="extract",
+                    params={"mode": "value"},
+                    store_as="shop_id",
+                )
+            ],
+        )
+
+        store = PlaybookStore(tmp_path)
+        store.save(playbook)
+        store._cache.clear()
+
+        loaded = store.load("extractor")
+        assert loaded.steps[0].store_as == "shop_id"
+
 
 # ---------------------------------------------------------------------------
 # Runner parameter injection tests (no browser needed)
@@ -299,3 +350,133 @@ class TestRunnerParamInjection:
         result = runner._inject_params(step, {})
         assert result.action == "click"
         assert result.description == "Click button"
+
+
+class _FakeExecutor:
+    def __init__(self, results):
+        self.results = list(results)
+
+    async def execute_step(self, step, page):
+        return self.results.pop(0)
+
+
+class TestRunnerFailurePolicy:
+    def test_abort_does_not_retry(self):
+        from playbooks.runner import PlaybookRunner
+
+        runner = PlaybookRunner.__new__(PlaybookRunner)
+        runner._browser = SimpleNamespace(page=object())
+        runner._recording = None
+        runner._executor = _FakeExecutor(
+            [
+                StepResult(
+                    step_index=0,
+                    action="click",
+                    success=False,
+                    error="boom",
+                )
+            ]
+        )
+
+        step = PlaybookStep(action="click", on_failure="abort")
+        result = asyncio.run(
+            runner._run_with_policy(
+                playbook=Playbook(id="p", name="P"),
+                step=step,
+                remaining_steps=[step],
+                page=object(),
+            )
+        )
+        assert result.success is False
+        assert result.recovery_used is False
+
+    def test_retry_does_not_use_llm_handoff(self, monkeypatch):
+        from playbooks.runner import PlaybookRunner
+
+        monkeypatch.setattr("playbooks.runner.RETRY_DELAY_S", 0)
+
+        runner = PlaybookRunner.__new__(PlaybookRunner)
+        runner._browser = SimpleNamespace(page=object())
+        runner._recording = None
+        runner._executor = _FakeExecutor(
+            [
+                StepResult(
+                    step_index=0,
+                    action="click",
+                    success=False,
+                    error="boom",
+                ),
+                StepResult(
+                    step_index=0,
+                    action="click",
+                    success=False,
+                    error="still boom",
+                ),
+            ]
+        )
+
+        async def _should_not_run(**kwargs):
+            raise AssertionError("LLM handoff should not run for retry mode")
+
+        runner._llm_complete_remaining = _should_not_run
+
+        step = PlaybookStep(action="click", on_failure="retry")
+        result = asyncio.run(
+            runner._run_with_policy(
+                playbook=Playbook(id="p", name="P"),
+                step=step,
+                remaining_steps=[step],
+                page=object(),
+            )
+        )
+        assert result.success is False
+        assert result.error == "still boom"
+
+
+class TestRunnerStepOutputs:
+    def test_extracted_output_is_available_to_later_steps(self):
+        from playbooks.runner import PlaybookRunner
+
+        observed_urls: list[str] = []
+
+        class _OutputExecutor:
+            async def execute_step(self, step, page):
+                if step.action == "extract":
+                    return StepResult(
+                        step_index=0,
+                        action=step.action,
+                        success=True,
+                        extracted_text="42",
+                    )
+                observed_urls.append(step.params["url"])
+                return StepResult(
+                    step_index=0,
+                    action=step.action,
+                    success=True,
+                )
+
+        runner = PlaybookRunner.__new__(PlaybookRunner)
+        runner._browser = SimpleNamespace(page=object())
+        runner._recording = None
+        runner._executor = _OutputExecutor()
+
+        playbook = Playbook(
+            id="shop-hours",
+            name="Shop Hours",
+            steps=[
+                PlaybookStep(
+                    action="extract",
+                    params={"mode": "value"},
+                    store_as="shop_id",
+                ),
+                PlaybookStep(
+                    action="goto",
+                    params={"url": "https://example.com/shop/{shop_id}"},
+                ),
+            ],
+        )
+
+        result = asyncio.run(runner.execute(playbook))
+
+        assert result.success is True
+        assert observed_urls == ["https://example.com/shop/42"]

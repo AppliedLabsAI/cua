@@ -29,6 +29,8 @@ from recording.manager import RecordingManager
 if TYPE_CHECKING:
     from profiles.loader import Profile
 
+import contextlib
+
 from telemetry.logging import setup_logging
 
 setup_logging()
@@ -79,7 +81,14 @@ async def run(args: argparse.Namespace) -> int:
 
     credentials = None
     if args.credentials:
-        credentials = json.loads(args.credentials)
+        try:
+            credentials = json.loads(args.credentials)
+        except json.JSONDecodeError as exc:
+            log.error("Invalid --credentials JSON: %s", exc)
+            with contextlib.suppress(Exception):
+                await recording.stop()
+            await browser.close()
+            return 1
 
     # --- Playbook path (deterministic, no LLM loop) ---
     # Skips blinders, scope extraction, guardrails, and ActionRouter entirely.
@@ -118,12 +127,14 @@ async def _run_playbook(
         if parsed:
             _, pb_params = parsed
 
-    # Authenticate if needed
-    if playbook.auth_required and credentials:
-        auth = DashboardAuth(browser, credentials)
+    # Authenticate if needed (attempt session restore even without fresh credentials)
+    if playbook.auth_required:
+        auth = DashboardAuth(browser, credentials or {})
         login_url = playbook.start_url or ""
         if not await auth.ensure_authenticated(login_url):
             log.error("Authentication failed")
+            with contextlib.suppress(Exception):
+                await recording.stop()
             await browser.close()
             return 1
 

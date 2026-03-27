@@ -5,13 +5,13 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-from patchright.async_api import Page
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
-    from patchright.async_api import BrowserContext
+    from patchright.async_api import BrowserContext, Page
 
     from bridge.browser import BrowserManager
 
@@ -19,6 +19,44 @@ log = logging.getLogger(__name__)
 
 _SESSION_DIR = Path.home() / ".cua" / "sessions"
 _LOGIN_TIMEOUT = 15_000
+_USERNAME_SELECTORS = [
+    "input[type='email']",
+    "input[name='email']",
+    "input[name='username']",
+    "input[id='email']",
+    "input[id='username']",
+    "input[placeholder*='email' i]",
+    "input[placeholder*='username' i]",
+]
+_PASSWORD_SELECTORS = [
+    "input[type='password']",
+    "input[name='password']",
+    "input[id='password']",
+]
+_SUBMIT_SELECTORS = [
+    "button[type='submit']",
+    "input[type='submit']",
+    "text=Log in",
+    "text=Sign in",
+    "text=Login",
+    "text=Submit",
+    "role=button[name='Log in' i]",
+    "role=button[name='Sign in' i]",
+]
+
+
+class DashboardSessionStore:
+    """Persist session state in per-origin files to avoid cross-site reuse."""
+
+    def __init__(self, base_dir: Path = _SESSION_DIR) -> None:
+        self._base_dir = base_dir
+
+    def path_for(self, session_id: str, origin_hint: str) -> Path:
+        parsed = urlparse(origin_hint)
+        host = parsed.netloc or parsed.path or "default"
+        safe_host = "".join(ch if ch.isalnum() else "_" for ch in host).strip("_")
+        namespace = safe_host or "default"
+        return self._base_dir / namespace / f"{session_id}.json"
 
 
 class DashboardAuth:
@@ -33,11 +71,12 @@ class DashboardAuth:
         browser: BrowserManager,
         credentials: dict,
         session_id: str = "default",
+        session_store: DashboardSessionStore | None = None,
     ) -> None:
         self._browser = browser
         self._credentials = credentials
         self._session_id = session_id
-        self._session_path = _SESSION_DIR / f"{session_id}.json"
+        self._session_store = session_store or DashboardSessionStore()
 
     async def ensure_authenticated(self, login_url: str = "") -> bool:
         """Check if already logged in; if not, execute login flow.
@@ -48,9 +87,13 @@ class DashboardAuth:
         Returns True if authentication succeeded.
         """
         page = self._browser.page
+        session_path = self._session_store.path_for(
+            self._session_id,
+            login_url or page.url,
+        )
 
         # Try restoring a saved session first
-        if await self._restore_session(self._browser.context):
+        if await self._restore_session(self._browser.context, session_path):
             # Reload the page to apply restored cookies
             if login_url:
                 await page.goto(
@@ -75,7 +118,7 @@ class DashboardAuth:
         success = await self._login(page)
 
         if success:
-            await self._save_session(self._browser.context)
+            await self._save_session(self._browser.context, session_path)
             log.info("Login successful, session saved")
         else:
             log.error("Login failed")
@@ -94,81 +137,15 @@ class DashboardAuth:
             log.error("Missing username/email or password in credentials")
             return False
 
-        # Try common username/email selectors
-        username_selectors = [
-            "input[type='email']",
-            "input[name='email']",
-            "input[name='username']",
-            "input[id='email']",
-            "input[id='username']",
-            "input[placeholder*='email' i]",
-            "input[placeholder*='username' i]",
-        ]
-
-        username_filled = False
-        for selector in username_selectors:
-            try:
-                handle = await page.wait_for_selector(
-                    selector, state="visible", timeout=500
-                )
-                if handle:
-                    await page.fill(selector, username, timeout=3000)
-                    username_filled = True
-                    break
-            except Exception:
-                continue
-
-        if not username_filled:
+        if not await self._fill_first_visible(page, _USERNAME_SELECTORS, username):
             log.error("Could not find username/email input field")
             return False
 
-        # Fill password
-        password_selectors = [
-            "input[type='password']",
-            "input[name='password']",
-            "input[id='password']",
-        ]
-
-        password_filled = False
-        for selector in password_selectors:
-            try:
-                handle = await page.wait_for_selector(
-                    selector, state="visible", timeout=500
-                )
-                if handle:
-                    await page.fill(selector, password, timeout=3000)
-                    password_filled = True
-                    break
-            except Exception:
-                continue
-
-        if not password_filled:
+        if not await self._fill_first_visible(page, _PASSWORD_SELECTORS, password):
             log.error("Could not find password input field")
             return False
 
-        # Submit the form
-        submit_selectors = [
-            "button[type='submit']",
-            "input[type='submit']",
-            "text=Log in",
-            "text=Sign in",
-            "text=Login",
-            "text=Submit",
-            "role=button[name='Log in' i]",
-            "role=button[name='Sign in' i]",
-        ]
-
-        for selector in submit_selectors:
-            try:
-                handle = await page.wait_for_selector(
-                    selector, state="visible", timeout=500
-                )
-                if handle:
-                    await page.click(selector, timeout=3000)
-                    break
-            except Exception:
-                continue
-        else:
+        if not await self._click_first_visible(page, _SUBMIT_SELECTORS):
             # Fallback: press Enter
             await page.keyboard.press("Enter")
 
@@ -208,33 +185,114 @@ class DashboardAuth:
 
         return True
 
-    async def _save_session(self, context: BrowserContext) -> None:
+    async def _save_session(self, context: BrowserContext, session_path: Path) -> None:
         """Persist cookies and localStorage for session reuse."""
         try:
-            self._session_path.parent.mkdir(parents=True, exist_ok=True)
+            session_path.parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(session_path.parent, 0o700)
             state = await context.storage_state()
-            with open(self._session_path, "w") as f:
+            fd = os.open(
+                str(session_path),
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            with os.fdopen(fd, "w") as f:
                 json.dump(state, f)
-            log.info("Session state saved: %s", self._session_path)
+            log.info("Session state saved: %s", session_path)
         except Exception as exc:
             log.warning("Failed to save session state: %s", exc)
 
-    async def _restore_session(self, context: BrowserContext) -> bool:
-        """Restore a previously saved session."""
-        if not self._session_path.exists():
+    async def _restore_session(
+        self,
+        context: BrowserContext,
+        session_path: Path,
+    ) -> bool:
+        """Restore a previously saved session (cookies + per-origin localStorage)."""
+        if not session_path.exists():
             return False
 
         try:
-            with open(self._session_path) as f:
+            with open(session_path) as f:
                 state = json.load(f)
 
-            # Add cookies from saved state
+            # Restore cookies
             cookies = state.get("cookies", [])
             if cookies:
                 await context.add_cookies(cookies)
                 log.info("Restored %d cookies from saved session", len(cookies))
-                return True
+
+            # Restore per-origin localStorage
+            origins = state.get("origins", [])
+            if origins:
+                page = self._browser.page
+                for origin_data in origins:
+                    origin_url = origin_data.get("origin", "")
+                    ls_entries = origin_data.get("localStorage", [])
+                    if not origin_url or not ls_entries:
+                        continue
+                    try:
+                        await page.goto(
+                            origin_url,
+                            wait_until="domcontentloaded",
+                            timeout=_LOGIN_TIMEOUT,
+                        )
+                        await page.evaluate(
+                            """(entries) => {
+                                for (const e of entries) {
+                                    localStorage.setItem(e.name, e.value);
+                                }
+                            }""",
+                            ls_entries,
+                        )
+                        log.info(
+                            "Restored %d localStorage entries for %s",
+                            len(ls_entries),
+                            origin_url,
+                        )
+                    except Exception as exc:
+                        log.debug(
+                            "Failed to restore localStorage for %s: %s",
+                            origin_url,
+                            exc,
+                        )
+
+            return bool(cookies or origins)
         except Exception as exc:
             log.warning("Failed to restore session state: %s", exc)
 
+        return False
+
+    async def _fill_first_visible(
+        self,
+        page: Page,
+        selectors: list[str],
+        value: str,
+    ) -> bool:
+        for selector in selectors:
+            try:
+                handle = await page.wait_for_selector(
+                    selector,
+                    state="visible",
+                    timeout=500,
+                )
+                if handle:
+                    await page.fill(selector, value, timeout=3000)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _click_first_visible(self, page: Page, selectors: list[str]) -> bool:
+        for selector in selectors:
+            try:
+                handle = await page.wait_for_selector(
+                    selector,
+                    state="visible",
+                    timeout=500,
+                )
+                if handle:
+                    await page.click(selector, timeout=3000)
+                    return True
+            except Exception:
+                continue
         return False

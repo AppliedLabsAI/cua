@@ -34,12 +34,19 @@ steps:
       expect_url_contains: "/change/"
     description: Click the latest conversation
 
-  # --- Read shop ID from FK select and navigate to its change page ---
-  - action: evaluate
+  # --- Read shop ID from FK select ---
+  - action: extract
+    selector:
+      primary: "#id_shop"
     params:
-      script: >
-        const shopId = document.querySelector('#id_shop').value;
-        window.location.href = '/admin/core/shop/' + shopId + '/change/';
+      mode: value
+    store_as: shop_id
+    description: Extract the shop ID from the conversation
+
+  # --- Navigate to the referenced shop detail page ---
+  - action: goto
+    params:
+      url: "http://localhost:8000/admin/core/shop/{shop_id}/change/"
     verify:
       expect_url_contains: "/admin/core/shop/"
     description: Navigate to the shop detail page via its ID

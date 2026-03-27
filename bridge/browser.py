@@ -10,8 +10,6 @@ flags — they can conflict with its internal CDP patches.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from patchright.async_api import (
     Browser,
     BrowserContext,
@@ -20,18 +18,18 @@ from patchright.async_api import (
     async_playwright,
 )
 
+from bridge.js_helpers import (
+    CAPTCHA_DETECT_INIT_JS,
+    DOM_SNAPSHOT_INIT_JS,
+    EXTRACT_VALUE_INIT_JS,
+    SMART_EXTRACT_INIT_JS,
+)
+
 _DEFAULT_TIMEOUT = 3000  # 3s for clicks/waits/selectors — fail fast on bad selectors
 _NAVIGATION_TIMEOUT = 7_000  # 7s for page loads — real sites need more time
 _DOM_MAX_CHARS = 3500
 # Compact DOM auto-attached to goto/click responses
 _AUTO_DOM_MAX_CHARS = 2500  # Leave room for nav text + content summary
-
-# --- JS files loaded from disk once at import time ---
-_JS_DIR = Path(__file__).parent / "scripts"
-_DOM_SNAPSHOT_INIT_JS = (_JS_DIR / "dom_snapshot.js").read_text()
-_SMART_EXTRACT_INIT_JS = (_JS_DIR / "smart_extract.js").read_text()
-_CAPTCHA_DETECT_INIT_JS = (_JS_DIR / "captcha_detect.js").read_text()
-_EXTRACT_VALUE_INIT_JS = (_JS_DIR / "extract_value.js").read_text()
 
 
 class BrowserManager:
@@ -79,15 +77,19 @@ class BrowserManager:
         self._context.set_default_timeout(_DEFAULT_TIMEOUT)
 
         # Pre-load JS helpers on every page (survives navigations)
-        await self._context.add_init_script(script=_DOM_SNAPSHOT_INIT_JS)
-        await self._context.add_init_script(script=_SMART_EXTRACT_INIT_JS)
-        await self._context.add_init_script(script=_CAPTCHA_DETECT_INIT_JS)
-        await self._context.add_init_script(script=_EXTRACT_VALUE_INIT_JS)
+        await self._context.add_init_script(script=DOM_SNAPSHOT_INIT_JS)
+        await self._context.add_init_script(script=SMART_EXTRACT_INIT_JS)
+        await self._context.add_init_script(script=CAPTCHA_DETECT_INIT_JS)
+        await self._context.add_init_script(script=EXTRACT_VALUE_INIT_JS)
 
         self._page = await self._context.new_page()
 
         if start_url:
-            await self._page.goto(start_url, wait_until="domcontentloaded")
+            await self._page.goto(
+                start_url,
+                wait_until="domcontentloaded",
+                timeout=_NAVIGATION_TIMEOUT,
+            )
 
     @property
     def page(self) -> Page:

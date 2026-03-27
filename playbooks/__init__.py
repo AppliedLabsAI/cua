@@ -1,7 +1,11 @@
 """Playbook system for deterministic dashboard automation."""
 
 from playbooks.schema import (
+    OnFailureMode,
+    ParameterType,
     Playbook,
+    PlaybookAction,
+    PlaybookGuardrails,
     PlaybookParameter,
     PlaybookResult,
     PlaybookStep,
@@ -12,9 +16,13 @@ from playbooks.schema import (
 
 __all__ = [
     "Playbook",
+    "PlaybookAction",
+    "PlaybookGuardrails",
     "PlaybookParameter",
     "PlaybookResult",
     "PlaybookStep",
+    "ParameterType",
+    "OnFailureMode",
     "SelectorStrategy",
     "StepResult",
     "StepVerification",

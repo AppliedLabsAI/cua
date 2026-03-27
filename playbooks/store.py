@@ -8,7 +8,11 @@ from pathlib import Path
 import yaml
 
 from playbooks.schema import (
+    KNOWN_FAILURE_MODES,
+    KNOWN_PARAMETER_TYPES,
+    KNOWN_PLAYBOOK_ACTIONS,
     Playbook,
+    PlaybookGuardrails,
     PlaybookParameter,
     PlaybookStep,
     SelectorStrategy,
@@ -117,6 +121,16 @@ class PlaybookStore:
 
         steps = []
         for step_data in data.get("steps", []):
+            action = step_data["action"]
+            if action not in KNOWN_PLAYBOOK_ACTIONS:
+                raise ValueError(f"Unknown playbook action '{action}' in {path.name}")
+
+            on_failure = step_data.get("on_failure", "llm_recover")
+            if on_failure not in KNOWN_FAILURE_MODES:
+                raise ValueError(
+                    f"Unknown on_failure mode '{on_failure}' in {path.name}"
+                )
+
             selector = None
             sel_data = step_data.get("selector")
             if sel_data:
@@ -142,21 +156,27 @@ class PlaybookStore:
 
             steps.append(
                 PlaybookStep(
-                    action=step_data["action"],
+                    action=action,
                     params=step_data.get("params", {}),
                     selector=selector,
                     verify=verify,
                     description=step_data.get("description", ""),
-                    on_failure=step_data.get("on_failure", "llm_recover"),
+                    on_failure=on_failure,
+                    store_as=step_data.get("store_as", ""),
                 )
             )
 
         parameters = []
         for param_data in data.get("parameters", []):
+            parameter_type = param_data.get("type", "string")
+            if parameter_type not in KNOWN_PARAMETER_TYPES:
+                raise ValueError(
+                    f"Unknown parameter type '{parameter_type}' in {path.name}"
+                )
             parameters.append(
                 PlaybookParameter(
                     name=param_data["name"],
-                    type=param_data.get("type", "string"),
+                    type=parameter_type,
                     description=param_data.get("description", ""),
                     inject_into=param_data.get("inject_into", ""),
                     pattern=param_data.get("pattern", ""),
@@ -172,7 +192,7 @@ class PlaybookStore:
             steps=steps,
             tags=data.get("tags", []),
             start_url=data.get("start_url", ""),
-            guardrails=data.get("guardrails", {}),
+            guardrails=PlaybookGuardrails.from_dict(data.get("guardrails")),
         )
 
     @staticmethod
@@ -208,6 +228,8 @@ class PlaybookStore:
                 step_dict["description"] = step.description
             if step.on_failure != "llm_recover":
                 step_dict["on_failure"] = step.on_failure
+            if step.store_as:
+                step_dict["store_as"] = step.store_as
             steps.append(step_dict)
 
         params = []
@@ -234,8 +256,8 @@ class PlaybookStore:
         result["auth_required"] = playbook.auth_required
         if playbook.start_url:
             result["start_url"] = playbook.start_url
-        if playbook.guardrails:
-            result["guardrails"] = playbook.guardrails
+        if playbook.guardrails.has_overrides():
+            result["guardrails"] = playbook.guardrails.to_dict()
         if params:
             result["parameters"] = params
         result["steps"] = steps

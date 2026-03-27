@@ -10,10 +10,7 @@ window.__extractValue = sel => {
   const el = document.querySelector(sel);
   if (!el) return '[not found]';
   const tag = el.tagName.toLowerCase();
-  if (tag === 'select') {
-    const opt = el.options?.[el.selectedIndex];
-    return opt ? opt.text.trim() : '';
-  }
+  if (tag === 'select') return el.value;
   if (tag === 'textarea' || tag === 'input') return el.value;
   return el.innerText || el.textContent || '';
 };

@@ -51,7 +51,19 @@ _STATIC_TOOLS: list[dict] = [
                     "items": {
                         "type": "object",
                         "properties": {
-                            "action": {"type": "string"},
+                            "action": {
+                                "type": "string",
+                                "enum": [
+                                    "goto",
+                                    "click",
+                                    "screenshot",
+                                    "key_press",
+                                    "scroll",
+                                    "extract",
+                                    "get_dom",
+                                    "wait_for",
+                                ],
+                            },
                             "selector": {"type": "string"},
                             "text": {"type": "string"},
                             "key": {"type": "string"},
