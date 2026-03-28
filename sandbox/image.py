@@ -37,6 +37,7 @@ recording_volume = modal.Volume.from_name(
 
 sandbox_image = (
     modal.Image.from_registry("ubuntu:24.04")
+    .env({"DEBIAN_FRONTEND": "noninteractive"})
     .run_commands(
         # chromium-browser and firefox on Ubuntu 24.04 require snapd,
         # which fails in Modal containers (can't set capabilities).
