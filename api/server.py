@@ -16,6 +16,7 @@ import modal
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from modal import FilePatternMatcher
 from opentelemetry import trace as otel_trace  # StatusCode used below
 from starlette.responses import Response
 
@@ -43,7 +44,40 @@ from telemetry.spans import (
 
 log = logging.getLogger(__name__)
 
-modal_app = modal.App("cua")
+# ---------------------------------------------------------------------------
+# Modal app
+# ---------------------------------------------------------------------------
+
+_project_root = Path(__file__).resolve().parent.parent
+
+_exclude_dirs = FilePatternMatcher(
+    "output/**", "tests/**", "llm/**", ".git/**", "playbooks/definitions/**"
+)
+_include_exts = ~FilePatternMatcher(
+    "**/*.py",
+    "**/*.js",
+    "**/*.json",
+    "**/*.yaml",
+    "**/*.yml",
+    "**/*.toml",
+    "**/*.lock",
+    "**/*.sh",
+)
+_ignore = lambda path: _exclude_dirs(path) or _include_exts(path)  # noqa: E731
+
+modal_app = modal.App(
+    name="cua",
+    image=modal.Image.debian_slim(python_version="3.13")
+    .add_local_dir(
+        str(_project_root),
+        remote_path="/opt/cua",
+        copy=True,
+        ignore=_ignore,
+    )
+    .env({"PYTHONPATH": "/opt/cua"})
+    .uv_sync(str(_project_root), extra_options="--no-dev"),
+    secrets=[modal.Secret.from_name("llm-secret")],
+)
 
 # --- API key authentication ---
 _API_KEY = get_settings().cua_api_key or None
@@ -81,13 +115,13 @@ def _get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
-def _cleanup_finished_sandbox(run_id: str) -> bool:
+async def _cleanup_finished_sandbox(run_id: str) -> bool:
     handle = _run_registry.get(run_id)
     if handle is None:
         return False
 
     try:
-        exit_code = handle.sandbox.poll()
+        exit_code = await handle.sandbox.poll.aio()
     except Exception:
         log.exception("Failed to poll sandbox for run %s", run_id)
         return False
@@ -122,14 +156,21 @@ async def lifespan(app_instance: FastAPI):
     _http_client = None
 
 
-app = FastAPI(
+web_app = FastAPI(
     title="Computer Use Agent API",
     lifespan=lifespan,
     dependencies=[Depends(_verify_api_key)],
 )
 
 
-@app.post("/runs", response_model=RunResponse)
+@modal_app.function(timeout=3600)
+@modal.asgi_app()
+def serve():
+    """Serve the CUA FastAPI app as a Modal web endpoint."""
+    return web_app
+
+
+@web_app.post("/runs", response_model=RunResponse)
 async def create_run(config: RunConfig) -> RunResponse:
     """Create a new CUA run by spawning a Modal sandbox."""
     tracer = get_tracer()
@@ -153,12 +194,14 @@ async def create_run(config: RunConfig) -> RunResponse:
             with tracer.start_as_current_span(SANDBOX_CREATE):
                 # Inject trace context into sandbox env vars
                 trace_ctx = inject_trace_context()
-                sandbox = create_cua_sandbox(config, modal_app, extra_env=trace_ctx)
+                sandbox = await create_cua_sandbox(
+                    config, modal_app, extra_env=trace_ctx
+                )
                 run_id = sandbox.object_id
 
             session_span.set_attribute(ATTR_SESSION_ID, run_id)
 
-            tunnels = sandbox.tunnels()
+            tunnels = await sandbox.tunnels.aio()
             status_base = tunnels[PORT_STATUS].url
         except Exception as exc:
             log.exception("Failed to create sandbox for run %s", run_id or "unknown")
@@ -193,10 +236,10 @@ async def create_run(config: RunConfig) -> RunResponse:
         )
 
 
-@app.get("/runs/{run_id}", response_model=RunStatus)
+@web_app.get("/runs/{run_id}", response_model=RunStatus)
 async def get_run_status(run_id: str) -> RunStatus:
     """Get the status of a CUA run."""
-    if _cleanup_finished_sandbox(run_id):
+    if await _cleanup_finished_sandbox(run_id):
         return RunStatus(
             run_id=run_id,
             status="terminated",
@@ -223,23 +266,23 @@ async def get_run_status(run_id: str) -> RunStatus:
         )
 
 
-@app.post("/runs/{run_id}/stop")
+@web_app.post("/runs/{run_id}/stop")
 async def stop_run(run_id: str) -> dict:
     """Terminate a CUA run early."""
     handle = _run_registry.get(run_id)
     if not handle:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
-    handle.sandbox.terminate()
+    await handle.sandbox.terminate.aio()
     _remove_run_registry(run_id)
     log.info("Terminated run %s", run_id)
     return {"status": "terminated", "run_id": run_id}
 
 
-@app.get("/runs/{run_id}/stream")
+@web_app.get("/runs/{run_id}/stream")
 async def stream_run(run_id: str) -> StreamingResponse:
     """Proxy SSE events from the sandbox's internal status API."""
-    if _cleanup_finished_sandbox(run_id):
+    if await _cleanup_finished_sandbox(run_id):
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     handle = _run_registry.get(run_id)
@@ -286,7 +329,7 @@ def _volume_path(run_id: str, *parts: str) -> Path:
     return result
 
 
-@app.get("/runs/{run_id}/recording/manifest")
+@web_app.get("/runs/{run_id}/recording/manifest")
 async def get_recording_manifest(run_id: str) -> dict:
     """List recording artifacts. Proxies to sandbox if live, reads volume if completed."""
     handle = _run_registry.get(run_id)
@@ -307,7 +350,7 @@ async def get_recording_manifest(run_id: str) -> dict:
     return {"run_id": run_id, "artifacts": scan_recording_artifacts(run_dir)}
 
 
-@app.get("/runs/{run_id}/recording/trace")
+@web_app.get("/runs/{run_id}/recording/trace")
 async def get_recording_trace(run_id: str) -> Response:
     """Download the Playwright trace ZIP."""
     handle = _run_registry.get(run_id)
@@ -339,7 +382,7 @@ async def get_recording_trace(run_id: str) -> Response:
     return FileResponse(path, media_type="application/zip", filename="trace.zip")
 
 
-@app.get("/runs/{run_id}/recording/screenshots/{filename}")
+@web_app.get("/runs/{run_id}/recording/screenshots/{filename}")
 async def get_recording_screenshot(run_id: str, filename: str) -> FileResponse:
     """Download an individual screenshot."""
     safe_name = Path(filename).name

@@ -72,17 +72,76 @@ python scripts/run_local.py \
   --credentials '{"username": "admin", "password": "secret"}'
 ```
 
-### API deployment
+### Deploy to Modal
+
+CUA deploys to [Modal](https://modal.com) as a managed API. Each run spawns an isolated sandbox with its own browser, desktop environment, and agent runtime.
+
+**1. Install Modal and authenticate:**
 
 ```bash
-modal secret create llm-secret ANTHROPIC_API_KEY=sk-ant-...  # or OPENAI_API_KEY, GOOGLE_API_KEY
-modal deploy api/server.py
-
-curl -X POST https://your-app--cua.modal.run/runs \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $CUA_API_KEY" \
-  -d '{"directive": "Cancel order #12345"}'
+pip install modal
+modal setup
 ```
+
+**2. Create a secret with your API keys:**
+
+```bash
+modal secret create llm-secret \
+  ANTHROPIC_API_KEY=sk-ant-... \
+  OPENAI_API_KEY=sk-... \
+  GOOGLE_API_KEY=... \
+  CUA_API_KEY=your-secret-api-key \
+  ENVIRONMENT=production
+```
+
+Set at least one LLM provider key. `CUA_API_KEY` is the Bearer token clients use to authenticate — pick any strong secret. `ENVIRONMENT=production` enables auth enforcement.
+
+**3. Deploy:**
+
+```bash
+modal deploy api/server.py::modal_app
+```
+
+The first deploy builds the sandbox image (~5 min for apt packages + Chromium). Subsequent deploys reuse the cached image and take ~30s.
+
+**4. Use the API:**
+
+```bash
+# Create a run
+curl -X POST https://<workspace>--cua-serve.modal.run/runs \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-api-key" \
+  -d '{"directive": "Go to example.com and tell me the page title"}'
+
+# Check status
+curl https://<workspace>--cua-serve.modal.run/runs/{run_id} \
+  -H "Authorization: Bearer your-secret-api-key"
+
+# Stream events (SSE)
+curl -N https://<workspace>--cua-serve.modal.run/runs/{run_id}/stream \
+  -H "Authorization: Bearer your-secret-api-key"
+
+# Stop a run
+curl -X POST https://<workspace>--cua-serve.modal.run/runs/{run_id}/stop \
+  -H "Authorization: Bearer your-secret-api-key"
+```
+
+Replace `<workspace>` with your Modal workspace name (shown after `modal deploy`).
+
+**API request body (`POST /runs`):**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `directive` | string | (required) | Natural language task |
+| `model` | string | `google-gla:gemini-3-flash-preview` | LLM model |
+| `max_steps` | int | 50 | Max agent iterations |
+| `timeout_seconds` | int | 600 | Sandbox timeout (30-3600) |
+| `thinking` | string | `high` | Thinking effort level |
+| `start_url` | string | null | URL to open on launch |
+| `credentials` | object | null | `{"domain": {"username": "...", "password": "..."}}` |
+| `profile` | string | `default` | Agent profile |
+| `guardrails` | object | null | Domain/action safety config |
+| `recording` | object | null | `{"enabled": true, "screenshots": true, "trace": true}` |
 
 ## Tools
 
@@ -318,13 +377,16 @@ Recordings are persisted to a Modal Volume (`cua-recordings`) and accessible via
 
 ```bash
 # List recording artifacts
-curl https://your-app--cua.modal.run/runs/{run_id}/recording/manifest
+curl https://<workspace>--cua-serve.modal.run/runs/{run_id}/recording/manifest \
+  -H "Authorization: Bearer your-secret-api-key"
 
 # Download the trace
-curl -o trace.zip https://your-app--cua.modal.run/runs/{run_id}/recording/trace
+curl -o trace.zip https://<workspace>--cua-serve.modal.run/runs/{run_id}/recording/trace \
+  -H "Authorization: Bearer your-secret-api-key"
 
 # Download a specific screenshot
-curl -o shot.jpg https://your-app--cua.modal.run/runs/{run_id}/recording/screenshots/0003_click.jpg
+curl -o shot.jpg https://<workspace>--cua-serve.modal.run/runs/{run_id}/recording/screenshots/0003_click.jpg \
+  -H "Authorization: Bearer your-secret-api-key"
 ```
 
 ## Observability
