@@ -62,7 +62,6 @@ _include_exts = ~FilePatternMatcher(
     "**/*.lock",
     "**/*.sh",
 )
-_ignore = lambda path: _exclude_dirs(path) or _include_exts(path)  # noqa: E731
 
 api_image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -71,7 +70,7 @@ api_image = (
         str(_project_root),
         remote_path="/opt/cua",
         copy=True,
-        ignore=_ignore,
+        ignore=lambda path: _exclude_dirs(path) or _include_exts(path),
     )
     .env({"PYTHONPATH": "/opt/cua"})
     .uv_sync(str(_project_root))

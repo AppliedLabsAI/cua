@@ -30,7 +30,6 @@ _include_exts = ~FilePatternMatcher(
     "**/*.lock",
     "**/*.sh",
 )
-_ignore = lambda path: _exclude_dirs(path) or _include_exts(path)  # noqa: E731
 
 recording_volume = modal.Volume.from_name(
     "cua-recordings", create_if_missing=True, version=2
@@ -72,7 +71,7 @@ sandbox_image = (
     .add_local_dir(
         str(_project_root),
         remote_path="/opt/cua",
-        ignore=_ignore,
+        ignore=lambda path: _exclude_dirs(path) or _include_exts(path),
     )
 )
 
