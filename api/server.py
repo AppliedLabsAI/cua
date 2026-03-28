@@ -45,10 +45,11 @@ from telemetry.spans import (
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Modal app + image for the outer API server
+# Modal app
 # ---------------------------------------------------------------------------
 
 _project_root = Path(__file__).resolve().parent.parent
+
 _exclude_dirs = FilePatternMatcher(
     "output/**", "tests/**", "llm/**", ".git/**", "playbooks/definitions/**"
 )
@@ -62,35 +63,21 @@ _include_exts = ~FilePatternMatcher(
     "**/*.lock",
     "**/*.sh",
 )
+_ignore = lambda path: _exclude_dirs(path) or _include_exts(path)  # noqa: E731
 
-api_image = (
-    modal.Image.debian_slim(python_version="3.13")
-    # Copy source into image (copy=True needed because uv_sync runs after)
+modal_app = modal.App(
+    name="cua",
+    image=modal.Image.debian_slim(python_version="3.13")
     .add_local_dir(
         str(_project_root),
         remote_path="/opt/cua",
         copy=True,
-        ignore=lambda path: _exclude_dirs(path) or _include_exts(path),
+        ignore=_ignore,
     )
     .env({"PYTHONPATH": "/opt/cua"})
-    .uv_sync(str(_project_root))
-)
-
-modal_app = modal.App("cua")
-
-
-@modal_app.function(
-    image=api_image,
+    .uv_sync(str(_project_root), extra_options="--no-dev"),
     secrets=[modal.Secret.from_name("llm-secret")],
-    timeout=3600,
-    min_containers=0,
-    max_containers=1,
 )
-@modal.asgi_app()
-def serve():
-    """Serve the CUA FastAPI app as a Modal web endpoint."""
-    return app
-
 
 # --- API key authentication ---
 _API_KEY = get_settings().cua_api_key or None
@@ -169,14 +156,21 @@ async def lifespan(app_instance: FastAPI):
     _http_client = None
 
 
-app = FastAPI(
+web_app = FastAPI(
     title="Computer Use Agent API",
     lifespan=lifespan,
     dependencies=[Depends(_verify_api_key)],
 )
 
 
-@app.post("/runs", response_model=RunResponse)
+@modal_app.function(timeout=3600)
+@modal.asgi_app()
+def serve():
+    """Serve the CUA FastAPI app as a Modal web endpoint."""
+    return web_app
+
+
+@web_app.post("/runs", response_model=RunResponse)
 async def create_run(config: RunConfig) -> RunResponse:
     """Create a new CUA run by spawning a Modal sandbox."""
     tracer = get_tracer()
@@ -242,7 +236,7 @@ async def create_run(config: RunConfig) -> RunResponse:
         )
 
 
-@app.get("/runs/{run_id}", response_model=RunStatus)
+@web_app.get("/runs/{run_id}", response_model=RunStatus)
 async def get_run_status(run_id: str) -> RunStatus:
     """Get the status of a CUA run."""
     if await _cleanup_finished_sandbox(run_id):
@@ -272,7 +266,7 @@ async def get_run_status(run_id: str) -> RunStatus:
         )
 
 
-@app.post("/runs/{run_id}/stop")
+@web_app.post("/runs/{run_id}/stop")
 async def stop_run(run_id: str) -> dict:
     """Terminate a CUA run early."""
     handle = _run_registry.get(run_id)
@@ -285,7 +279,7 @@ async def stop_run(run_id: str) -> dict:
     return {"status": "terminated", "run_id": run_id}
 
 
-@app.get("/runs/{run_id}/stream")
+@web_app.get("/runs/{run_id}/stream")
 async def stream_run(run_id: str) -> StreamingResponse:
     """Proxy SSE events from the sandbox's internal status API."""
     if await _cleanup_finished_sandbox(run_id):
@@ -335,7 +329,7 @@ def _volume_path(run_id: str, *parts: str) -> Path:
     return result
 
 
-@app.get("/runs/{run_id}/recording/manifest")
+@web_app.get("/runs/{run_id}/recording/manifest")
 async def get_recording_manifest(run_id: str) -> dict:
     """List recording artifacts. Proxies to sandbox if live, reads volume if completed."""
     handle = _run_registry.get(run_id)
@@ -356,7 +350,7 @@ async def get_recording_manifest(run_id: str) -> dict:
     return {"run_id": run_id, "artifacts": scan_recording_artifacts(run_dir)}
 
 
-@app.get("/runs/{run_id}/recording/trace")
+@web_app.get("/runs/{run_id}/recording/trace")
 async def get_recording_trace(run_id: str) -> Response:
     """Download the Playwright trace ZIP."""
     handle = _run_registry.get(run_id)
@@ -388,7 +382,7 @@ async def get_recording_trace(run_id: str) -> Response:
     return FileResponse(path, media_type="application/zip", filename="trace.zip")
 
 
-@app.get("/runs/{run_id}/recording/screenshots/{filename}")
+@web_app.get("/runs/{run_id}/recording/screenshots/{filename}")
 async def get_recording_screenshot(run_id: str, filename: str) -> FileResponse:
     """Download an individual screenshot."""
     safe_name = Path(filename).name
