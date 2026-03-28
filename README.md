@@ -17,8 +17,8 @@ Directive → Playbook Lookup → PlaybookRunner (deterministic) → Result
 CUA uses [PydanticAI](https://ai.pydantic.dev/) and works with any model it supports — Anthropic, OpenAI, Google Gemini, Groq, and more. Set the model in `settings.py`:
 
 ```python
-PRIMARY_MODEL = "anthropic:claude-sonnet-4-6"   # main agent
-UTILITY_MODEL = "anthropic:claude-haiku-4-5"     # classification, guardrails, extraction
+PRIMARY_MODEL = "google-gla:gemini-3-flash-preview"      # main agent
+UTILITY_MODEL = "google-gla:gemini-3.1-flash-lite-preview"  # classification, guardrails, extraction
 ```
 
 To switch providers, change the model string and set the corresponding API key as an environment variable:
@@ -47,6 +47,51 @@ PydanticAI reads these automatically — no code changes needed. See [PydanticAI
 The agent relies on accurate CSS selector generation from DOM snapshots — weaker models produce selectors that timeout or miss elements.
 
 For `UTILITY_MODEL` (classification, guardrails), a fast/cheap model like `anthropic:claude-haiku-4-5` or `openai:gpt-5.4-mini` works well.
+
+## Development
+
+### Install
+
+```bash
+uv sync --dev
+patchright install chromium
+```
+
+Python `3.13+` is required.
+
+### Tests
+
+The default test suite is fully offline:
+
+- no real LLM calls
+- no API keys required
+- browser integration tests are opt-in
+
+Run the default suite:
+
+```bash
+pytest -q
+```
+
+Run browser integration tests explicitly:
+
+```bash
+pytest -q -m integration
+```
+
+### Evaluation
+
+Local eval suites let you measure task success, action count, latency, and output quality on representative flows.
+
+For agent cases, prefer setting an explicit `output_schema` in the suite. That keeps the structured result shape stable and makes assertions on `data` deterministic enough to be useful.
+
+Run the example suite:
+
+```bash
+python scripts/eval_local.py --suite evaluation/suites/example.yaml
+```
+
+This writes a JSON report to `output/evals/report.json` by default, alongside per-run artifacts for each case.
 
 ## Quick Start
 
@@ -330,7 +375,7 @@ graph LR
 |---|---|---|
 | **Deterministic** | ~25us | Action type allowed for goal? Domain in scope? SSRF? Navigation limit? |
 | **Regex fast-path** | ~5us | Is this a known-safe selector (navigation, menus, filters)? |
-| **Action Validator (Haiku)** | ~500ms | Is this action aligned with the user's task? (LLM fallback path only) |
+| **Action Validator (Haiku)** | ~500ms | Is this action aligned with the user's task? Should a potentially destructive click proceed? (LLM fallback path only) |
 
 **4. Tool Schema Restriction** — The tool definition sent to Claude only includes actions allowed by the task scope. For a `read` task, `key_press` and `execute_sequence` are absent from the schema — the model cannot select them.
 
@@ -341,11 +386,17 @@ Defense-in-depth checks that run alongside Cognitive Blinders. Configurable per-
 | Guard | Default | Configurable |
 |---|---|---|
 | Domain blocklist | Banking, government, email, payment, social media | `allowed_domains` / `blocked_domains` |
-| Destructive action detection | Regex fast-path for safe selectors; Haiku validation for ambiguous ones | `enable_llm_action_check` |
+| Destructive action handling | Task-alignment and click safety are decided in the LLM validation path when enabled; deterministic scope/domain checks still apply regardless | `enable_llm_action_check` |
 | SSRF protection | Private IPs blocked (override per-playbook) | `allow_private_networks` |
 | URL visit limit | 50 unique URLs per run | `max_urls_visited` |
 | Consecutive error limit | 5 errors | `max_consecutive_errors` |
 | CAPTCHA handling | Auto-detect + type-specific timeouts (Cloudflare 30s, reCAPTCHA 5s) | Skipped for dashboard goal type |
+
+Notes:
+
+- The default offline test suite does not make live LLM calls; it exercises degraded and deterministic paths only.
+- In real agent runs, `enable_llm_action_check=true` lets the model decide whether an ambiguous click is aligned with the task.
+- Playbook execution remains deterministic; the LLM safety path is relevant for ad hoc agent runs and LLM handoff flows.
 
 ## Session Recording & Replay
 

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import modal
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -12,7 +13,7 @@ class RunHandle(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     run_id: str
-    sandbox: modal.Sandbox
+    sandbox: Any
     status_base_url: str
 
 

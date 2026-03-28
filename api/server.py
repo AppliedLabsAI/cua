@@ -20,10 +20,10 @@ from modal import FilePatternMatcher
 from opentelemetry import trace as otel_trace  # StatusCode used below
 from starlette.responses import Response
 
+from api.auth import auth_settings, verify_api_key
 from api.models import RunConfig, RunResponse, RunStatus
 from api.run_registry import InMemoryRunRegistry, RunHandle
 from recording.manager import scan_recording_artifacts
-from sandbox.image import PORT_STATUS, create_cua_sandbox
 from settings import get_settings
 from telemetry import get_tracer, setup_telemetry
 from telemetry.metrics import active_sessions, sessions_total
@@ -80,24 +80,13 @@ modal_app = modal.App(
 )
 
 # --- API key authentication ---
-_API_KEY = get_settings().cua_api_key or None
 _security = HTTPBearer(auto_error=False)
 
 
 async def _verify_api_key(
     credentials: HTTPAuthorizationCredentials | None = Depends(_security),  # noqa: B008
 ) -> None:
-    """Verify Bearer token. Auth is required unless environment=local."""
-    if not _API_KEY:
-        if get_settings().environment == "local":
-            return  # No auth configured — local dev mode
-        raise HTTPException(
-            status_code=503,
-            detail="Server misconfigured: CUA_API_KEY is required in production. "
-            "Set environment=local to disable auth for local development.",
-        )
-    if credentials is None or credentials.credentials != _API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    await verify_api_key(credentials)
 
 
 _run_registry = InMemoryRunRegistry()
@@ -142,8 +131,9 @@ async def lifespan(app_instance: FastAPI):
     setup_telemetry("cua-api")
     instrument_fastapi(app_instance)
     _http_client = httpx.AsyncClient(timeout=10)
-    if not _API_KEY:
-        if get_settings().environment == "local":
+    environment, api_key = auth_settings()
+    if not api_key:
+        if environment == "local":
             log.warning(
                 "CUA_API_KEY not set — API endpoints are unauthenticated (local mode)"
             )
@@ -173,6 +163,8 @@ def serve():
 @web_app.post("/runs", response_model=RunResponse)
 async def create_run(config: RunConfig) -> RunResponse:
     """Create a new CUA run by spawning a Modal sandbox."""
+    from sandbox.image import PORT_STATUS, create_cua_sandbox
+
     tracer = get_tracer()
 
     with tracer.start_as_current_span(

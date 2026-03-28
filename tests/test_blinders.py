@@ -233,6 +233,7 @@ class TestScopeVerifier:
         engine = GuardrailEngine()
         engine._llm_enabled = True
         v = ScopeVerifier(scope, engine)
-        # "delete account" is caught by the regex layer (_DESTRUCTIVE_RE)
+        # Without a task-alignment directive, verifier leaves click intent
+        # classification to the outer model/policy layer.
         result = await v.check("click", {"selector": "text=delete account"})
-        assert result is not None
+        assert result is None

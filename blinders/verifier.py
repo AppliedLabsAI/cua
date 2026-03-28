@@ -1,9 +1,9 @@
-"""Scope Verifier — deterministic pre-execution check against TaskScope.
+"""Scope Verifier — pre-execution gating against TaskScope.
 
-Combines structural verification (action types, domain scope) with
-LLM-based action validation for risky actions. The deterministic checks
-run first (fast, non-bypassable), then Haiku validates alignment for
-actions that could be destructive.
+Combines deterministic structural checks (action types, domain scope,
+navigation limits) with optional LLM-based task-alignment validation.
+When no directive is available, verifier stays deterministic and leaves
+click intent decisions to the outer runtime.
 """
 
 from __future__ import annotations
@@ -23,11 +23,7 @@ _MAX_SEQUENCE_DEPTH = 10
 
 
 class ScopeVerifier:
-    """Pre-execution check combining deterministic scope checks with LLM validation.
-
-    Layer 1 (deterministic): Action type restriction, domain scope, SSRF, guardrails.
-    Layer 2 (LLM): Haiku validates whether the action aligns with the task directive.
-    """
+    """Pre-execution check combining deterministic scope checks with LLM validation."""
 
     def __init__(
         self,
@@ -39,9 +35,10 @@ class ScopeVerifier:
     ) -> None:
         self.scope = scope
         self.guardrails = guardrails
-        # When skip_llm_validation is True, skip the ActionValidator (task-alignment
-        # LLM call) but KEEP the guardrails destructive-click check — even trusted
-        # domains can have destructive buttons (refund, delete, etc.).
+        self._has_directive = bool(directive)
+        # When skip_llm_validation is True, skip the task-alignment LLM call.
+        # If no directive is available, keep verifier fully deterministic and
+        # leave click intent decisions to the outer runtime.
         self._validator = (
             None
             if skip_llm_validation
@@ -98,10 +95,13 @@ class ScopeVerifier:
             if not nav.allowed:
                 return nav.reason
 
-        # 3. Destructive action check — skip when ActionValidator is active
-        #    (it subsumes destructive detection with directive context).
+        # 3. Router/guardrail check — skip its LLM-backed click classification when
+        #    ActionValidator owns task alignment, or when this verifier is running
+        #    without a directive and must stay deterministic.
         action_check = await self.guardrails.check_action(
-            action, tool_input, skip_llm=bool(self._validator)
+            action,
+            tool_input,
+            skip_llm=bool(self._validator) or not self._has_directive,
         )
         if not action_check.allowed:
             return action_check.reason

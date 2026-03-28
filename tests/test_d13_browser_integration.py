@@ -23,6 +23,8 @@ from blinders.scope import extract_task_scope
 from blinders.verifier import ScopeVerifier
 from guardrails import GuardrailEngine
 
+pytestmark = pytest.mark.integration
+
 
 def _run_server(port: int) -> None:
     """Run the test server in a separate process."""

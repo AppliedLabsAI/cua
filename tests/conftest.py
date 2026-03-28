@@ -1,6 +1,6 @@
 """Shared pytest fixtures."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -29,5 +29,15 @@ def _skip_llm_classification():
     with patch(
         "blinders.classifier.classify_directive",
         side_effect=RuntimeError("LLM disabled in tests"),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _block_live_llm_calls():
+    """Fail fast if a test accidentally triggers a real PydanticAI model call."""
+    with patch(
+        "pydantic_ai.Agent.run",
+        new=AsyncMock(side_effect=RuntimeError("Live LLM calls disabled in tests")),
     ):
         yield
