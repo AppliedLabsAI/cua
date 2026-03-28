@@ -52,12 +52,20 @@ class ClassificationResult(BaseModel):
     needs_login: bool = False
 
 
-_classifier = Agent[None, ClassificationResult](
-    UTILITY_MODEL,
-    output_type=ClassificationResult,
-    instructions=_CLASSIFICATION_PROMPT,
-    model_settings={"max_tokens": 100},
-)
+_classifier: Agent[None, ClassificationResult] | None = None
+
+
+def _get_classifier() -> Agent[None, ClassificationResult]:
+    """Build the classifier lazily to avoid provider imports at module import time."""
+    global _classifier
+    if _classifier is None:
+        _classifier = Agent[None, ClassificationResult](
+            UTILITY_MODEL,
+            output_type=ClassificationResult,
+            instructions=_CLASSIFICATION_PROMPT,
+            model_settings={"max_tokens": 100},
+        )
+    return _classifier
 
 
 async def classify_directive(directive: str) -> str:
@@ -75,7 +83,7 @@ async def classify_directive(directive: str) -> str:
             "cua.blinders.directive": directive,
         },
     ) as span:
-        result = await _classifier.run(directive)
+        result = await _get_classifier().run(directive)
         usage = result.usage()
 
         span.set_attributes(

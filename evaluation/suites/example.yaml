@@ -1,0 +1,36 @@
+name: example-local-suite
+cases:
+  - id: agent-example-dot-com
+    directive: Open example.com and return the page title
+    start_url: https://example.com
+    max_steps: 5
+    output_schema:
+      type: object
+      properties:
+        summary:
+          type: string
+        details:
+          type: object
+          properties:
+            title:
+              type: string
+          required:
+            - title
+      required:
+        - summary
+        - details
+    expect:
+      must_succeed: true
+      required_data_keys:
+        - details.title
+      data_values_contain:
+        details.title: Example Domain
+      max_actions: 4
+
+  # - id: example-cancel-order
+  #   directive: Cancel order 12345
+  #   playbook: example_cancel_order
+  #   playbook_params:
+  #     order_id: "12345"
+  #   expect:
+  #     must_succeed: true

@@ -141,30 +141,18 @@ class ActionRouter:
                 if guardrail_result and not guardrail_result.allowed
                 else None
             )
-            needs_confirmation = (
-                guardrail_result.needs_confirmation if guardrail_result else False
-            )
             check_type = "scope_verifier" if self._verifier else "legacy"
             guard_attrs = {
                 ATTR_GUARD_ALLOWED: guardrail_block is None,
                 ATTR_GUARD_CHECK_TYPE: check_type,
-                ATTR_GUARD_NEEDS_CONFIRM: needs_confirmation,
+                ATTR_GUARD_NEEDS_CONFIRM: False,
             }
             if guardrail_block:
                 guard_attrs[ATTR_GUARD_REASON] = guardrail_block[:500]
                 guardrail_blocks_total().add(1, {"check_type": check_type})
             guard_span.set_attributes(guard_attrs)
 
-        if guardrail_block and needs_confirmation:
-            result = ActionResult(
-                text=(
-                    f"⚠️ Destructive action detected: {guardrail_block}\n\n"
-                    "If this is the action you intend to perform for the task, "
-                    "retry the same click action to confirm. "
-                    "Otherwise, find an alternative approach."
-                )
-            )
-        elif guardrail_block:
+        if guardrail_block:
             result = ActionResult(error=f"Guardrail blocked: {guardrail_block}")
         else:
             try:

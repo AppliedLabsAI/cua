@@ -88,11 +88,19 @@ class ValidationResult(BaseModel):
     reason: str = ""
 
 
-_validator_agent = Agent[None, ValidationResult](
-    UTILITY_MODEL,
-    output_type=ValidationResult,
-    model_settings={"max_tokens": 100},
-)
+_validator_agent: Agent[None, ValidationResult] | None = None
+
+
+def _get_validator_agent() -> Agent[None, ValidationResult]:
+    """Build the validator lazily to avoid provider imports at module import time."""
+    global _validator_agent
+    if _validator_agent is None:
+        _validator_agent = Agent[None, ValidationResult](
+            UTILITY_MODEL,
+            output_type=ValidationResult,
+            model_settings={"max_tokens": 100},
+        )
+    return _validator_agent
 
 
 class ActionValidator:
@@ -178,7 +186,7 @@ class ActionValidator:
             },
         ) as span:
             try:
-                result = await _validator_agent.run(prompt)
+                result = await _get_validator_agent().run(prompt)
                 usage = result.usage()
 
                 span.set_attributes(

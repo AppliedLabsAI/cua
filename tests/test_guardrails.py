@@ -119,7 +119,7 @@ class TestActionClassification:
         assert result.allowed
 
     async def test_skip_llm_allows_all_clicks(self):
-        """skip_llm=True means no destructive check — all clicks pass."""
+        """skip_llm=True means an outer layer owns the decision for click safety."""
         engine = GuardrailEngine()
         result = await engine.check_action(
             "click", {"selector": "text=Delete Account"}, skip_llm=True
@@ -204,8 +204,8 @@ class TestHaikuDestructiveCheck:
         assert result.allowed
 
     @patch("guardrails.engine._destructive_checker")
-    async def test_flags_destructive_via_haiku_for_confirmation(self, mock_agent):
-        """Haiku returning destructive=true flags for confirmation."""
+    async def test_flags_destructive_via_haiku_as_block(self, mock_agent):
+        """Haiku returning destructive=true blocks the action by default."""
         from guardrails.engine import DestructiveCheckResult
 
         mock_result = MagicMock()
@@ -221,7 +221,6 @@ class TestHaikuDestructiveCheck:
             "click", {"selector": "text=Proceed with action"}
         )
         assert not result.allowed
-        assert result.needs_confirmation
         assert "LLM" in (result.reason or "")
 
     @patch("guardrails.engine._destructive_checker")
@@ -237,8 +236,8 @@ class TestHaikuDestructiveCheck:
         assert "validation unavailable" in (result.reason or "")
 
     @patch("guardrails.engine._destructive_checker")
-    async def test_retry_confirms_haiku_flagged_action(self, mock_agent):
-        """Agent retry of Haiku-flagged action confirms and allows it."""
+    async def test_repeat_attempt_stays_blocked(self, mock_agent):
+        """Repeated attempts do not bypass a destructive-action block."""
         from guardrails.engine import DestructiveCheckResult
 
         mock_result = MagicMock()
@@ -254,12 +253,11 @@ class TestHaikuDestructiveCheck:
             "click", {"selector": "text=Proceed with action"}
         )
         assert not result1.allowed
-        assert result1.needs_confirmation
-        # Retry: confirmed
+        # Retry: still blocked
         result2 = await engine.check_action(
             "click", {"selector": "text=Proceed with action"}
         )
-        assert result2.allowed
+        assert not result2.allowed
 
     @patch("guardrails.engine._destructive_checker")
     async def test_allows_safe_via_haiku(self, mock_agent):

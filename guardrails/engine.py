@@ -1,7 +1,7 @@
 """Safety guardrails for the CUA agent.
 
-Enforces domain restrictions, resource limits, and optional human-in-the-loop
-confirmation. Called by ActionRouter BEFORE executing any action.
+Enforces domain restrictions, resource limits, and optional LLM-backed click
+classification. Called by ActionRouter before executing any action.
 """
 
 from __future__ import annotations
@@ -125,12 +125,20 @@ class DestructiveCheckResult(BaseModel):
     reason: str = ""
 
 
-_destructive_checker = Agent[None, DestructiveCheckResult](
-    UTILITY_MODEL,
-    output_type=DestructiveCheckResult,
-    instructions=_DESTRUCTIVE_CHECK_PROMPT,
-    model_settings={"max_tokens": 100},
-)
+_destructive_checker: Agent[None, DestructiveCheckResult] | None = None
+
+
+def _get_destructive_checker() -> Agent[None, DestructiveCheckResult]:
+    """Build the destructive-action checker lazily to avoid import-time provider resolution."""
+    global _destructive_checker
+    if _destructive_checker is None:
+        _destructive_checker = Agent[None, DestructiveCheckResult](
+            UTILITY_MODEL,
+            output_type=DestructiveCheckResult,
+            instructions=_DESTRUCTIVE_CHECK_PROMPT,
+            model_settings={"max_tokens": 100},
+        )
+    return _destructive_checker
 
 
 class GuardrailConfig(BaseModel):
@@ -256,8 +264,8 @@ def _check_ssrf(hostname: str) -> GuardrailResult | None:
 class GuardrailResult(BaseModel):
     """Outcome of a guardrail check.
 
-    When needs_confirmation is True, the action is not hard-blocked but
-    requires the agent to retry the same action to confirm intent.
+    `needs_confirmation` is retained for backwards compatibility but is not
+    used by the default autonomous flow.
     """
 
     allowed: bool
@@ -292,7 +300,6 @@ class GuardrailEngine:
         self.consecutive_errors: int = 0
         self._llm_enabled = self.config.enable_llm_action_check
         self._approved_selectors: set[str] = set()
-        self._pending_confirmations: set[str] = set()
         self._tracer = get_tracer()
 
     def check_url(self, url: str) -> GuardrailResult:
@@ -370,7 +377,6 @@ class GuardrailEngine:
             return GuardrailResult(
                 allowed=False,
                 reason=f"Destructive action blocked (pattern match): {selector}",
-                needs_confirmation=True,
             )
         if _SAFE_CLICK_RE.search(normalized):
             self._approved_selectors.add(normalized)
@@ -392,7 +398,7 @@ class GuardrailEngine:
         ) as llm_span:
             try:
                 prompt = f"Proposed click target: {selector}"
-                result = await _destructive_checker.run(prompt)
+                result = await _get_destructive_checker().run(prompt)
                 usage = result.usage()
 
                 llm_span.set_attributes(
@@ -418,7 +424,6 @@ class GuardrailEngine:
                     return GuardrailResult(
                         allowed=False,
                         reason=f"Destructive action blocked (LLM): {reason}",
-                        needs_confirmation=True,
                     )
 
                 self._approved_selectors.add(normalized)
@@ -449,14 +454,11 @@ class GuardrailEngine:
     async def check_action(
         self, action: str, tool_input: dict, *, skip_llm: bool = False
     ) -> GuardrailResult:
-        """Check clicks for destructive intent using Haiku with confirmation flow.
+        """Check clicks for destructive intent.
 
-        When a destructive action is detected, it is not hard-blocked. Instead,
-        the result has needs_confirmation=True, prompting the agent to confirm.
-        If the agent retries the same selector, the action is allowed through.
-
-        Set skip_llm=True when an outer layer (e.g. ScopeVerifier) will
-        perform its own LLM validation.
+        This method only owns click classification when ``skip_llm`` is False.
+        When an outer layer already performs task-alignment validation, set
+        ``skip_llm=True`` and this method becomes a no-op for click intent.
         """
         if action != "click":
             return GuardrailResult(allowed=True)
@@ -465,23 +467,12 @@ class GuardrailEngine:
         if not selector:
             return GuardrailResult(allowed=True)
 
-        # Agent retry: selector is pending confirmation → allow (confirmed)
-        normalized = selector.strip().lower()
-        if normalized in self._pending_confirmations:
-            self._pending_confirmations.discard(normalized)
-            log.info("Agent confirmed destructive action: %s", selector)
+        # When an outer layer owns the decision (e.g. task-alignment validation),
+        # do not run destructive-click checks here.
+        if skip_llm:
             return GuardrailResult(allowed=True)
 
-        # Haiku LLM check
-        if not skip_llm:
-            llm_result = await self._check_destructive_llm(selector)
-            if not llm_result.allowed:
-                if llm_result.needs_confirmation:
-                    self._pending_confirmations.add(normalized)
-                return llm_result
-            return llm_result
-
-        return GuardrailResult(allowed=True)
+        return await self._check_destructive_llm(selector)
 
     def record_error(self) -> GuardrailResult | None:
         """Track consecutive errors. Return stop signal if too many."""

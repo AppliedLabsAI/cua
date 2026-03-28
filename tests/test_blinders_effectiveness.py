@@ -324,12 +324,13 @@ class TestScenarioA3FillFormWithLogin:
         assert "execute_sequence" in scope.allowed_actions
 
     @pytest.mark.asyncio
-    async def test_delete_account_still_blocked_by_verifier(self):
+    async def test_delete_account_is_left_to_outer_policy(self):
         scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, _mock_destructive_engine())
-        # Even fill_form scope should block destructive clicks via Haiku
+        # With no task-alignment directive available, the verifier leaves the
+        # destructive click decision to the outer agent/policy layer.
         result = await verifier.check("click", {"selector": "text=delete account"})
-        assert result is not None
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_support_form_content_preserved(self):
@@ -940,11 +941,11 @@ class TestScenarioC9ReadTaskForbiddenClick:
         )
 
     @pytest.mark.asyncio
-    async def test_destructive_click_blocked_by_guardrails(self):
+    async def test_destructive_click_is_left_to_outer_policy(self):
         scope = await extract_task_scope(self.DIRECTIVE)
         verifier = ScopeVerifier(scope, _mock_destructive_engine())
         result = await verifier.check("click", {"selector": "text=delete account"})
-        assert result is not None
+        assert result is None
 
 
 class TestScenarioC10OutOfScopeDomainRedirect:
@@ -1052,11 +1053,10 @@ class TestScenarioC11ExecuteSequenceIllegalStep:
         assert "not in task scope" in result
 
     @pytest.mark.asyncio
-    async def test_sequence_with_destructive_click_blocked(self):
+    async def test_sequence_with_destructive_click_is_left_to_outer_policy(self):
         scope = await extract_task_scope(
             "Click the reports button on https://reports.example.com"
         )
-        # The _DESTRUCTIVE_RE regex catches "delete account" without LLM.
         engine = GuardrailEngine()
         engine._llm_enabled = False
 
@@ -1070,7 +1070,7 @@ class TestScenarioC11ExecuteSequenceIllegalStep:
                 ]
             },
         )
-        assert result is not None
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_sequence_all_legal_steps_allowed(self):

@@ -167,30 +167,30 @@ def _sanitize_filename(s: str, max_len: int = 30) -> str:
     return safe[:max_len]
 
 
-def _persist_sync(log_entry: ActionLog) -> str:
-    """Write an ActionLog entry to disk as JSON. Returns the file path."""
+async def persist_action_log(log_entry: ActionLog) -> str:
+    """Write an ActionLog entry to disk without blocking the event loop."""
     action_safe = _sanitize_filename(log_entry.action)
     filename = f"{log_entry.step:04d}_{log_entry.tool}_{action_safe}.json"
     path = os.path.join(_LOG_DIR, filename)
-    with open(path, "w") as f:
-        json.dump(log_entry.model_dump(), f, indent=2)
-    return path
 
+    def _write() -> str:
+        with open(path, "w") as f:
+            json.dump(log_entry.model_dump(), f, indent=2)
+        return path
 
-async def persist_action_log(log_entry: ActionLog) -> str:
-    """Write an ActionLog entry to disk without blocking the event loop."""
-    return await asyncio.to_thread(_persist_sync, log_entry)
-
-
-def _save_action_log_sync(action_log: list[ActionLog], path: str) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w") as f:
-        json.dump([entry.model_dump() for entry in action_log], f, indent=2)
+    return await asyncio.to_thread(_write)
 
 
 async def save_action_log(action_log: list[ActionLog], path: str) -> None:
     """Save the full action log as a JSON array without blocking the event loop."""
-    await asyncio.to_thread(_save_action_log_sync, action_log, path)
+    payload = [entry.model_dump() for entry in action_log]
+
+    def _write() -> None:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2)
+
+    await asyncio.to_thread(_write)
 
 
 # Fields excluded from SSE events — too large for real-time streaming
