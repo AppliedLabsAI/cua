@@ -62,6 +62,7 @@ class RunConfig(BaseModel):
     profile: str = "default"
     start_url: str | None = None
     credentials: CredentialsMap | None = None
+    encrypted_credentials: str | None = None
     proxy: str | None = None
     guardrails: GuardrailSettings | None = None
     recording: RecordingSettings | None = None

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, Field
 
 from api.models import CredentialsMap
+from credentials import SecretValue, resolve_credentials
 from exceptions import ConfigError
 from guardrails import GuardrailConfig
 from profiles.loader import Profile, apply_guardrail_overrides, load_profile
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
 class CUAConfig(BaseModel):
     """Complete runtime configuration for a CUA agent run."""
 
+    model_config = {"arbitrary_types_allowed": True}
+
     directive: str
     model: str = PRIMARY_MODEL
     max_steps: int = 50
@@ -30,14 +33,14 @@ class CUAConfig(BaseModel):
     start_url: str | None = None
     proxy_url: str | None = None
     profile_name: str = "default"
-    credentials: CredentialsMap | None = None
+    credentials: dict[str, dict[str, SecretValue]] | None = None
     guardrail_config: GuardrailConfig = Field(default_factory=GuardrailConfig)
     recording_config: RecordingConfig = Field(default_factory=RecordingConfig)
     output_schema: dict[str, Any] | None = None
     profile: Profile | None = Field(default=None, repr=False)
 
     @staticmethod
-    def _parse_credentials(raw_json: str) -> CredentialsMap | None:
+    def _parse_credentials(raw_json: str) -> dict[str, dict[str, SecretValue]] | None:
         if not raw_json:
             return None
 
@@ -52,7 +55,7 @@ class CUAConfig(BaseModel):
                     "CREDENTIALS_JSON entries must map strings to objects"
                 )
             normalized[service] = {str(k): str(v) for k, v in creds.items()}
-        return normalized
+        return resolve_credentials(normalized)
 
     @staticmethod
     def _parse_recording(raw_json: str) -> RecordingConfig:
@@ -129,7 +132,7 @@ class CUAConfig(BaseModel):
             start_url=rc.start_url,
             proxy_url=rc.proxy,
             profile_name=rc.profile,
-            credentials=rc.credentials,
+            credentials=resolve_credentials(rc.credentials),
             guardrail_config=guardrail_config,
             recording_config=recording_config,
             output_schema=rc.output_schema,

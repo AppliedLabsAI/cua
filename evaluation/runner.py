@@ -156,7 +156,9 @@ async def _run_playbook_case(
         store = PlaybookStore()
         playbook = store.load(case.playbook or "")
         if playbook.auth_required:
-            auth = DashboardAuth(browser, case.credentials or {})
+            from credentials import resolve_credentials
+
+            auth = DashboardAuth(browser, resolve_credentials(case.credentials) or {})
             login_url = playbook.start_url or case.start_url or ""
             await auth.ensure_authenticated(login_url)
 
@@ -222,13 +224,15 @@ async def _run_agent_case(
             recording=recording,
         )
 
+        from credentials import resolve_credentials
+
         raw = await run_agent(
             directive=case.directive,
             bridge=bridge,
             model=model,
             max_steps=case.max_steps,
             thinking=case.thinking,
-            credentials=case.credentials,
+            credentials=resolve_credentials(case.credentials),
             profile_prompt=profile.prompt_extension,
             allowed_actions=scope.allowed_actions,
             output_schema=case.output_schema,

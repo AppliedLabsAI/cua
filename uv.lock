@@ -377,6 +377,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "click" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "modal" },
@@ -404,6 +405,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.86" },
     { name = "click", specifier = ">=8.3.1" },
+    { name = "cryptography", specifier = ">=46.0.6" },
     { name = "fastapi", specifier = ">=0.135.2" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "modal", specifier = ">=1.4" },

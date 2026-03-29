@@ -286,13 +286,17 @@ def main(
         creds = None
         if credentials:
             try:
-                creds = json.loads(credentials)
+                raw_creds = json.loads(credentials)
             except json.JSONDecodeError as exc:
                 log.error("Invalid --credentials JSON: %s", exc)
                 with contextlib.suppress(Exception):
                     await recording.stop()
                 await browser.close()
                 return 1
+
+            from credentials import resolve_credentials
+
+            creds = resolve_credentials(raw_creds)
 
         if playbook:
             return await _run_playbook(

@@ -31,7 +31,9 @@ class TestCUAConfigFromEnv:
             "CREDENTIALS_JSON", '{"github": {"username": "admin", "password": "pw"}}'
         )
         config = CUAConfig.from_env()
-        assert config.credentials == {"github": {"username": "admin", "password": "pw"}}
+        assert config.credentials is not None
+        assert config.credentials["github"]["username"].get_secret_value() == "admin"
+        assert config.credentials["github"]["password"].get_secret_value() == "pw"
 
     def test_guardrails_from_env(self, monkeypatch):
         monkeypatch.setenv("DIRECTIVE", "test")

@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     # Infrastructure
     modal_sandbox_id: str = "local"
     cua_api_key: str = ""
+    cua_private_key_pem: str = ""
 
     # OpenTelemetry (standard env var names)
     otel_sdk_disabled: bool = True
