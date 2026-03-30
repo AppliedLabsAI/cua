@@ -10,10 +10,54 @@
  *     — Full page action map of ALL elements regardless of visibility.
  *     — Returns {map, title, url}
  *
+ *   window.__pageFingerprint()
+ *     — Lightweight state fingerprint for action-outcome verification.
+ *     — Returns {url, title, formHash, elementCount}
+ *
  * Cognitive Blinders support:
  *   Optional filterConfig parameter controls which elements pass through.
  *   When absent, all elements are shown (backward compatible).
  */
+
+// =========================================================================
+// Page fingerprint — lightweight state snapshot for change detection
+// =========================================================================
+
+window.__pageFingerprint = () => {
+  // Hash of visible, interactive form field state (detects form changes)
+  let formHash = 0;
+  const _hash = (s) => {
+    for (let i = 0; i < s.length; i++) formHash = ((formHash << 5) - formHash + s.charCodeAt(i)) | 0;
+  };
+  const inputs = document.querySelectorAll('input, select, textarea');
+  for (const el of inputs) {
+    // Skip hidden inputs — they don't reflect user-visible state
+    if (el.tagName === 'INPUT' && (el.type === 'hidden' || el.hidden)) continue;
+    if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) continue;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'input') {
+      _hash(el.type || '');
+      if (el.type === 'checkbox' || el.type === 'radio') {
+        _hash(el.checked ? '1' : '0');
+      } else {
+        _hash(el.value || '');
+      }
+    } else if (tag === 'select') {
+      _hash(String(el.selectedIndex));
+    } else {
+      _hash(el.value || '');
+    }
+  }
+  // Use the same interactive selector used elsewhere for consistency
+  const interactiveSelector =
+    'a, button, input, select, textarea, [role=button], [role=link]';
+  return {
+    url: location.href,
+    title: document.title,
+    formHash,
+    elementCount: document.querySelectorAll(interactiveSelector).length,
+  };
+};
 
 // =========================================================================
 // Shared helpers (used by both snapshot and map)
@@ -82,6 +126,27 @@ function __shouldShow(el, filterConfig) {
 }
 
 /**
+ * Get disambiguating context from the nearest semantic parent (table row, list item).
+ * Returns a short hint like ' [row: "john@example.com"]' or ''.
+ */
+function __parentContext(el) {
+  const row = el.closest('tr');
+  if (row) {
+    const firstCell = row.querySelector('td, th');
+    if (firstCell) {
+      const t = (firstCell.innerText || '').replace(/\n/g, ' ').trim().slice(0, 30);
+      if (t && t !== (el.innerText || '').trim()) return ` [row: "${t}"]`;
+    }
+  }
+  const li = el.closest('li');
+  if (li) {
+    const t = (li.innerText || '').replace(/\n/g, ' ').trim().slice(0, 30);
+    if (t && t !== (el.innerText || '').trim()) return ` [in: "${t}"]`;
+  }
+  return '';
+}
+
+/**
  * Compact element renderer for DOM snapshot mode.
  */
 function __renderElement(el) {
@@ -118,7 +183,7 @@ function __renderElement(el) {
   const text = (el.innerText || '').replace(/\n/g, ' ').trim();
   if (text && text.length <= 50) line += `>${text}</${tag}>`;
   else line += '>';
-  return `${line}\n`;
+  return `${line}${__parentContext(el)}\n`;
 }
 
 // =========================================================================
@@ -486,6 +551,7 @@ window.__pageMap = (maxChars, filterConfig) => {
     const text = (el.innerText || '').replace(/\n/g, ' ').trim().slice(0, 50);
     if (!text) return null;
 
+    const ctx = __parentContext(el);
     if (tag === 'a') {
       const href = el.getAttribute('href') || '';
       if (!href || href === '#' || href.startsWith('javascript:')) return null;
@@ -493,9 +559,9 @@ window.__pageMap = (maxChars, filterConfig) => {
       try {
         const u = new URL(href, location.origin);
         const p = u.origin === location.origin ? u.pathname + (u.search || '') : href;
-        return `  [${text}](${p.slice(0, 70)})\n`;
+        return `  [${text}](${p.slice(0, 70)})${ctx}\n`;
       } catch {
-        return `  [${text}](${href.slice(0, 70)})\n`;
+        return `  [${text}](${href.slice(0, 70)})${ctx}\n`;
       }
     }
 
@@ -503,7 +569,7 @@ window.__pageMap = (maxChars, filterConfig) => {
     const type = el.getAttribute('type') || '';
     const firstClass = (el.className || '').trim().split(/\s+/).find(Boolean);
     const sel = el.id ? `#${el.id}` : (firstClass ? `button.${firstClass}` : `text=${text}`);
-    return `  <button${type ? ` type="${type}"` : ''}>${text}</button> [${sel}]\n`;
+    return `  <button${type ? ` type="${type}"` : ''}>${text}</button> [${sel}]${ctx}\n`;
   };
 
   // Content actions (non-nav links and buttons)

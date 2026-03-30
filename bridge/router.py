@@ -16,7 +16,7 @@ from actionlog.actions import ActionLog, persist_action_log, summarize_action
 from bridge import DOM_MARKER, ActionResult
 from bridge.browser import BrowserManager
 from bridge.captcha import handle_captcha_if_present
-from bridge.execution import execute_dom_action, page_screenshot, quick_dom_snapshot
+from bridge.execution import execute_dom_action
 from guardrails import GuardrailConfig, GuardrailEngine, GuardrailResult
 from guardrails.stuck import StuckSeverity
 from telemetry import get_tracer
@@ -360,14 +360,6 @@ class ActionRouter:
 
         else:
             return ActionResult(error=f"Unknown tool: {tool_name}")
-
-    async def get_initial_screenshot(self) -> dict:
-        """Capture and return the current screen state with DOM as a tool_result."""
-        b64 = await page_screenshot(self.browser.page)
-        dom = await quick_dom_snapshot(self.browser.page)
-        if dom:
-            return _screenshot_and_text_result(b64, f"{DOM_MARKER}\n{dom}")
-        return _screenshot_result(b64)
 
     # -----------------------------------------------------------------------
     # CAPTCHA handling

@@ -109,6 +109,44 @@ async def _attach_page_context(
     return ""
 
 
+_FINGERPRINT_CALL_JS = """([initJS]) => {
+    if (!window.__pageFingerprint) new Function(initJS)();
+    return window.__pageFingerprint ? window.__pageFingerprint() : null;
+}"""
+
+
+async def _page_fingerprint(page: Page) -> dict | None:
+    """Capture lightweight page state for change detection.
+
+    Self-healing: re-injects PAGE_CONTEXT_INIT_JS if the global is missing,
+    matching the pattern used by quick_dom_snapshot / quick_page_map.
+    """
+    try:
+        result = await page.evaluate(_FINGERPRINT_CALL_JS, [PAGE_CONTEXT_INIT_JS])
+        return result
+    except Exception:
+        return None
+
+
+def _describe_change(before: dict | None, after: dict | None) -> str:
+    """Produce a one-line delta description from two fingerprints."""
+    if not before or not after:
+        return ""
+    parts: list[str] = []
+    if after["url"] != before["url"]:
+        parts.append(f"URL changed → {after['url'][:80]}")
+    if after["title"] != before["title"]:
+        parts.append(f"title changed → {after['title'][:60]}")
+    if after["formHash"] != before["formHash"]:
+        parts.append("form values changed")
+    if after["elementCount"] != before["elementCount"]:
+        diff = after["elementCount"] - before["elementCount"]
+        parts.append(f"elements {'+' if diff > 0 else ''}{diff}")
+    if not parts:
+        return ""
+    return f"[{', '.join(parts)}]"
+
+
 async def page_screenshot(page: Page) -> str:
     """Capture the browser viewport as base64 JPEG via Playwright."""
     jpeg_bytes = await page.screenshot(type="jpeg", quality=55)
@@ -161,13 +199,16 @@ async def execute_dom_action(
             return ActionResult(text=nav_text)
 
         if action == "click":
+            fp_before = await _page_fingerprint(page)
             await execute_page_action(
                 page,
                 action,
                 params,
                 config=_TOOL_ACTION_CONFIG,
             )
-            click_text = "Clicked"
+            fp_after = await _page_fingerprint(page)
+            delta = _describe_change(fp_before, fp_after)
+            click_text = f"Clicked {delta}" if delta else "Clicked"
             if _skip_screenshot:
                 return ActionResult(text=click_text)
             click_text += await _attach_page_context(page, filter_config)
@@ -189,9 +230,10 @@ async def execute_dom_action(
             )
 
             if action == "extract":
-                # Include page map so the agent can act immediately after extracting
                 extract_text = outcome.text or ""
-                extract_text += await _attach_page_context(page, filter_config)
+                if not _skip_screenshot:
+                    # Include page map so the agent can act immediately
+                    extract_text += await _attach_page_context(page, filter_config)
                 return ActionResult(text=extract_text)
 
             if action in {"wait_for", "key_press"}:
@@ -209,13 +251,13 @@ async def execute_dom_action(
                 return ActionResult(text=eval_text)
 
             direction = params.get("direction", "down")
-            if _skip_screenshot:
-                return ActionResult(text=f"Scrolled {direction}")
             scroll_text = f"Scrolled {direction}"
-            if dom_only:
+            if _skip_screenshot or dom_only:
                 return ActionResult(text=scroll_text)
-            b64 = await page_screenshot(page)
-            return ActionResult(screenshot_b64=b64, text=scroll_text)
+            # Return DOM context instead of screenshot by default;
+            # agent can explicitly call screenshot if visual is needed
+            scroll_text += await _attach_page_context(page, filter_config)
+            return ActionResult(text=scroll_text)
 
         if action == "get_dom":
             selector = params.get("selector")
