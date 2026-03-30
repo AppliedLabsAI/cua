@@ -10,6 +10,7 @@ import copy
 
 from pydantic_ai import Agent, ModelSettings, RunContext, ToolDefinition
 
+from agent.context import prune_context
 from agent.deps import AgentDeps
 from agent.prompts import build_system_prompt
 from agent.tools import browser_dom
@@ -42,6 +43,7 @@ cua_agent: Agent[AgentDeps, str] = Agent(
     deps_type=AgentDeps,
     tools=[browser_dom],
     prepare_tools=_filter_allowed_actions,
+    history_processors=[prune_context],
     instructions=(
         "You are a browser automation agent. You MUST use the browser_dom tool "
         "to interact with web pages. NEVER answer from memory — always navigate "

@@ -252,6 +252,9 @@ class PlaybookRunner:
         playbook: Playbook,
     ) -> dict[str, Any] | None:
         """Run post-execution structured extraction from collected texts."""
+        schema = getattr(self, "_output_schema", None)
+        if not schema:
+            return None
         extracted_texts = [
             sr.extracted_text for sr in step_results if sr.extracted_text and sr.success
         ]
@@ -259,9 +262,8 @@ class PlaybookRunner:
             return None
 
         try:
-            from agent.output import DEFAULT_OUTPUT_SCHEMA, extract_structured_output
+            from agent.output import extract_structured_output
 
-            schema = self._output_schema or DEFAULT_OUTPUT_SCHEMA
             data, _, _ = await extract_structured_output(
                 summary=f"Playbook '{playbook.name}' completed successfully.",
                 extracted_texts=extracted_texts,

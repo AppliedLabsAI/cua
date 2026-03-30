@@ -12,14 +12,15 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from actionlog.actions import ActionLog, persist_action_log
+from actionlog.actions import ActionLog, persist_action_log, summarize_action
 from bridge import DOM_MARKER, ActionResult
 from bridge.browser import BrowserManager
 from bridge.captcha import handle_captcha_if_present
 from bridge.execution import execute_dom_action, page_screenshot, quick_dom_snapshot
 from guardrails import GuardrailConfig, GuardrailEngine, GuardrailResult
+from guardrails.stuck import StuckSeverity
 from telemetry import get_tracer
-from telemetry.metrics import guardrail_blocks_total
+from telemetry.metrics import guardrail_blocks_total, stuck_detections_total
 from telemetry.spans import (
     ATTR_BROWSER_ACTION,
     ATTR_BROWSER_DOM_CHARS,
@@ -29,9 +30,12 @@ from telemetry.spans import (
     ATTR_GUARD_CHECK_TYPE,
     ATTR_GUARD_NEEDS_CONFIRM,
     ATTR_GUARD_REASON,
+    ATTR_STUCK_SEVERITY,
+    ATTR_STUCK_SUMMARY,
     BROWSER_ACTION,
     CAPTCHA_HANDLE,
     EVENT_CAPTCHA,
+    EVENT_STUCK,
     GUARDRAIL_CHECK,
 )
 
@@ -109,6 +113,7 @@ class ActionRouter:
         self._filter_config = blinders.to_js_filter_config() if blinders else None
         self.action_log: list[ActionLog] = []
         self._step = 0
+        self._stopped = False
         self._tracer = get_tracer()
         self._recording = recording
 
@@ -128,6 +133,12 @@ class ActionRouter:
 
         Checks guardrails before execution. Returns Anthropic tool_result format.
         """
+        if self._stopped:
+            return _error_result(
+                "Session stopped due to stuck loop. "
+                "Summarize what you accomplished and any remaining steps."
+            )
+
         self._step += 1
         action = tool_input.get("action", "")
         start = time.monotonic()
@@ -168,6 +179,39 @@ class ActionRouter:
         else:
             self.guardrails.record_success()
 
+        # Stuck pattern detection (repetition + cycle analysis)
+        input_summary = summarize_action(tool_name, action, tool_input)
+        verdict = self.guardrails.record_action(
+            input_summary, success=result.error is None
+        )
+        if verdict.severity is not StuckSeverity.NONE:
+            log.warning(
+                "Stuck detected (%s): %s", verdict.severity.value, input_summary
+            )
+            stuck_detections_total().add(1, {"severity": verdict.severity.value})
+            from opentelemetry import trace as otel_trace
+
+            span = otel_trace.get_current_span()
+            if span.is_recording():
+                span.add_event(
+                    EVENT_STUCK,
+                    attributes={
+                        ATTR_STUCK_SEVERITY: verdict.severity.value,
+                        ATTR_STUCK_SUMMARY: input_summary[:200],
+                    },
+                )
+            if verdict.severity is StuckSeverity.STOP:
+                self._stopped = True
+                result = ActionResult(error=verdict.message)
+            elif not result.error:
+                # Prepend hint/warning only when the action itself succeeded
+                prefix = verdict.message
+                text = f"{prefix}\n{result.text}" if result.text else prefix
+                result = ActionResult(
+                    screenshot_b64=result.screenshot_b64,
+                    text=text,
+                )
+
         duration_ms = int((time.monotonic() - start) * 1000)
         tool_result = _action_result_to_tool_result(result)
 
@@ -196,57 +240,6 @@ class ActionRouter:
             tool_name,
             action,
             duration_ms,
-            "OK" if result.error is None else f"ERR: {result.error[:80]}",
-        )
-
-        return tool_result
-
-    async def build_tool_result_from_raw(
-        self,
-        tool_name: str,
-        action: str,
-        tool_input: dict,
-        result: ActionResult,
-        *,
-        duration_ms: int = 0,
-    ) -> dict:
-        """Convert a pre-executed ActionResult into a tool_result with logging.
-
-        Used by the parallel execution path — DOM operations run in parallel,
-        then this method logs each result sequentially (safe for shared state).
-        """
-        self._step += 1
-        if result.error:
-            self.guardrails.record_error()
-        else:
-            self.guardrails.record_success()
-
-        tool_result = _action_result_to_tool_result(result)
-
-        entry = ActionLog.now(
-            step=self._step,
-            tool=tool_name,
-            action=action,
-            tool_input=tool_input,
-            duration_ms=duration_ms,
-            success=result.error is None,
-            result_text=result.text,
-            has_screenshot=result.screenshot_b64 is not None,
-            error=result.error,
-        )
-        self.action_log.append(entry)
-        await persist_action_log(entry)
-
-        if self._recording and result.screenshot_b64:
-            await self._recording.on_screenshot(
-                self._step, action, result.screenshot_b64
-            )
-
-        log.info(
-            "Step %d: %s.%s (parallel) %s",
-            self._step,
-            tool_name,
-            action,
             "OK" if result.error is None else f"ERR: {result.error[:80]}",
         )
 

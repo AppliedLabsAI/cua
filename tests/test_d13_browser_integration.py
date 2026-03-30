@@ -4,7 +4,7 @@ Launches a local FastAPI server, starts a headless Patchright browser,
 and verifies that the JS-side DOM filtering + Python post-filtering
 work correctly in a real browser environment.
 
-This tests the FULL pipeline: browser → dom_snapshot.js (with filterConfig)
+This tests the FULL pipeline: browser → page_context.js (with filterConfig)
 → Python DOMBlinders → ScopeVerifier — using real HTML pages.
 """
 
@@ -68,10 +68,10 @@ def event_loop():
 
 
 def _load_dom_js() -> str:
-    """Load the dom_snapshot.js script from disk."""
+    """Load the page_context.js script from disk."""
     from pathlib import Path
 
-    js_path = Path(__file__).parent.parent / "bridge" / "scripts" / "dom_snapshot.js"
+    js_path = Path(__file__).parent.parent / "bridge" / "scripts" / "page_context.js"
     return js_path.read_text()
 
 

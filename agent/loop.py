@@ -17,7 +17,6 @@ from actionlog.actions import ActionLog
 from agent.cua_agent import cua_agent
 from agent.deps import AgentDeps
 from agent.output import (
-    DEFAULT_OUTPUT_SCHEMA,
     collect_extracted_texts,
     extract_structured_output,
 )
@@ -104,15 +103,14 @@ async def run_agent(
             extracted_texts=collect_extracted_texts(bridge.action_log),
         )
 
-    # Post-loop structured extraction
+    # Post-loop structured extraction (only when caller provides a schema)
     extracted_texts = collect_extracted_texts(bridge.action_log)
     structured_data = None
-    schema = output_schema or DEFAULT_OUTPUT_SCHEMA
-    if summary or extracted_texts:
+    if output_schema and (summary or extracted_texts):
         structured_data, ext_in, ext_out = await extract_structured_output(
             summary=summary,
             extracted_texts=extracted_texts,
-            output_schema=schema,
+            output_schema=output_schema,
             model=model,
         )
         deps.total_input_tokens += ext_in

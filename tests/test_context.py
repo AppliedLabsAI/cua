@@ -1,82 +1,244 @@
-"""Tests for agent.context — conversation pruning and truncation."""
+"""Tests for conversation context pruning."""
 
-from agent.context import MAX_RESULT_CHARS, prune_old_context, truncate_tool_result
-from bridge import DOM_MARKER
+from __future__ import annotations
+
+from pydantic_ai import BinaryContent
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ThinkingPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
+
+from agent.context import DOM_MARKER, MAX_OLD_TEXT, MAX_SCREENSHOTS, prune_context
 
 
-class TestPruneOldContext:
-    def _msg(self, role, content):
-        return {"role": role, "content": content}
+def _tool_return(text: str, tool_name: str = "browser_dom") -> ModelRequest:
+    return ModelRequest(
+        parts=[ToolReturnPart(tool_name=tool_name, content=text, tool_call_id="t")]
+    )
 
-    def test_removes_old_screenshots_keeps_last(self):
-        messages = [
-            self._msg("user", [{"type": "image", "source": {"data": "img1"}}]),
-            self._msg("user", [{"type": "image", "source": {"data": "img2"}}]),
-            self._msg("user", [{"type": "image", "source": {"data": "img3"}}]),
+
+def _tool_return_with_screenshot(text: str, img: bytes = b"jpeg") -> ModelRequest:
+    return ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="browser_dom",
+                content=[text, BinaryContent(data=img, media_type="image/jpeg")],
+                tool_call_id="t",
+            )
         ]
-        prune_old_context(messages, keep_last=1)
-        # First two should be replaced
-        assert messages[0]["content"][0]["text"] == "[old screenshot removed]"
-        assert messages[1]["content"][0]["text"] == "[old screenshot removed]"
-        # Last one kept
-        assert messages[2]["content"][0]["type"] == "image"
+    )
 
-    def test_truncates_old_dom_snapshots(self):
-        messages = [
-            self._msg(
-                "user",
-                [{"type": "text", "text": f"Page 1\n{DOM_MARKER}\n<div>old</div>"}],
+
+def _response(text: str = "ok", thinking: str | None = None) -> ModelResponse:
+    parts: list = []
+    if thinking:
+        parts.append(ThinkingPart(content=thinking))
+    parts.append(TextPart(content=text))
+    parts.append(
+        ToolCallPart(
+            tool_name="browser_dom", args={"action": "click"}, tool_call_id="t"
+        )
+    )
+    return ModelResponse(parts=parts)
+
+
+def _get_tool_return(msg: ModelRequest) -> ToolReturnPart:
+    """Extract the first ToolReturnPart from a ModelRequest."""
+    for part in msg.parts:
+        if isinstance(part, ToolReturnPart):
+            return part
+    raise ValueError("No ToolReturnPart found")
+
+
+class TestScreenshotRemoval:
+    def test_old_screenshots_removed(self):
+        msgs: list = [
+            _tool_return_with_screenshot("step 1"),
+            _response(),
+            _tool_return_with_screenshot("step 2"),
+            _response(),
+            _tool_return_with_screenshot("step 3"),
+            _response(),
+            _tool_return_with_screenshot("step 4"),
+            _response(),
+            # Recent (last KEEP_LAST)
+            _tool_return_with_screenshot("step 5"),
+            _response(),
+        ]
+        result = prune_context(msgs)
+
+        # Count surviving screenshots
+        screenshots = 0
+        for msg in result:
+            if isinstance(msg, ModelRequest):
+                for part in msg.parts:
+                    if isinstance(part, ToolReturnPart) and isinstance(
+                        part.content, list
+                    ):
+                        for item in part.content:
+                            if isinstance(item, BinaryContent):
+                                screenshots += 1
+        assert screenshots == MAX_SCREENSHOTS
+
+    def test_recent_screenshots_preserved(self):
+        msgs: list = [
+            _tool_return_with_screenshot("old"),
+            _response(),
+            # Last KEEP_LAST messages
+            _tool_return_with_screenshot("recent 1"),
+            _response(),
+            _tool_return_with_screenshot("recent 2"),
+            _response(),
+        ]
+        result = prune_context(msgs)
+        # The most recent screenshot should survive
+        recent_req = result[-2]
+        assert isinstance(recent_req, ModelRequest)
+        tr = _get_tool_return(recent_req)
+        assert isinstance(tr.content, list)
+        assert any(isinstance(item, BinaryContent) for item in tr.content)
+
+
+class TestDomTruncation:
+    def test_dom_truncated_in_old_messages(self):
+        dom_text = f"Clicked\n\n{DOM_MARKER}\n<div>big dom content here</div>"
+        msgs: list = [
+            _tool_return(dom_text),
+            _response(),
+            _tool_return(dom_text),
+            _response(),
+            # Recent
+            _tool_return(dom_text),
+            _response(),
+            _tool_return(dom_text),
+            _response(),
+        ]
+        result = prune_context(msgs)
+
+        # Old messages should have DOM removed
+        old_req = result[0]
+        assert isinstance(old_req, ModelRequest)
+        tr = _get_tool_return(old_req)
+        assert isinstance(tr.content, str)
+        assert "[DOM removed]" in tr.content
+        assert "big dom content" not in tr.content
+        # Action summary preserved
+        assert "Clicked" in tr.content
+
+    def test_recent_dom_untouched(self):
+        dom_text = f"Navigated\n\n{DOM_MARKER}\n<div>full dom</div>"
+        msgs: list = [
+            _tool_return("old"),
+            _response(),
+            # Recent
+            _tool_return(dom_text),
+            _response(),
+            _tool_return(dom_text),
+            _response(),
+        ]
+        result = prune_context(msgs)
+
+        # Recent messages should keep full DOM
+        recent_req = result[-2]
+        assert isinstance(recent_req, ModelRequest)
+        tr = _get_tool_return(recent_req)
+        assert isinstance(tr.content, str)
+        assert "full dom" in tr.content
+
+    def test_dom_in_list_content(self):
+        dom_text = f"Clicked\n\n{DOM_MARKER}\n<div>dom</div>"
+        msgs: list = [
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="browser_dom", content=[dom_text], tool_call_id="t"
+                    )
+                ]
             ),
-            self._msg(
-                "user",
-                [{"type": "text", "text": f"Page 2\n{DOM_MARKER}\n<div>new</div>"}],
+            _response(),
+            _response(),
+            _response(),
+            # Recent padding
+            _tool_return("r1"),
+            _response(),
+            _tool_return("r2"),
+            _response(),
+        ]
+        result = prune_context(msgs)
+        old_req = result[0]
+        assert isinstance(old_req, ModelRequest)
+        tr = _get_tool_return(old_req)
+        assert isinstance(tr.content, list)
+        first = tr.content[0]
+        assert isinstance(first, str)
+        assert "[DOM removed]" in first
+
+
+class TestThinkingStripped:
+    def test_thinking_stripped_from_old_responses(self):
+        msgs: list = [
+            _tool_return("a"),
+            _response(thinking="let me think about this..."),
+            # Recent
+            _tool_return("b"),
+            _response(thinking="recent thinking"),
+            _tool_return("c"),
+            _response(thinking="also recent"),
+        ]
+        result = prune_context(msgs)
+
+        # Old response should have thinking removed
+        old_resp = result[1]
+        assert isinstance(old_resp, ModelResponse)
+        assert not any(isinstance(p, ThinkingPart) for p in old_resp.parts)
+
+        # Recent response should keep thinking
+        recent_resp = result[-1]
+        assert isinstance(recent_resp, ModelResponse)
+        assert any(isinstance(p, ThinkingPart) for p in recent_resp.parts)
+
+
+class TestLongTextTruncation:
+    def test_long_text_truncated_in_list_content(self):
+        long_text = "x" * 500
+        msgs: list = [
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="browser_dom", content=[long_text], tool_call_id="t"
+                    )
+                ]
             ),
+            _response(),
+            # Recent
+            _tool_return("r1"),
+            _response(),
+            _tool_return("r2"),
+            _response(),
         ]
-        prune_old_context(messages, keep_last=1)
-        # First DOM should be truncated
-        assert "[DOM removed]" in messages[0]["content"][0]["text"]
-        assert "old" not in messages[0]["content"][0]["text"]
-        # Last DOM kept
-        assert "<div>new</div>" in messages[1]["content"][0]["text"]
-
-    def test_no_crash_on_empty_messages(self):
-        messages = []
-        prune_old_context(messages)
-        assert messages == []
-
-    def test_truncates_old_user_text(self):
-        long_text = "A" * 200
-        messages = [
-            self._msg("user", [{"type": "text", "text": long_text}]),
-            self._msg("user", [{"type": "text", "text": "recent1"}]),
-            self._msg("user", [{"type": "text", "text": "recent2"}]),
-        ]
-        prune_old_context(messages, keep_last=2)
-        # Old user message text should be truncated to first 80 chars
-        assert len(messages[0]["content"][0]["text"]) == 80
+        result = prune_context(msgs)
+        old_req = result[0]
+        assert isinstance(old_req, ModelRequest)
+        tr = _get_tool_return(old_req)
+        assert isinstance(tr.content, list)
+        first = tr.content[0]
+        assert isinstance(first, str)
+        assert len(first) <= MAX_OLD_TEXT + 3  # +3 for "..."
 
 
-class TestTruncateToolResult:
-    def test_truncates_long_text(self):
-        text = "x" * (MAX_RESULT_CHARS + 500)
-        result = {"content": [{"type": "text", "text": text}]}
-        truncated = truncate_tool_result(result, "extract")
-        out_text = truncated["content"][0]["text"]
-        assert len(out_text) < len(text)
-        assert "truncated" in out_text
+class TestEdgeCases:
+    def test_short_history_untouched(self):
+        msgs: list = [_tool_return("a"), _response()]
+        result = prune_context(msgs)
+        assert len(result) == 2
+        first = result[0]
+        assert isinstance(first, ModelRequest)
+        tr = _get_tool_return(first)
+        assert tr.content == "a"
 
-    def test_leaves_short_text_unchanged(self):
-        result = {"content": [{"type": "text", "text": "short"}]}
-        assert truncate_tool_result(result, "click") is result
-
-    def test_preserves_non_text_content(self):
-        result = {"content": [{"type": "image", "source": {"data": "abc"}}]}
-        assert truncate_tool_result(result, "screenshot") is result
-
-    def test_handles_empty_content(self):
-        result = {"content": []}
-        assert truncate_tool_result(result, "click") is result
-
-    def test_handles_missing_content(self):
-        result = {}
-        assert truncate_tool_result(result, "click") is result
+    def test_empty_history(self):
+        assert prune_context([]) == []

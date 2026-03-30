@@ -6,5 +6,14 @@ from guardrails.engine import (
     GuardrailResult,
     _check_ssrf,
 )
+from guardrails.stuck import StuckDetector, StuckSeverity, StuckVerdict
 
-__all__ = ["GuardrailConfig", "GuardrailEngine", "GuardrailResult", "_check_ssrf"]
+__all__ = [
+    "GuardrailConfig",
+    "GuardrailEngine",
+    "GuardrailResult",
+    "StuckDetector",
+    "StuckSeverity",
+    "StuckVerdict",
+    "_check_ssrf",
+]

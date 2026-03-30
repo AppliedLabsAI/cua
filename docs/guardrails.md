@@ -39,7 +39,7 @@ graph LR
 
 | Level | Where | What it does |
 |---|---|---|
-| **JS-side** | `dom_snapshot.js` in browser | Filters elements by category (forms, action buttons, account controls) based on task scope. Elements are removed before they leave the browser. |
+| **JS-side** | `page_context.js` in browser | Filters elements by category (forms, action buttons, account controls) based on task scope via the shared `__shouldShow` filter. Elements are removed before they leave the browser. |
 | **Python-side** | `blinders/filters.py` | Scans for prompt injection patterns (`"ignore previous instructions"`, `SYSTEM:`, `[INST]` tokens) and redacts them. Wraps content with provenance markers (`[web-content-start/end]`). |
 
 **3. Scope Verifier + Action Validator** — Multi-layer pre-execution check:
@@ -63,6 +63,7 @@ Defense-in-depth checks that run alongside Cognitive Blinders. Configurable per-
 | SSRF protection | Private IPs blocked (override per-playbook) | `allow_private_networks` |
 | URL visit limit | 50 unique URLs per run | `max_urls_visited` |
 | Consecutive error limit | 5 errors | `max_consecutive_errors` |
+| Stuck detection | Repetition + cycle analysis with 3-tier escalation | `stuck_repeat_hint/warn/stop`, `stuck_cycle_*` |
 | CAPTCHA handling | Auto-detect + type-specific timeouts (Cloudflare 30s, reCAPTCHA 5s) | Skipped for dashboard goal type |
 
 Notes:
@@ -70,6 +71,27 @@ Notes:
 - The default offline test suite does not make live LLM calls; it exercises degraded and deterministic paths only.
 - In real agent runs, `enable_llm_action_check=true` lets the model decide whether an ambiguous click is aligned with the task.
 - Playbook execution remains deterministic; the LLM safety path is relevant for ad hoc agent runs and LLM handoff flows.
+
+## Stuck Detection
+
+Detects when the agent repeats the same action or cycles between a small set of actions. Runs after every tool execution via `GuardrailEngine.record_action()` in the `ActionRouter`.
+
+Two detection strategies on a sliding window of recent action signatures:
+
+| Strategy | What it catches | Example |
+|---|---|---|
+| **Repetition** | Same action repeated N times in window | `click '#submit'` 5 times |
+| **Cycle** | Short pattern repeated N times | `click '#next'` → `click '#prev'` → `click '#next'` → ... |
+
+Escalation is three-tiered:
+
+| Severity | Repetition trigger | Cycle trigger | Effect |
+|---|---|---|---|
+| `HINT` | 3 same in window | 1st detection | Gentle hint prepended to tool result |
+| `WARNING` | 5 same in window | 2nd detection | Strong warning prepended |
+| `STOP` | 7 same in window | 3rd detection | Agent stopped with error |
+
+Hints are prepended to the tool result text (the only way to communicate with the agent mid-loop in Pydantic AI). Each detection emits a `stuck.detected` telemetry event with severity and action summary.
 
 ## Configuration
 
@@ -82,6 +104,14 @@ guardrails:
   max_urls_visited: 200                 # URL navigation limit
   max_consecutive_errors: 10            # Error limit before aborting
   allowed_domains: ["*.internal.com"]   # Domain allowlist (optional)
+
+  # Stuck detection thresholds
+  stuck_window_size: 8                  # Sliding window of recent actions
+  stuck_repeat_hint: 3                  # Same action N times → hint
+  stuck_repeat_warn: 5                  # Same action N times → warning
+  stuck_repeat_stop: 7                  # Same action N times → hard stop
+  stuck_cycle_max_length: 3             # Max cycle pattern length (e.g. A-B-C)
+  stuck_cycle_repeats: 3               # Cycle must repeat N times to trigger
 ```
 
 When omitted, safe defaults apply (private networks blocked, LLM checks enabled, standard limits).
