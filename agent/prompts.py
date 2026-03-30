@@ -47,7 +47,7 @@ ${directive}""")
 
 def build_system_prompt(
     directive: str,
-    credentials: dict[str, dict[str, SecretValue]] | None = None,
+    credentials: dict[str, SecretValue] | None = None,
     profile_prompt: str | None = None,
 ) -> str:
     """Build the system prompt for a CUA run."""
@@ -57,10 +57,8 @@ def build_system_prompt(
 
         plain_creds = credentials_for_prompt(credentials)
         lines = ["", "## Credentials", "<robot_credentials>"]
-        for service, creds in plain_creds.items():
-            lines.append(f"  {service}:")
-            for key, value in creds.items():
-                lines.append(f"    {key}: {value}")
+        for key, value in plain_creds.items():
+            lines.append(f"  {key}: {value}")
         lines.append("</robot_credentials>")
         lines.append("Use these credentials when logging into the respective services.")
         lines.append("")

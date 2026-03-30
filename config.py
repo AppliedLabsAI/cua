@@ -30,14 +30,14 @@ class CUAConfig(BaseModel):
     start_url: str | None = None
     proxy_url: str | None = None
     profile_name: str = "default"
-    credentials: dict[str, dict[str, SecretValue]] | None = None
+    credentials: dict[str, SecretValue] | None = None
     guardrail_config: GuardrailConfig = Field(default_factory=GuardrailConfig)
     recording_config: RecordingConfig = Field(default_factory=RecordingConfig)
     output_schema: dict[str, Any] | None = None
     profile: Profile | None = Field(default=None, repr=False)
 
     @staticmethod
-    def _parse_credentials(raw_json: str) -> dict[str, dict[str, SecretValue]] | None:
+    def _parse_credentials(raw_json: str) -> dict[str, SecretValue] | None:
         if not raw_json:
             return None
 
@@ -45,13 +45,7 @@ class CUAConfig(BaseModel):
         if not isinstance(parsed, dict):
             raise ConfigError("CREDENTIALS_JSON must be a JSON object")
 
-        normalized: CredentialsMap = {}
-        for service, creds in parsed.items():
-            if not isinstance(service, str) or not isinstance(creds, dict):
-                raise ConfigError(
-                    "CREDENTIALS_JSON entries must map strings to objects"
-                )
-            normalized[service] = {str(k): str(v) for k, v in creds.items()}
+        normalized: CredentialsMap = {str(k): str(v) for k, v in parsed.items()}
         return resolve_credentials(normalized)
 
     @staticmethod

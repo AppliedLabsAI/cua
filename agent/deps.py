@@ -20,7 +20,7 @@ class AgentDeps:
     bridge: ActionRouter
     directive: str
     max_steps: int = 50
-    credentials: dict[str, dict[str, SecretValue]] | None = None
+    credentials: dict[str, SecretValue] | None = None
     profile_prompt: str | None = None
     output_schema: dict[str, Any] | None = None
     on_action: Callable[[ActionLog], None] | None = None

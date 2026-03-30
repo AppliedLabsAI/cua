@@ -44,24 +44,19 @@ class SecretValue:
 
 
 def resolve_credentials(
-    raw: dict[str, dict[str, str]] | None,
-) -> dict[str, dict[str, SecretValue]] | None:
+    raw: dict[str, str] | None,
+) -> dict[str, SecretValue] | None:
     """Wrap plain credential values in :class:`SecretValue`."""
     if not raw:
         return None
-    return {
-        svc: {k: SecretValue(v) for k, v in creds.items()} for svc, creds in raw.items()
-    }
+    return {k: SecretValue(v) for k, v in raw.items()}
 
 
 def credentials_for_prompt(
-    creds: dict[str, dict[str, SecretValue]],
-) -> dict[str, dict[str, str]]:
+    creds: dict[str, SecretValue],
+) -> dict[str, str]:
     """Unwrap credentials for embedding in the LLM system prompt."""
-    return {
-        svc: {k: sv.get_secret_value() for k, sv in c.items()}
-        for svc, c in creds.items()
-    }
+    return {k: sv.get_secret_value() for k, sv in creds.items()}
 
 
 @lru_cache(maxsize=1)
@@ -83,7 +78,7 @@ def _oaep_padding():
 
 
 def encrypt_credentials(
-    creds: dict[str, dict[str, str]],
+    creds: dict[str, str],
     public_key_pem: bytes,
 ) -> str:
     """Encrypt a credentials dict with the server's public key.
@@ -112,7 +107,7 @@ def encrypt_credentials(
 def decrypt_credentials(
     token: str,
     private_key_pem: bytes,
-) -> dict[str, dict[str, str]]:
+) -> dict[str, str]:
     """Decrypt a token produced by :func:`encrypt_credentials`."""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -132,11 +127,8 @@ def decrypt_credentials(
     if not isinstance(parsed, dict):
         raise ConfigError("Decrypted credentials must be a JSON object")
     for key, val in parsed.items():
-        if not isinstance(key, str) or not isinstance(val, dict):
-            raise ConfigError(f"Decrypted credentials: invalid entry for '{key}'")
-        for inner_key, inner_val in val.items():
-            if not isinstance(inner_key, str) or not isinstance(inner_val, str):
-                raise ConfigError(f"Decrypted credentials: non-string value in '{key}'")
+        if not isinstance(key, str) or not isinstance(val, str):
+            raise ConfigError(f"Decrypted credentials: non-string entry '{key}'")
     return parsed
 
 

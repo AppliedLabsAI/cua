@@ -36,7 +36,7 @@ async def run_agent(
     model: str = PRIMARY_MODEL,
     max_steps: int = 50,
     thinking: bool | Literal["minimal", "low", "medium", "high", "xhigh"] = "high",
-    credentials: dict[str, dict[str, SecretValue]] | None = None,
+    credentials: dict[str, SecretValue] | None = None,
     on_action: Callable[[ActionLog], None] | None = None,
     profile_prompt: str | None = None,
     allowed_actions: frozenset[str] | None = None,

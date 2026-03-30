@@ -187,8 +187,7 @@ Replace `<workspace>` with your Modal workspace name (shown after `modal deploy`
 | `timeout_seconds` | int | 600 | Sandbox timeout (30-3600) |
 | `thinking` | string | `high` | Thinking effort level |
 | `start_url` | string | null | URL to open on launch |
-| `credentials` | object | null | `{"domain": {"username": "...", "password": "..."}}` (plaintext, for local dev) |
-| `encrypted_credentials` | string | null | Token from `encrypt_credentials()` (recommended for production) |
+| `encrypted_credentials` | string | null | Encrypted token from `encrypt_credentials()` (see [Credential Security](#credential-security)) |
 | `profile` | string | `default` | Agent profile |
 | `guardrails` | object | null | Domain/action safety config |
 | `recording` | object | null | `{"enabled": true, "screenshots": true, "trace": true}` |
@@ -383,7 +382,7 @@ with open("public_key.pem", "rb") as f:
 
 # Encrypt credentials
 token = encrypt_credentials(
-    {"github": {"username": "bot", "password": "ghp_abc123"}},
+    {"username": "bot", "password": "ghp_abc123"},
     public_key,
 )
 
@@ -399,12 +398,12 @@ resp = httpx.post(
 )
 ```
 
-You can also pass unencrypted `credentials` directly — this is useful for local development where both client and server are on the same machine:
+For local development (without the API), you can pass credentials directly via the CLI — these are not encrypted but never leave your machine:
 
 ```bash
 python scripts/run_local.py \
   --directive "Log into the admin panel" \
-  --credentials '{"admin": {"username": "admin", "password": "secret"}}'
+  --credentials '{"username": "admin", "password": "secret"}'
 ```
 
 ### How it works
@@ -611,7 +610,7 @@ OTEL_SDK_DISABLED=false python scripts/run_local.py --directive "..."
 | `--directive` | (required) | Natural language task description |
 | `--playbook` | None | Playbook ID to execute deterministically |
 | `--playbook-params` | None | JSON dict of playbook parameters |
-| `--credentials` | None | JSON dict with `username`/`email` and `password` |
+| `--credentials` | None | JSON credentials: `'{"username": "...", "password": "..."}'` |
 | `--model` | `anthropic:claude-sonnet-4-6` | Model for LLM agent (any PydanticAI-supported model) |
 | `--max-steps` | 50 | Max tool-call iterations (LLM path only) |
 | `--thinking` | `high` | Thinking effort level (`minimal`, `low`, `medium`, `high`, `xhigh`) |

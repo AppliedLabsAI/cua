@@ -83,7 +83,7 @@ PORT_STATUS = 8090
 async def create_cua_sandbox(
     config: RunConfig,
     app: modal.App,
-    credentials: dict[str, dict[str, str]] | None = None,
+    credentials: dict[str, str] | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> modal.Sandbox:
     """Create a Modal sandbox configured for a CUA run.

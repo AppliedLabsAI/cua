@@ -22,14 +22,11 @@ class TestBuildSystemPrompt:
 
     def test_credentials_section(self):
         creds = {
-            "github": {
-                "username": SecretValue("testuser"),
-                "password": SecretValue("testpass"),
-            },
+            "username": SecretValue("testuser"),
+            "password": SecretValue("testpass"),
         }
         prompt = build_system_prompt(directive="test", credentials=creds)
         assert "<robot_credentials>" in prompt
-        assert "github:" in prompt
         assert "username: testuser" in prompt
         assert "password: testpass" in prompt
 
@@ -54,7 +51,7 @@ class TestBuildSystemPrompt:
         assert "## Task" in prompt
 
     def test_credentials_and_profile(self):
-        creds = {"svc": {"key": SecretValue("val")}}
+        creds = {"key": SecretValue("val")}
         prompt = build_system_prompt(
             directive="test",
             credentials=creds,
