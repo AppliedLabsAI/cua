@@ -116,8 +116,7 @@ class ActionRouter:
         request = self._build_request(tool_name, tool_input)
         start = time.monotonic()
 
-        guardrail_block = await self._guard_phase(request)
-        result = await self._dispatch_phase(request, guardrail_block)
+        result = await self._dispatch_phase(request)
         result = self._postprocess_phase(request, result)
 
         duration_ms = int((time.monotonic() - start) * 1000)
@@ -167,10 +166,15 @@ class ActionRouter:
             tool_input=tool_input,
         )
 
-    async def _guard_phase(self, request: ActionRequest) -> str | None:
+    async def check_guardrails(self, tool_name: str, tool_input: dict) -> str | None:
+        """Run guardrail checks and return a blocking reason, or None if allowed.
+
+        Called by the before_tool_execute hook. Includes OTel spans and metrics.
+        """
+        action = tool_input.get("action", "")
         with self._tracer.start_as_current_span(GUARDRAIL_CHECK) as guard_span:
             guardrail_result = await self._check_guardrails(
-                request.tool_name, request.action, request.tool_input
+                tool_name, action, tool_input
             )
             guardrail_block = (
                 guardrail_result.reason
@@ -189,14 +193,7 @@ class ActionRouter:
             guard_span.set_attributes(guard_attrs)
         return guardrail_block
 
-    async def _dispatch_phase(
-        self,
-        request: ActionRequest,
-        guardrail_block: str | None,
-    ) -> ActionResult:
-        if guardrail_block:
-            return ActionResult(error=f"Guardrail blocked: {guardrail_block}")
-
+    async def _dispatch_phase(self, request: ActionRequest) -> ActionResult:
         try:
             return await self._dispatch(
                 request.tool_name,

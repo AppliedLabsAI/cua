@@ -30,3 +30,6 @@ class AgentDeps:
     step: int = 0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+
+    # Set by after_model_request hook; consumed by after_tool_execute hook.
+    last_thinking: str | None = None
