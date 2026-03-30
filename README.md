@@ -178,18 +178,21 @@ cua/
 ├── playbooks/       Playbook system (schema, store, runner, parser, auth)
 │   └── definitions/ YAML playbook files
 ├── agent/           LLM agent loop (fallback path)
+├── actionlog/       Action logging and persistence
 ├── blinders/        Cognitive Blinders (scope, DOM filters, verifier)
 ├── bridge/          Browser lifecycle, DOM execution, CAPTCHA handling, router
 ├── api/             FastAPI server, API models, SSE streaming, run registry
 ├── evaluation/      Local evaluation suites, scoring, and benchmark runner
 ├── guardrails/      Domain/action/SSRF safety engine
 ├── recording/       Session recording (Playwright tracing + screenshots)
+├── sandbox/         Modal sandbox image and entrypoint
 ├── profiles/        Agent profile configuration
 ├── telemetry/       OpenTelemetry instrumentation
 ├── scripts/         Local dev runner
 ├── tests/           Unit + integration tests
 ├── docs/            Detailed documentation
-└── config.py        Centralized configuration
+├── config.py        Centralized runtime configuration
+└── settings.py      Environment settings (model constants, timeouts)
 ```
 
 ## Documentation
