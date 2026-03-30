@@ -19,7 +19,17 @@ import sys
 
 from opentelemetry import trace as otel_trace
 
-# ANSI color codes for level-based coloring
+
+def _is_tty() -> bool:
+    """Check if stderr is a terminal (for color support)."""
+    try:
+        return hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
+    except Exception:
+        return False
+
+
+# ── ANSI color codes ──
+# Private codes used by SpanFormatter (always populated; formatter gates on self._color).
 _COLORS = {
     "DEBUG": "\033[90m",  # gray
     "INFO": "\033[36m",  # cyan
@@ -29,6 +39,43 @@ _COLORS = {
 }
 _RESET = "\033[0m"
 _DIM = "\033[90m"
+
+# ── Shared ANSI codes for structured log messages ──
+# Importable by agent/tools.py, bridge/router.py, etc.
+# Gated on TTY so log files / CI / aggregators stay clean.
+_TTY = _is_tty()
+
+
+def _c(code: str) -> str:
+    return code if _TTY else ""
+
+
+C_RESET = _c(_RESET)
+C_DIM = _c(_DIM)
+C_BOLD = _c("\033[1m")
+C_ITALIC = _c("\033[3m")
+C_GREEN = _c("\033[32m")
+C_RED = _c("\033[31m")
+C_CYAN = _c("\033[36m")
+C_BLUE = _c("\033[34m")
+
+# Pre-computed compound styles
+C_GREEN_ITALIC = C_GREEN + C_ITALIC
+C_CYAN_BOLD = C_CYAN + C_BOLD
+C_BLUE_BOLD = C_BLUE + C_BOLD
+
+
+def fmt_status(error: str | None) -> str:
+    """Format an OK/ERR status string with color."""
+    if error is None:
+        return f"{C_GREEN}OK{C_RESET}"
+    return f"{C_RED}ERR: {error[:80]}{C_RESET}"
+
+
+def fmt_timing(ms: int) -> str:
+    """Format a timing value with dim color."""
+    return f"{C_DIM}({ms}ms){C_RESET}"
+
 
 # Short level names for compact output
 _SHORT_LEVELS = {
@@ -105,11 +152,3 @@ def _current_span_name() -> str:
     if span and span.is_recording():
         return getattr(span, "name", "")
     return ""
-
-
-def _is_tty() -> bool:
-    """Check if stderr is a terminal (for color support)."""
-    try:
-        return hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
-    except Exception:
-        return False

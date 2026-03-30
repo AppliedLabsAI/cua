@@ -23,6 +23,7 @@ from bridge.tool_result import action_result_to_tool_result, error_result
 from guardrails import GuardrailConfig, GuardrailEngine, GuardrailResult
 from guardrails.stuck import StuckSeverity
 from telemetry import get_tracer
+from telemetry.logging import C_CYAN_BOLD, C_RESET, fmt_status, fmt_timing
 from telemetry.metrics import guardrail_blocks_total, stuck_detections_total
 from telemetry.spans import (
     ATTR_BROWSER_ACTION,
@@ -99,7 +100,9 @@ class ActionRouter:
         """Await all pending background tasks (call before shutdown)."""
         await self._background.drain()
 
-    async def execute(self, tool_name: str, tool_input: dict) -> dict:
+    async def execute(
+        self, tool_name: str, tool_input: dict, reasoning: str | None = None
+    ) -> dict:
         """Route a tool call from Claude to the appropriate executor.
 
         Checks guardrails before execution. Returns Anthropic tool_result format.
@@ -130,6 +133,7 @@ class ActionRouter:
             result_text=result.text,
             has_screenshot=result.screenshot_b64 is not None,
             error=result.error,
+            thinking=reasoning,
         )
         self.action_log.append(entry)
         self._background.schedule(persist_action_log(entry))
@@ -142,12 +146,14 @@ class ActionRouter:
             )
 
         logger.info(
-            "Step %d: %s.%s (%dms) %s",
+            "Step %d: %s%s.%s%s %s %s",
             request.step,
+            C_CYAN_BOLD,
             request.tool_name,
             request.action,
-            duration_ms,
-            "OK" if result.error is None else f"ERR: {result.error[:80]}",
+            C_RESET,
+            fmt_timing(duration_ms),
+            fmt_status(result.error),
         )
 
         return tool_result

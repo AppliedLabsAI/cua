@@ -23,6 +23,7 @@ from bridge.observation import (
 )
 from bridge.page_actions import PageActionConfig, execute_page_action
 from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS, SETTLE_TIMEOUT_MS
+from telemetry.logging import C_DIM, C_RESET, fmt_status, fmt_timing
 
 if TYPE_CHECKING:
     from bridge.browser import BrowserManager
@@ -376,12 +377,14 @@ async def _execute_sequence(
                     }
                 )
                 _seq_log.info(
-                    "  [%d/%d] %s (%dms) ERR: %s",
+                    "  %s[%d/%d]%s %s %s %s",
+                    C_DIM,
                     i + 1,
                     len(steps),
+                    C_RESET,
                     summary,
-                    step_ms,
-                    result.error[:80],
+                    fmt_timing(step_ms),
+                    fmt_status(result.error),
                 )
                 try:
                     b64 = await page_screenshot(browser.page)
@@ -395,11 +398,14 @@ async def _execute_sequence(
 
             step_span.set_attributes({ATTR_TOOL_SUCCESS: True})
             _seq_log.info(
-                "  [%d/%d] %s (%dms) OK",
+                "  %s[%d/%d]%s %s %s %s",
+                C_DIM,
                 i + 1,
                 len(steps),
+                C_RESET,
                 summary,
-                step_ms,
+                fmt_timing(step_ms),
+                fmt_status(None),
             )
 
         final_result = result

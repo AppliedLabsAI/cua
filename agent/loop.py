@@ -24,6 +24,7 @@ from agent.result import AgentResult
 from bridge.execution import attach_page_context
 from bridge.router import ActionRouter
 from settings import PRIMARY_MODEL
+from telemetry.logging import C_BLUE_BOLD, C_DIM, C_RESET
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +110,15 @@ async def run_agent(
         deps.total_input_tokens += ext_in
         deps.total_output_tokens += ext_out
 
+    total_ms = int((time.monotonic() - run_start) * 1000)
     logger.info(
-        "Stats: %d actions, %dms, %d input tokens, %d output tokens",
+        "%sStats:%s %d actions, %s%dms%s, %d input tokens, %d output tokens",
+        C_BLUE_BOLD,
+        C_RESET,
         deps.step,
-        int((time.monotonic() - run_start) * 1000),
+        C_DIM,
+        total_ms,
+        C_RESET,
         deps.total_input_tokens,
         deps.total_output_tokens,
     )
