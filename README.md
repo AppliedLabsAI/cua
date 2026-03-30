@@ -4,10 +4,15 @@ LLM-powered browser automation for **internal dashboard operations** — tasks b
 
 **Playbook-first architecture**: known workflows run deterministically via Playwright with zero LLM calls. If a step breaks (UI changed, selector stale), CUA hands off to the full LLM agent to finish the job.
 
-```text
-Directive → Playbook Lookup → PlaybookRunner (deterministic) → Result
-                 ↓ (miss)              ↓ (step fails 2x)
-            Full LLM Agent    LLM Agent completes remaining steps
+```mermaid
+flowchart LR
+    D[Directive] --> PL{Playbook Lookup}
+    PL -- hit --> PR[PlaybookRunner *deterministic*]
+    PL -- miss --> LLM[Full LLM Agent]
+    PR -- step fails 2x --> LLM2[LLM Agent completes remaining steps]
+    PR --> R[Result]
+    LLM --> R
+    LLM2 --> R
 ```
 
 ## Why CUA
@@ -18,6 +23,82 @@ Directive → Playbook Lookup → PlaybookRunner (deterministic) → Result
 - **Safety by default** — Cognitive Blinders filter what the agent can see based on task type, preventing prompt injection and accidental destructive actions
 - **Real-time streaming** — SSE event stream with full replay, `Last-Event-ID` reconnection, and post-completion persistence
 - **Production-ready** — deploys to Modal with isolated sandboxes, multi-container support, session recording, and OpenTelemetry observability
+
+## Architecture
+
+```mermaid
+sequenceDiagram
+    actor Client
+    participant API as API Server<br/>(FastAPI on Modal)
+    participant Sandbox as Modal Sandbox
+    participant Agent as Agent Loop<br/>(Pydantic AI)
+    participant Router as ActionRouter
+    participant Guard as Guardrails<br/>+ Blinders
+    participant Browser as Patchright<br/>(Chromium)
+
+    Client->>+API: POST /runs {directive, model, credentials}
+    API->>API: Auth + validate
+    API->>+Sandbox: Create sandbox (Xvfb + Openbox)
+    API-->>Client: {run_id, stream_url}
+
+    Sandbox->>Sandbox: Start status API (:8090)
+    Sandbox->>Browser: Launch stealth Chromium
+    Sandbox->>Guard: Init guardrails, extract TaskScope,<br/>create Cognitive Blinders
+    Sandbox->>Sandbox: Init recording (trace + screenshots)
+
+    opt start_url provided
+        Browser-->>Agent: Initial page map (all elements)
+    end
+
+    Sandbox->>+Agent: run_agent(directive + page context)
+
+    loop Until task complete or max_steps
+        Agent->>Agent: LLM decides next action
+        Agent->>+Router: browser_dom(action, selector, ...)
+
+        Router->>+Guard: Check action
+        Guard->>Guard: Domain whitelist/blocklist
+        Guard->>Guard: Destructive action detection
+        Guard->>Guard: Scope verification (blinders)
+
+        alt Blocked
+            Guard-->>Router: Blocked: {reason}
+            Router-->>Agent: Error → try different approach
+        else Allowed
+            Guard-->>-Router: Allowed
+            Router->>+Browser: execute_page_action()
+            Browser-->>-Router: Page outcome
+
+            opt goto / click
+                Router->>Browser: Check for CAPTCHA
+                opt CAPTCHA detected
+                    Browser->>Browser: Auto-resolve via stealth (2-30s)
+                end
+            end
+
+            Router->>Browser: Capture page map + screenshot
+            Browser-->>Router: DOM + screenshot
+
+            Router->>Guard: Apply Blinders (filter DOM)
+            Guard-->>Router: Filtered DOM
+        end
+
+        Router->>Router: Log action
+        Router-->>-Agent: Tool result (DOM + screenshot)
+
+        Router-)Sandbox: Push SSE event
+        Sandbox-)Client: SSE: {step, action, duration}
+    end
+
+    Agent->>Agent: Structured output extraction (LLM)
+    Agent-->>-Sandbox: AgentResult {summary, data, actions}
+
+    Sandbox->>Sandbox: Persist status + recording to Volume
+    deactivate Sandbox
+
+    Client->>API: GET /runs/{id}
+    API-->>Client: {status, summary, data, actions, duration}
+```
 
 ## Quick Start
 
