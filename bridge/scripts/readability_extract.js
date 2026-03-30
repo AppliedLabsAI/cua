@@ -134,8 +134,11 @@ window.__readabilityExtract = () => {
     }
   }
 
-  // Clean the result: remove empty elements and excessive whitespace
-  for (const el of resultEl.querySelectorAll('*')) {
+  // Clean the result: remove empty elements and excessive whitespace.
+  // Iterate in reverse so children are removed before parents, avoiding
+  // stale references when a parent removal detaches its descendants.
+  const allEls = Array.from(resultEl.querySelectorAll('*')).reverse();
+  for (const el of allEls) {
     // Remove elements that are purely structural with no content
     if (
       !el.querySelector('img, video, audio, canvas, table, pre, code, input, select, textarea') &&

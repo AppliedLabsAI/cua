@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from bridge.page_actions import PageActionConfig, execute_page_action
+from bridge.page_actions import PageActionConfig, _extract_markdown, execute_page_action
 
 
 class _FakeKeyboard:
@@ -139,3 +142,55 @@ def test_extract_value_returns_raw_field_value():
     )
 
     assert outcome.text == "f1a1523a-a020-4417-a6fb-85f00ce929af"
+
+
+# ---------------------------------------------------------------------------
+# _extract_markdown tests
+# ---------------------------------------------------------------------------
+
+
+def test_extract_markdown_success():
+    """Readability returns valid JSON → html_to_markdown + truncate_markdown."""
+    page = AsyncMock()
+    raw = json.dumps(
+        {"html": "<h1>Title</h1><p>Body</p>", "url": "https://example.com"}
+    )
+    page.evaluate = AsyncMock(return_value=raw)
+
+    mock_h2m = MagicMock(return_value="# Title\n\nBody")
+    mock_trunc = MagicMock(return_value="# Title\n\nBody")
+    fake_markdown = MagicMock()
+    fake_markdown.html_to_markdown = mock_h2m
+    fake_markdown.truncate_markdown = mock_trunc
+    with patch.dict(sys.modules, {"bridge.markdown": fake_markdown}):
+        result = asyncio.run(_extract_markdown(page))
+
+    mock_h2m.assert_called_once_with(
+        "<h1>Title</h1><p>Body</p>", base_url="https://example.com"
+    )
+    mock_trunc.assert_called_once_with("# Title\n\nBody")
+    assert result == "# Title\n\nBody"
+
+
+def test_extract_markdown_null_falls_back_to_inner_text():
+    """Readability returns null → falls back to page.inner_text('body')."""
+    page = AsyncMock()
+    page.evaluate = AsyncMock(return_value=None)
+    page.inner_text = AsyncMock(return_value="Plain text fallback")
+
+    result = asyncio.run(_extract_markdown(page))
+
+    page.inner_text.assert_awaited_once_with("body")
+    assert result == "Plain text fallback"
+
+
+def test_extract_markdown_invalid_json_falls_back_to_inner_text():
+    """Readability returns invalid JSON → falls back to page.inner_text('body')."""
+    page = AsyncMock()
+    page.evaluate = AsyncMock(return_value="not valid json{{{")
+    page.inner_text = AsyncMock(return_value="Fallback text")
+
+    result = asyncio.run(_extract_markdown(page))
+
+    page.inner_text.assert_awaited_once_with("body")
+    assert result == "Fallback text"

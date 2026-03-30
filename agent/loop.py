@@ -61,13 +61,13 @@ async def run_agent(
     if page_url and page_url != "about:blank":
         page_map = await quick_page_map(
             bridge.browser.page,
-            filter_config=getattr(bridge, "_filter_config", None),
+            filter_config=bridge._filter_config,
         )
         if page_map:
             initial_msg = f"Current page:\n{DOM_MARKER}\n{page_map}\n\n{directive}"
         elif dom := await quick_dom_snapshot(
             bridge.browser.page,
-            filter_config=getattr(bridge, "_filter_config", None),
+            filter_config=bridge._filter_config,
         ):
             initial_msg = f"Current page:\n{DOM_MARKER}\n{dom}\n\n{directive}"
         else:

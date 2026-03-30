@@ -192,7 +192,7 @@ window.__pageMap = (maxChars, filterConfig) => {
   for (const el of allActionable) {
     if (navElSet.has(el)) continue;
     // Cognitive Blinders filter
-    if (filterConfig && typeof __shouldShow === 'function' && !__shouldShow(el, filterConfig)) continue;
+    if (filterConfig && typeof filterConfig.__shouldShow === 'function' && !filterConfig.__shouldShow(el, filterConfig)) continue;
     
     const href = el.getAttribute('href');
     if (href && seenHrefs.has(href)) continue;
@@ -226,10 +226,10 @@ window.__pageMap = (maxChars, filterConfig) => {
     if (line) navActions.push(line);
   }
 
-  // Nav links — budget-aware: reserve at most 30% of total budget for nav
+  // Nav links — budget-aware: cap nav at 30% of total budget
   // so content-heavy pages don't get starved by massive sidebars
   if (navActions.length > 0 && _fits()) {
-    const navBudget = Math.max(MAX * 0.3, MAX - len); // at least 30% or whatever remains
+    const navBudget = Math.min(MAX * 0.3, MAX - len); // at most 30% or whatever remains
     const navStart = len;
     _add('--- Navigation ---\n');
     for (const line of navActions) {
