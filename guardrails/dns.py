@@ -6,6 +6,7 @@ import concurrent.futures
 import ipaddress
 import logging
 import socket
+from collections import OrderedDict
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +35,8 @@ class DnsProtection:
     def __init__(self, *, timeout_s: float = 2.0, cache_max: int = 1024) -> None:
         self._timeout_s = timeout_s
         self._cache_max = cache_max
-        self._cache: dict[str, str | None] = {}
+        self._cache: OrderedDict[str, str | None] = OrderedDict()
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
     def check_hostname(self, hostname: str) -> str | None:
         """Return a blocking reason if the hostname resolves to a private IP."""
@@ -52,13 +54,15 @@ class DnsProtection:
 
     def _check_resolved_hostname(self, hostname: str) -> str | None:
         if hostname in self._cache:
+            self._cache.move_to_end(hostname)
             return self._cache[hostname]
 
         reason = self._resolve_and_check(hostname)
         if self._cache_max > 0:
             if len(self._cache) >= self._cache_max:
-                self._cache.clear()
+                self._cache.popitem(last=False)
             self._cache[hostname] = reason
+            self._cache.move_to_end(hostname)
         return reason
 
     def _resolve_and_check(self, hostname: str) -> str | None:
@@ -66,9 +70,8 @@ class DnsProtection:
             return socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
 
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(do_resolve)
-                addrinfos = future.result(timeout=self._timeout_s)
+            future = self._executor.submit(do_resolve)
+            addrinfos = future.result(timeout=self._timeout_s)
             for _family, _type, _proto, _canonname, sockaddr in addrinfos:
                 ip_str = sockaddr[0]
                 try:
@@ -83,6 +86,15 @@ class DnsProtection:
                         f"Blocked: {hostname} resolves to private IP {ip_str} "
                         "(SSRF protection)"
                     )
-        except (socket.gaierror, concurrent.futures.TimeoutError):
-            pass
+        except (socket.gaierror, concurrent.futures.TimeoutError) as exc:
+            log.debug(
+                "DNS resolution failed for %s: %s",
+                hostname,
+                exc,
+                exc_info=True,
+            )
         return None
+
+    def close(self) -> None:
+        """Shut down the shared resolver executor."""
+        self._executor.shutdown(wait=False)

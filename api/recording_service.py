@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx
+import modal
 from fastapi import HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.responses import Response
@@ -24,20 +26,32 @@ class RecordingService:
         self,
         *,
         volume_mount: str,
+        volume: modal.Volume,
         get_http_client: Callable[[], httpx.AsyncClient],
         get_handle: Callable[[str], Awaitable[RunHandle | None]],
     ) -> None:
         self._volume_mount = volume_mount
+        self._volume = volume
         self._get_http_client = get_http_client
         self._get_handle = get_handle
 
     def _volume_path(self, run_id: str, *parts: str) -> Path:
         """Build a path inside the recordings volume, guarded against traversal."""
-        base = Path(self._volume_mount) / run_id
+        base = (Path(self._volume_mount) / run_id).resolve()
         result = base.joinpath(*parts).resolve()
-        if not str(result).startswith(str(base.resolve())):
+        if not result.is_relative_to(base):
             raise HTTPException(status_code=400, detail="Invalid path")
         return result
+
+    async def _reload_volume(self) -> None:
+        try:
+            await self._volume.reload.aio()
+        except Exception:
+            log.debug("Volume reload failed", exc_info=True)
+
+    async def _trace_path(self, run_id: str) -> Path:
+        await self._reload_volume()
+        return self._volume_path(run_id, "trace.zip")
 
     async def get_manifest(self, run_id: str) -> dict:
         """List recording artifacts from the live sandbox or persisted volume."""
@@ -51,6 +65,7 @@ class RecordingService:
             except httpx.HTTPError:
                 log.debug("Manifest proxy failed for run %s", run_id, exc_info=True)
 
+        await self._reload_volume()
         run_dir = Path(self._volume_mount) / run_id
         if not run_dir.exists():
             raise HTTPException(status_code=404, detail="No recordings found")
@@ -62,26 +77,55 @@ class RecordingService:
         if handle:
             client = self._get_http_client()
             try:
-
-                async def proxy_trace():
-                    async with client.stream(
+                upstream = await client.send(
+                    client.build_request(
                         "GET",
                         f"{handle.status_base_url}/recording/trace",
-                        timeout=None,
-                    ) as upstream:
-                        upstream.raise_for_status()
+                    ),
+                    stream=True,
+                )
+                upstream.raise_for_status()
+
+                async def proxy_trace():
+                    try:
                         async for chunk in upstream.aiter_bytes():
                             yield chunk
+                    except httpx.HTTPError as exc:
+                        log.warning(
+                            "Trace stream failed for run %s: %s",
+                            run_id,
+                            exc,
+                            exc_info=True,
+                        )
+                        path = await self._trace_path(run_id)
+                        if path.exists():
+                            with path.open("rb") as fallback:
+                                while True:
+                                    chunk = await asyncio.to_thread(
+                                        fallback.read, 64 * 1024
+                                    )
+                                    if not chunk:
+                                        break
+                                    yield chunk
+                    finally:
+                        await upstream.aclose()
 
                 return StreamingResponse(
                     proxy_trace(),
                     media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="trace.zip"'},
                 )
-            except httpx.HTTPError:
-                log.debug("Trace proxy failed for run %s", run_id, exc_info=True)
+            except httpx.HTTPError as exc:
+                log.warning(
+                    "Trace proxy failed for run %s: %s",
+                    run_id,
+                    exc,
+                    exc_info=True,
+                )
+                if "upstream" in locals():
+                    await upstream.aclose()
 
-        path = self._volume_path(run_id, "trace.zip")
+        path = await self._trace_path(run_id)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Trace not available")
         return FileResponse(path, media_type="application/zip", filename="trace.zip")

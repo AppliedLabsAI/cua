@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from playbooks.schema import StepResult
+
+log = logging.getLogger(__name__)
 
 
 async def extract_structured_data(
@@ -26,11 +29,23 @@ async def extract_structured_data(
     try:
         from agent.output import extract_structured_output
 
-        data, _, _ = await extract_structured_output(
+        data, input_tokens, output_tokens = await extract_structured_output(
             summary=f"Playbook '{playbook_name}' completed successfully.",
             extracted_texts=extracted_texts,
             output_schema=output_schema,
         )
+        log.info(
+            "Structured extraction for playbook '%s' used %d input and %d output tokens",
+            playbook_name,
+            input_tokens,
+            output_tokens,
+        )
         return data
-    except Exception:
+    except Exception as exc:
+        log.warning(
+            "Structured extraction failed for playbook '%s': %s",
+            playbook_name,
+            exc,
+            exc_info=True,
+        )
         return None

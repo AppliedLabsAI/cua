@@ -12,6 +12,7 @@ import modal
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 from opentelemetry import trace as otel_trace
+from pydantic import ValidationError
 
 from api.models import RunConfig, RunResponse, RunStatus, RunStatusValue
 from api.run_registry import RunHandle, RunPhase, RunRegistry
@@ -44,18 +45,43 @@ class RunService:
         registry: RunRegistry,
         modal_app: modal.App,
         volume_mount: str,
+        volume: modal.Volume,
         get_http_client: Callable[[], httpx.AsyncClient],
     ) -> None:
         self._registry = registry
         self._modal_app = modal_app
         self._volume_mount = volume_mount
+        self._volume = volume
         self._get_http_client = get_http_client
+        self._active_run_ids: set[str] = set()
 
     def remove_handle(self, run_id: str) -> None:
         self._registry.remove(run_id)
 
-    def load_persisted_status(self, run_id: str) -> RunStatus | None:
+    def _mark_run_active(self, run_id: str) -> None:
+        self._active_run_ids.add(run_id)
+
+    def _mark_run_inactive(self, run_id: str) -> None:
+        if run_id in self._active_run_ids:
+            self._active_run_ids.remove(run_id)
+            active_sessions().add(-1)
+
+    async def _terminated_status(self, run_id: str, error: str) -> RunStatus:
+        persisted = await self.load_persisted_status(run_id)
+        if persisted:
+            return persisted
+        return RunStatus(
+            run_id=run_id,
+            status=RunStatusValue.TERMINATED,
+            error=error,
+        )
+
+    async def load_persisted_status(self, run_id: str) -> RunStatus | None:
         """Try to load persisted status from the recordings volume."""
+        try:
+            await self._volume.reload.aio()
+        except Exception:
+            log.debug("Volume reload failed", exc_info=True)
         status_path = Path(self._volume_mount) / run_id / "status.json"
         if not status_path.exists():
             return None
@@ -106,6 +132,7 @@ class RunService:
             "Cleaning up finished sandbox for run %s (exit code %s)", run_id, exit_code
         )
         self.remove_handle(run_id)
+        self._mark_run_inactive(run_id)
         return True
 
     async def create_run(self, config: RunConfig) -> RunResponse:
@@ -168,6 +195,7 @@ class RunService:
             self._registry.add(
                 RunHandle(run_id=run_id, sandbox=sandbox, status_base_url=status_base)
             )
+            self._mark_run_active(run_id)
             log.info("Created run %s", run_id)
 
             return RunResponse(
@@ -180,18 +208,11 @@ class RunService:
     async def get_status(self, run_id: str) -> RunStatus:
         """Return live or persisted status for a run."""
         if await self.cleanup_finished_sandbox(run_id):
-            persisted = self.load_persisted_status(run_id)
-            if persisted:
-                return persisted
-            return RunStatus(
-                run_id=run_id,
-                status=RunStatusValue.TERMINATED,
-                error="Sandbox has already exited",
-            )
+            return await self._terminated_status(run_id, "Sandbox has already exited")
 
         handle = await self.get_handle(run_id)
         if not handle:
-            persisted = self.load_persisted_status(run_id)
+            persisted = await self.load_persisted_status(run_id)
             if persisted:
                 return persisted
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -203,17 +224,27 @@ class RunService:
         try:
             resp = await client.get(f"{handle.status_base_url}/status")
             resp.raise_for_status()
-            return RunStatus(**resp.json())
+            return RunStatus.model_validate(resp.json())
+        except (ValidationError, ValueError, TypeError) as exc:
+            self.remove_handle(run_id)
+            self._mark_run_inactive(run_id)
+            log.warning(
+                "Invalid status payload for run %s: %s",
+                run_id,
+                exc,
+                exc_info=True,
+            )
+            return await self._terminated_status(
+                run_id,
+                "Sandbox returned an invalid status payload",
+            )
         except httpx.HTTPError as exc:
             self.remove_handle(run_id)
+            self._mark_run_inactive(run_id)
             log.warning("Status request failed for run %s: %s", run_id, exc)
-            persisted = self.load_persisted_status(run_id)
-            if persisted:
-                return persisted
-            return RunStatus(
-                run_id=run_id,
-                status=RunStatusValue.TERMINATED,
-                error="Sandbox is no longer reachable",
+            return await self._terminated_status(
+                run_id,
+                "Sandbox is no longer reachable",
             )
 
     async def stop_run(self, run_id: str) -> dict[str, str | RunStatusValue]:
@@ -229,14 +260,15 @@ class RunService:
             log.warning("Terminate call failed for run %s: %s", run_id, exc)
 
         self.remove_handle(run_id)
+        self._mark_run_inactive(run_id)
         log.info("Terminated run %s", run_id)
         return {"status": RunStatusValue.TERMINATED, "run_id": run_id}
 
-    def build_persisted_event_stream(
+    async def build_persisted_event_stream(
         self, run_id: str, start_after: int = 0
     ) -> StreamingResponse | None:
         """Build an SSE response from persisted status on the volume."""
-        persisted = self.load_persisted_status(run_id)
+        persisted = await self.load_persisted_status(run_id)
         if not persisted:
             return None
 
@@ -264,14 +296,14 @@ class RunService:
             start_after = 0
 
         if await self.cleanup_finished_sandbox(run_id):
-            resp = self.build_persisted_event_stream(run_id, start_after)
+            resp = await self.build_persisted_event_stream(run_id, start_after)
             if resp:
                 return resp
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
         handle = await self.get_handle(run_id)
         if not handle:
-            resp = self.build_persisted_event_stream(run_id, start_after)
+            resp = await self.build_persisted_event_stream(run_id, start_after)
             if resp:
                 return resp
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found")

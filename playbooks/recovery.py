@@ -77,7 +77,7 @@ class StepRecoveryPolicy:
         self._recording = recording
         self._executor = executor
         self._retry_delay_s = retry_delay_s
-        self._handoff_runner = handoff_runner or self._llm_complete_remaining
+        self._handoff_runner = handoff_runner or self.complete_remaining_with_llm
 
     async def run(
         self,
@@ -110,7 +110,7 @@ class StepRecoveryPolicy:
         llm_result.recovery_used = True
         return llm_result
 
-    async def _llm_complete_remaining(
+    async def complete_remaining_with_llm(
         self,
         *,
         playbook: Playbook,
@@ -122,7 +122,6 @@ class StepRecoveryPolicy:
         """Hand off the remaining work to the full LLM agent."""
         try:
             from agent.loop import run_agent
-            from blinders.scope import ALL_ACTIONS
             from bridge.router import ActionRouter
 
             directive = build_handoff_directive(
@@ -142,7 +141,6 @@ class StepRecoveryPolicy:
                 bridge=bridge,
                 max_steps=20,
                 thinking="medium",
-                allowed_actions=ALL_ACTIONS,
             )
             return StepResult(
                 step_index=0,

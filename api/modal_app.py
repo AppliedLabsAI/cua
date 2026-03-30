@@ -13,7 +13,8 @@ VOLUME_MOUNT = "/recordings"
 _exclude_dirs = FilePatternMatcher(
     "output/**", "tests/**", "llm/**", ".git/**", "playbooks/definitions/**"
 )
-_include_exts = ~FilePatternMatcher(
+# Exclude files that do not match the source extensions we want in the image.
+_exclude_non_source = ~FilePatternMatcher(
     "**/*.py",
     "**/*.js",
     "**/*.json",
@@ -26,7 +27,7 @@ _include_exts = ~FilePatternMatcher(
 
 
 def _ignore(path: Path) -> bool:
-    return _exclude_dirs(path) or _include_exts(path)
+    return _exclude_dirs(path) or _exclude_non_source(path)
 
 
 modal_app = modal.App(

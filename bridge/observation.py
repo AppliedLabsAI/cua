@@ -73,9 +73,12 @@ async def get_dom_snapshot(
         return None
     if raw is None:
         return None
-    data = json.loads(raw)
-    header = f"[{data['title']}] {data['url']}\n"
-    return header + data["dom"]
+    try:
+        data = json.loads(raw)
+        header = f"[{data['title']}] {data['url']}\n"
+        return header + data["dom"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
 
 
 async def quick_axtree_snapshot(

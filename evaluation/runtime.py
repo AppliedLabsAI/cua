@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -74,5 +75,11 @@ async def trial_runtime(
     try:
         yield TrialRuntime(browser=browser, recording=recording)
     finally:
-        await recording.stop()
-        await browser.close()
+        results = await asyncio.gather(
+            recording.stop(),
+            browser.close(),
+            return_exceptions=True,
+        )
+        for exc in results:
+            if isinstance(exc, Exception):
+                raise exc

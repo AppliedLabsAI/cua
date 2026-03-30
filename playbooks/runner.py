@@ -185,7 +185,7 @@ class PlaybookRunner:
         runtime_params: dict[str, Any] | None = None,
     ) -> StepResult:
         """Compatibility wrapper used by existing unit tests."""
-        return await self._get_recovery_policy()._llm_complete_remaining(
+        return await self._get_recovery_policy().complete_remaining_with_llm(
             playbook=playbook,
             remaining_steps=remaining_steps,
             error=error,

@@ -73,10 +73,12 @@ _run_service = RunService(
     registry=_run_registry,
     modal_app=modal_app,
     volume_mount=VOLUME_MOUNT,
+    volume=recording_volume,
     get_http_client=_get_http_client,
 )
 _recording_service = RecordingService(
     volume_mount=VOLUME_MOUNT,
+    volume=recording_volume,
     get_http_client=_get_http_client,
     get_handle=_run_service.get_handle,
 )

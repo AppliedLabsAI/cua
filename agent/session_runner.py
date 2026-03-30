@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import modal
 from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 
@@ -36,6 +37,18 @@ from telemetry.spans import (
 )
 
 log = logging.getLogger(__name__)
+
+_RECORDING_VOLUME_NAME = "cua-recordings"
+
+
+async def _commit_volume() -> None:
+    """Commit the recordings volume so the outer API can read persisted data."""
+    try:
+        vol = modal.Volume.from_name(_RECORDING_VOLUME_NAME)
+        await vol.commit.aio()
+        log.info("Committed recordings volume")
+    except Exception:
+        log.warning("Failed to commit recordings volume", exc_info=True)
 
 
 async def run_sandbox_session(
@@ -107,6 +120,7 @@ async def run_sandbox_session(
             sessions_total().add(1, {"status": "failed"})
             await complete_run(error=f"Setup failed: {exc}")
             await persist_status(f"/recordings/{run_id}")
+            await _commit_volume()
             await browser.close()
             return 1
 
@@ -139,6 +153,7 @@ async def run_sandbox_session(
             sessions_total().add(1, {"status": "failed"})
             await complete_run(error=str(exc))
             await persist_status(f"/recordings/{run_id}")
+            await _commit_volume()
             return 1
         finally:
             if recording:
@@ -194,6 +209,7 @@ async def run_sandbox_session(
         )
 
         await persist_status(f"/recordings/{run_id}")
+        await _commit_volume()
 
         status = "success" if result.success else "failed"
         active_sessions().add(-1)
