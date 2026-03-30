@@ -7,10 +7,11 @@ stealth to auto-resolve them. Enforces guardrails before every action.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from actionlog.actions import ActionLog, persist_action_log, summarize_action
 from bridge import DOM_MARKER, ActionResult
@@ -116,6 +117,7 @@ class ActionRouter:
         self._stopped = False
         self._tracer = get_tracer()
         self._recording = recording
+        self._bg_tasks: set[asyncio.Task[Any]] = set()
 
         self._verifier = None
         self._skip_captcha = False
@@ -127,6 +129,22 @@ class ActionRouter:
                 self.guardrails,
                 directive=directive,
             )
+
+    def _fire_and_forget(self, coro) -> None:
+        """Schedule a coroutine as a background task (no await needed)."""
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._on_bg_done)
+
+    def _on_bg_done(self, task: asyncio.Task[Any]) -> None:
+        self._bg_tasks.discard(task)
+        if not task.cancelled() and task.exception():
+            log.warning("Background task failed: %s", task.exception())
+
+    async def drain_background(self) -> None:
+        """Await all pending background tasks (call before shutdown)."""
+        if self._bg_tasks:
+            await asyncio.gather(*self._bg_tasks, return_exceptions=True)
 
     async def execute(self, tool_name: str, tool_input: dict) -> dict:
         """Route a tool call from Claude to the appropriate executor.
@@ -227,11 +245,11 @@ class ActionRouter:
             error=result.error,
         )
         self.action_log.append(entry)
-        await persist_action_log(entry)
+        self._fire_and_forget(persist_action_log(entry))
 
         if self._recording and result.screenshot_b64:
-            await self._recording.on_screenshot(
-                self._step, action, result.screenshot_b64
+            self._fire_and_forget(
+                self._recording.on_screenshot(self._step, action, result.screenshot_b64)
             )
 
         log.info(

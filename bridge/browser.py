@@ -10,6 +10,11 @@ flags — they can conflict with its internal CDP patches.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+from collections.abc import Coroutine
+from typing import Any
+
 from patchright.async_api import (
     Browser,
     BrowserContext,
@@ -26,6 +31,8 @@ from bridge.js_helpers import (
 )
 from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS
 
+log = logging.getLogger(__name__)
+
 _DOM_MAX_CHARS = 4000
 # Compact DOM auto-attached to goto/click responses
 _AUTO_DOM_MAX_CHARS = 3000  # Leave room for nav text + content summary
@@ -39,6 +46,8 @@ class BrowserManager:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._prefetch_task: asyncio.Task[str] | None = None
+        self._prefetch_url: str | None = None
 
     async def launch(
         self,
@@ -75,7 +84,8 @@ class BrowserManager:
         self._context = await self._browser.new_context(**context_kwargs)
         self._context.set_default_timeout(ACTION_TIMEOUT_MS)
 
-        # Pre-load JS helpers on every page (survives navigations)
+        # Pre-load JS helpers on every page (survives navigations).
+        # Sequential: Playwright serializes CDP commands on one socket anyway.
         await self._context.add_init_script(script=PAGE_CONTEXT_INIT_JS)
         await self._context.add_init_script(script=CAPTCHA_DETECT_INIT_JS)
         await self._context.add_init_script(script=EXTRACT_VALUE_INIT_JS)
@@ -103,11 +113,52 @@ class BrowserManager:
             raise RuntimeError("Browser not launched — call launch() first")
         return self._context
 
+    # ------------------------------------------------------------------
+    # Speculative prefetch
+    # ------------------------------------------------------------------
+
+    def start_prefetch(self, coro: Coroutine[Any, Any, str]) -> None:
+        """Start a speculative page map fetch in the background.
+
+        The task is consumed by consume_prefetch() if the URL still matches.
+        """
+        # Cancel any stale prefetch
+        if self._prefetch_task and not self._prefetch_task.done():
+            self._prefetch_task.cancel()
+        self._prefetch_url = self.page.url
+        self._prefetch_task = asyncio.create_task(coro)
+
+    async def consume_prefetch(self) -> str:
+        """Await and return the prefetched result if URL still matches.
+
+        Returns empty string if no prefetch, URL mismatch, or error.
+        Clears the prefetch state after consumption.
+        """
+        task = self._prefetch_task
+        url = self._prefetch_url
+        self._prefetch_task = None
+        self._prefetch_url = None
+
+        if task and url == self.page.url:
+            try:
+                return await task
+            except Exception:
+                return ""
+        if task and not task.done():
+            task.cancel()
+        return ""
+
     async def close(self) -> None:
         """Shut down browser and Patchright.
 
         Tolerates already-dead connections (e.g. after Ctrl+C).
         """
+        # Cancel any in-flight prefetch
+        if self._prefetch_task and not self._prefetch_task.done():
+            self._prefetch_task.cancel()
+        self._prefetch_task = None
+        self._prefetch_url = None
+
         try:
             if self._browser:
                 await self._browser.close()
