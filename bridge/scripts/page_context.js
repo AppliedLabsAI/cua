@@ -10,10 +10,34 @@
  *     — Full page action map of ALL elements regardless of visibility.
  *     — Returns {map, title, url}
  *
+ *   window.__pageFingerprint()
+ *     — Lightweight state fingerprint for action-outcome verification.
+ *     — Returns {url, title, formHash, elementCount}
+ *
  * Cognitive Blinders support:
  *   Optional filterConfig parameter controls which elements pass through.
  *   When absent, all elements are shown (backward compatible).
  */
+
+// =========================================================================
+// Page fingerprint — lightweight state snapshot for change detection
+// =========================================================================
+
+window.__pageFingerprint = () => {
+  // Hash of visible form field values (detects form state changes)
+  let formHash = 0;
+  const inputs = document.querySelectorAll('input, select, textarea');
+  for (const el of inputs) {
+    const v = el.value || '';
+    for (let i = 0; i < v.length; i++) formHash = ((formHash << 5) - formHash + v.charCodeAt(i)) | 0;
+  }
+  return {
+    url: location.href,
+    title: document.title,
+    formHash,
+    elementCount: document.querySelectorAll('a, button, input, select, textarea').length,
+  };
+};
 
 // =========================================================================
 // Shared helpers (used by both snapshot and map)
@@ -82,6 +106,27 @@ function __shouldShow(el, filterConfig) {
 }
 
 /**
+ * Get disambiguating context from the nearest semantic parent (table row, list item).
+ * Returns a short hint like ' [row: "john@example.com"]' or ''.
+ */
+function __parentContext(el) {
+  const row = el.closest('tr');
+  if (row) {
+    const firstCell = row.querySelector('td, th');
+    if (firstCell) {
+      const t = (firstCell.innerText || '').replace(/\n/g, ' ').trim().slice(0, 30);
+      if (t && t !== (el.innerText || '').trim()) return ` [row: "${t}"]`;
+    }
+  }
+  const li = el.closest('li');
+  if (li) {
+    const t = (li.innerText || '').replace(/\n/g, ' ').trim().slice(0, 30);
+    if (t && t !== (el.innerText || '').trim()) return ` [in: "${t}"]`;
+  }
+  return '';
+}
+
+/**
  * Compact element renderer for DOM snapshot mode.
  */
 function __renderElement(el) {
@@ -118,7 +163,7 @@ function __renderElement(el) {
   const text = (el.innerText || '').replace(/\n/g, ' ').trim();
   if (text && text.length <= 50) line += `>${text}</${tag}>`;
   else line += '>';
-  return `${line}\n`;
+  return `${line}${__parentContext(el)}\n`;
 }
 
 // =========================================================================
@@ -486,6 +531,7 @@ window.__pageMap = (maxChars, filterConfig) => {
     const text = (el.innerText || '').replace(/\n/g, ' ').trim().slice(0, 50);
     if (!text) return null;
 
+    const ctx = __parentContext(el);
     if (tag === 'a') {
       const href = el.getAttribute('href') || '';
       if (!href || href === '#' || href.startsWith('javascript:')) return null;
@@ -493,9 +539,9 @@ window.__pageMap = (maxChars, filterConfig) => {
       try {
         const u = new URL(href, location.origin);
         const p = u.origin === location.origin ? u.pathname + (u.search || '') : href;
-        return `  [${text}](${p.slice(0, 70)})\n`;
+        return `  [${text}](${p.slice(0, 70)})${ctx}\n`;
       } catch {
-        return `  [${text}](${href.slice(0, 70)})\n`;
+        return `  [${text}](${href.slice(0, 70)})${ctx}\n`;
       }
     }
 
@@ -503,7 +549,7 @@ window.__pageMap = (maxChars, filterConfig) => {
     const type = el.getAttribute('type') || '';
     const firstClass = (el.className || '').trim().split(/\s+/).find(Boolean);
     const sel = el.id ? `#${el.id}` : (firstClass ? `button.${firstClass}` : `text=${text}`);
-    return `  <button${type ? ` type="${type}"` : ''}>${text}</button> [${sel}]\n`;
+    return `  <button${type ? ` type="${type}"` : ''}>${text}</button> [${sel}]${ctx}\n`;
   };
 
   // Content actions (non-nav links and buttons)
