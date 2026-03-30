@@ -192,7 +192,12 @@ async def execute_dom_action(
             )
 
             if action == "extract":
-                return ActionResult(text=outcome.text)
+                # Include page map so the agent can act immediately after extracting
+                extract_text = outcome.text or ""
+                page_map = await quick_page_map(page, filter_config=filter_config)
+                if page_map:
+                    extract_text += f"\n\n{DOM_MARKER}\n{page_map}"
+                return ActionResult(text=extract_text)
 
             if action in {"wait_for", "key_press"}:
                 return ActionResult(text=outcome.text or "Done")
