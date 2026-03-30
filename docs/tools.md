@@ -6,15 +6,15 @@ CUA exposes a single `browser_dom` tool with 9 actions. The agent chooses which 
 
 | Action | Description | Returns |
 |---|---|---|
-| `goto(url)` | Navigate to a URL | DOM snapshot |
-| `click(selector)` | Click an element (CSS, `text=`, `role=` selectors) | DOM snapshot |
-| `screenshot` | Capture the viewport | Screenshot + DOM |
+| `goto(url)` | Navigate to a URL | Page map (metadata + landmarks + elements) |
+| `click(selector)` | Click an element (CSS, `text=`, `role=` selectors) | Mutation delta + page map |
+| `screenshot` | Capture the viewport | Screenshot + DOM snapshot |
 | `key_press(text, key)` | Type text and/or press a key (Enter, Tab, etc.) | Confirmation |
-| `scroll(direction, amount)` | Scroll the page | Screenshot |
-| `extract(selector, mode)` | Extract content as markdown (default), text, HTML, or form values | Content string + DOM |
+| `scroll(direction, amount)` | Scroll the page | Page map |
+| `extract(selector, mode)` | Extract content as markdown (default), text, HTML, or form values | Content string + page map |
 | `get_dom(selector?)` | Get a compact DOM snapshot (optionally scoped) | DOM string |
 | `wait_for(selector, state)` | Wait for an element to be visible, hidden, etc. | Confirmation |
-| `execute_sequence(steps)` | **Batch multiple actions in a single tool call** | Combined results + DOM |
+| `execute_sequence(steps)` | **Batch multiple actions in a single tool call** | Combined results + page map |
 
 ## Why `execute_sequence` matters
 

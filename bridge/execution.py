@@ -84,8 +84,11 @@ async def quick_axtree_snapshot(
     """Accessibility tree snapshot via Playwright's ariaSnapshot API.
 
     Returns a compact hierarchical YAML with ARIA roles, names, and states.
-    Natively filters decorative/invisible elements. Used as fallback when
-    both page map and DOM snapshot are unavailable.
+    Natively filters decorative/invisible elements. Used as last-resort
+    fallback when page map is unavailable (JS globals cleared).
+
+    Note: does not apply Cognitive Blinders JS-side filtering (no
+    filter_config). Python-side blinders in ActionRouter still apply.
     """
     try:
         snapshot = await page.locator("body").aria_snapshot()
@@ -221,12 +224,16 @@ async def execute_dom_action(
 
         if action == "click":
             await _start_mutation_observer(page)
-            await execute_page_action(
-                page,
-                action,
-                params,
-                config=_TOOL_ACTION_CONFIG,
-            )
+            try:
+                await execute_page_action(
+                    page,
+                    action,
+                    params,
+                    config=_TOOL_ACTION_CONFIG,
+                )
+            except Exception:
+                await _stop_mutation_observer(page)
+                raise
             # Start page map prefetch — overlaps with mutation summary below
             if not _skip_screenshot:
                 browser.start_prefetch(
