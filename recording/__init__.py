@@ -1,4 +1,4 @@
-"""Session recording — Playwright tracing and screenshot persistence."""
+"""Session recording — Playwright tracing."""
 
 from recording.config import DEFAULT_OUTPUT_DIR, RecordingConfig
 

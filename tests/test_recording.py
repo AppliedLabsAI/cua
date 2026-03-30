@@ -40,22 +40,21 @@ def test_scan_recording_artifacts_uses_manifest_when_present(tmp_path: Path):
             run_id="manifest-run",
             artifacts=[
                 RecordingArtifact(
-                    filename="screenshots/0001_click.jpg",
-                    type="screenshot",
+                    filename="trace.zip",
+                    type="trace",
                     size_bytes=99,
                 )
             ],
         ),
     )
 
-    (tmp_path / "screenshots").mkdir()
-    (tmp_path / "screenshots" / "0001_click.jpg").write_bytes(b"jpeg")
+    (tmp_path / "trace.zip").write_bytes(b"fake-trace")
 
     artifacts = scan_recording_artifacts(tmp_path)
     assert artifacts == [
         {
-            "filename": "screenshots/0001_click.jpg",
-            "type": "screenshot",
+            "filename": "trace.zip",
+            "type": "trace",
             "size_bytes": 99,
         }
     ]

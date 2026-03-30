@@ -129,11 +129,3 @@ class RecordingService:
         if not path.exists():
             raise HTTPException(status_code=404, detail="Trace not available")
         return FileResponse(path, media_type="application/zip", filename="trace.zip")
-
-    async def get_screenshot(self, run_id: str, filename: str) -> FileResponse:
-        """Download an individual screenshot from persisted storage."""
-        safe_name = Path(filename).name
-        path = self._volume_path(run_id, "screenshots", safe_name)
-        if not path.exists() or path.suffix != ".jpg":
-            raise HTTPException(status_code=404, detail="Screenshot not found")
-        return FileResponse(path, media_type="image/jpeg")

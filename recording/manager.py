@@ -1,4 +1,4 @@
-"""RecordingManager — facade for all session recording layers."""
+"""RecordingManager — facade for session recording (trace only)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from recording.models import (
     list_recording_artifacts,
     save_recording_manifest,
 )
-from recording.screenshots import ScreenshotRecorder
 from recording.trace import TraceRecorder
 from telemetry import get_tracer
 from telemetry.spans import RECORDING_START, RECORDING_STOP, RECORDING_UPLOAD
@@ -35,12 +34,11 @@ def scan_recording_artifacts(root: Path) -> list[dict]:
 
 
 class RecordingManager:
-    """Unified lifecycle manager for screenshot and trace recording."""
+    """Unified lifecycle manager for trace recording."""
 
     def __init__(self, config: RecordingConfig, run_id: str) -> None:
         self._config = config
         self._run_id = run_id
-        self._screenshots: ScreenshotRecorder | None = None
         self._trace: TraceRecorder | None = None
 
     @property
@@ -53,28 +51,13 @@ class RecordingManager:
         with tracer.start_as_current_span(
             RECORDING_START,
             attributes={
-                "recording.screenshots": self._config.screenshots,
                 "recording.trace": self._config.trace,
                 "recording.output_dir": self._config.output_dir,
             },
         ):
-            if self._config.screenshots:
-                self._screenshots = ScreenshotRecorder(self._config.output_dir)
-                logger.info(
-                    "Screenshot recording enabled: %s", self._screenshots.directory
-                )
-
             if self._config.trace:
                 self._trace = TraceRecorder(self._config.output_dir)
                 await self._trace.start(context)
-
-    async def on_screenshot(self, step: int, action: str, screenshot_b64: str) -> None:
-        """Persist a screenshot. Called by ActionRouter after each action."""
-        if self._screenshots:
-            try:
-                await self._screenshots.save(step, action, screenshot_b64)
-            except Exception as exc:
-                logger.warning("Failed to save screenshot for step %d: %s", step, exc)
 
     async def stop(self) -> RecordingManifest:
         """Stop all recorders and return the recording manifest."""
@@ -82,7 +65,6 @@ class RecordingManager:
         manifest = RecordingManifest(run_id=self._run_id)
 
         with tracer.start_as_current_span(RECORDING_STOP) as span:
-            # Stop tracing
             if self._trace:
                 trace_path_str = await self._trace.stop()
                 if trace_path_str:
@@ -94,10 +76,6 @@ class RecordingManager:
                             size_bytes=trace_path.stat().st_size,
                         )
                     )
-
-            # Collect screenshot artifacts from in-memory tracking
-            if self._screenshots:
-                manifest.artifacts.extend(self._screenshots.artifacts)
 
             span.set_attribute("recording.artifact_count", len(manifest.artifacts))
             total_bytes = sum(a.size_bytes for a in manifest.artifacts)
@@ -147,9 +125,3 @@ class RecordingManager:
         manifest_src = src / "manifest.json"
         if manifest_src.exists():
             shutil.copy2(manifest_src, dest / "manifest.json")
-        screenshots_src = src / "screenshots"
-        if screenshots_src.exists():
-            screenshots_dest = dest / "screenshots"
-            if screenshots_dest.exists():
-                shutil.rmtree(screenshots_dest)
-            shutil.copytree(screenshots_src, screenshots_dest)

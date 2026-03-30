@@ -122,8 +122,3 @@ async def get_recording_manifest(run_id: str) -> dict:
 @web_app.get("/runs/{run_id}/recording/trace")
 async def get_recording_trace(run_id: str):
     return await _recording_service.get_trace(run_id)
-
-
-@web_app.get("/runs/{run_id}/recording/screenshots/{filename}")
-async def get_recording_screenshot(run_id: str, filename: str):
-    return await _recording_service.get_screenshot(run_id, filename)

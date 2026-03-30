@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ArtifactType = Literal["trace", "screenshot"]
+ArtifactType = Literal["trace"]
 MANIFEST_FILENAME = "manifest.json"
 
 
@@ -60,16 +60,6 @@ def scan_recording_artifacts(root: Path) -> list[RecordingArtifact]:
             )
         )
 
-    screenshots = root / "screenshots"
-    if screenshots.exists():
-        for path in sorted(screenshots.glob("*.jpg")):
-            artifacts.append(
-                RecordingArtifact(
-                    filename=f"screenshots/{path.name}",
-                    type="screenshot",
-                    size_bytes=path.stat().st_size,
-                )
-            )
     return artifacts
 
 

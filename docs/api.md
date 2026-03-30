@@ -12,7 +12,6 @@ CUA deploys to [Modal](https://modal.com) as a managed API. Each run spawns an i
 | `/runs/{run_id}/stop` | POST | Terminate a run immediately |
 | `/runs/{run_id}/recording/manifest` | GET | List recording artifacts |
 | `/runs/{run_id}/recording/trace` | GET | Download Playwright trace ZIP |
-| `/runs/{run_id}/recording/screenshots/{filename}` | GET | Download individual screenshot |
 
 ## Request Body (`POST /runs`)
 
@@ -27,7 +26,7 @@ CUA deploys to [Modal](https://modal.com) as a managed API. Each run spawns an i
 | `credentials` | object | null | `{"username": "...", "password": "..."}` (see [Credential Security](authentication.md#credential-security)) |
 | `profile` | string | `default` | Agent profile |
 | `guardrails` | object | null | Domain/action safety config |
-| `recording` | object | null | `{"enabled": true, "screenshots": true, "trace": true}` |
+| `recording` | object | null | `{"enabled": true, "trace": true}` |
 | `output_schema` | object | null | JSON schema for structured output extraction |
 
 ## SSE Event Streaming
@@ -40,7 +39,7 @@ Each action produces an event with an `id` field (the step number) and a JSON da
 
 ```
 id: 3
-data: {"step": 3, "timestamp": "2026-03-30T...", "tool": "browser_dom", "action": "click", "input_summary": "click '#submit'", "duration_ms": 150, "success": true, "has_screenshot": true}
+data: {"step": 3, "timestamp": "2026-03-30T...", "tool": "browser_dom", "action": "click", "input_summary": "click '#submit'", "duration_ms": 150, "success": true}
 ```
 
 On completion:
