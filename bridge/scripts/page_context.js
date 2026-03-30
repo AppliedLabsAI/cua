@@ -10,53 +10,138 @@
  *     — Full page action map of ALL elements regardless of visibility.
  *     — Returns {map, title, url}
  *
- *   window.__pageFingerprint()
- *     — Lightweight state fingerprint for action-outcome verification.
- *     — Returns {url, title, formHash, elementCount}
- *
  * Cognitive Blinders support:
  *   Optional filterConfig parameter controls which elements pass through.
  *   When absent, all elements are shown (backward compatible).
  */
 
 // =========================================================================
-// Page fingerprint — lightweight state snapshot for change detection
+// DOM Mutation Observer — precise change detection for action verification
 // =========================================================================
 
-window.__pageFingerprint = () => {
-  // Hash of visible, interactive form field state (detects form changes)
-  let formHash = 0;
-  const _hash = (s) => {
-    for (let i = 0; i < s.length; i++) formHash = ((formHash << 5) - formHash + s.charCodeAt(i)) | 0;
+let __mutationState = null;
+
+window.__startObserving = () => {
+  // Clean up any leaked prior observer (e.g. navigation mid-action)
+  if (__mutationState && __mutationState._observer) {
+    __mutationState._observer.disconnect();
+  }
+  __mutationState = {
+    urlBefore: location.href,
+    titleBefore: document.title,
+    added: [],
+    removed: [],
+    attrChanges: 0,
   };
-  const inputs = document.querySelectorAll('input, select, textarea');
-  for (const el of inputs) {
-    // Skip hidden inputs — they don't reflect user-visible state
-    if (el.tagName === 'INPUT' && (el.type === 'hidden' || el.hidden)) continue;
-    if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) continue;
-    const tag = el.tagName.toLowerCase();
-    if (tag === 'input') {
-      _hash(el.type || '');
-      if (el.type === 'checkbox' || el.type === 'radio') {
-        _hash(el.checked ? '1' : '0');
-      } else {
-        _hash(el.value || '');
+  const observer = new MutationObserver((mutations) => {
+    if (!__mutationState) return;
+    for (const m of mutations) {
+      if (m.type === 'childList') {
+        for (const n of m.addedNodes) {
+          if (n.nodeType === 1 && __mutationState.added.length < 50) {
+            const tag = n.tagName?.toLowerCase();
+            const id = n.id ? `#${n.id}` : '';
+            const cls = n.classList?.[0] ? `.${n.classList[0]}` : '';
+            const role = n.getAttribute?.('role');
+            const desc = role ? `[role=${role}]` : `${tag}${id || cls}`;
+            __mutationState.added.push(desc);
+          }
+        }
+        for (const n of m.removedNodes) {
+          if (n.nodeType === 1 && __mutationState.removed.length < 50) {
+            const tag = n.tagName?.toLowerCase();
+            const id = n.id ? `#${n.id}` : '';
+            const cls = n.classList?.[0] ? `.${n.classList[0]}` : '';
+            __mutationState.removed.push(`${tag}${id || cls}`);
+          }
+        }
+      } else if (m.type === 'attributes') {
+        __mutationState.attrChanges++;
       }
-    } else if (tag === 'select') {
-      _hash(String(el.selectedIndex));
-    } else {
-      _hash(el.value || '');
+    }
+  });
+  observer.observe(document.body, {
+    childList: true, subtree: true, attributes: true,
+    attributeFilter: ['class', 'aria-expanded', 'aria-hidden', 'disabled', 'hidden', 'open'],
+  });
+  __mutationState._observer = observer;
+};
+
+window.__stopObserving = () => {
+  if (!__mutationState) return null;
+  const s = __mutationState;
+  if (s._observer) s._observer.disconnect();
+  __mutationState = null;
+
+  const parts = [];
+  const urlChanged = location.href !== s.urlBefore;
+  const titleChanged = document.title !== s.titleBefore;
+  if (urlChanged) parts.push(`URL → ${location.href.slice(0, 80)}`);
+  if (titleChanged) parts.push(`title → ${document.title.slice(0, 60)}`);
+
+  // Deduplicate and limit
+  const added = [...new Set(s.added)].slice(0, 5);
+  const removed = [...new Set(s.removed)].slice(0, 5);
+  if (added.length > 0) parts.push(`+${added.join(', +')}`);
+  if (removed.length > 0) parts.push(`-${removed.join(', -')}`);
+  if (s.attrChanges > 0) parts.push(`${s.attrChanges} attr changes`);
+
+  if (parts.length === 0) return null;
+  return parts.join('; ');
+};
+
+// =========================================================================
+// Page metadata — structured signals for page type classification
+// =========================================================================
+
+let __metadataCache = { url: null, data: null };
+
+window.__pageMetadata = () => {
+  if (__metadataCache.url === location.href) return __metadataCache.data;
+  const meta = {};
+
+  // Schema.org JSON-LD
+  const ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
+  for (const s of ldScripts) {
+    try {
+      const d = JSON.parse(s.textContent || '');
+      const t = d['@type'] || (Array.isArray(d['@graph']) && d['@graph'][0]?.['@type']);
+      if (t) { meta.schema = t; break; }
+    } catch { /* malformed JSON-LD */ }
+  }
+
+  // Open Graph
+  const ogType = document.querySelector('meta[property="og:type"]');
+  if (ogType) meta.ogType = ogType.getAttribute('content');
+
+  // Meta description
+  const desc = document.querySelector('meta[name="description"]');
+  if (desc) meta.description = (desc.getAttribute('content') || '').slice(0, 80);
+
+  // Form classification
+  const forms = document.querySelectorAll('form');
+  if (forms.length > 0) {
+    meta.forms = [];
+    for (const f of forms) {
+      const action = (f.getAttribute('action') || '').toLowerCase();
+      const inputs = f.querySelectorAll('input:not([type=hidden]), select, textarea');
+      const submit = f.querySelector('button[type=submit], input[type=submit]');
+      const submitText = submit ? (submit.value || submit.innerText || '').trim().slice(0, 20) : '';
+      const hasPassword = !!f.querySelector('input[type=password]');
+      const hasSearch = !!f.querySelector('input[type=search]') || f.getAttribute('role') === 'search';
+
+      let purpose = 'form';
+      if (hasPassword) purpose = 'login';
+      else if (hasSearch || /search|query/i.test(action)) purpose = 'search';
+      else if (/checkout|payment|pay/i.test(action)) purpose = 'checkout';
+      else if (/contact|feedback/i.test(action)) purpose = 'contact';
+
+      meta.forms.push({ purpose, inputs: inputs.length, submit: submitText });
     }
   }
-  // Use the same interactive selector used elsewhere for consistency
-  const interactiveSelector =
-    'a, button, input, select, textarea, [role=button], [role=link]';
-  return {
-    url: location.href,
-    title: document.title,
-    formHash,
-    elementCount: document.querySelectorAll(interactiveSelector).length,
-  };
+
+  __metadataCache = { url: location.href, data: meta };
+  return meta;
 };
 
 // =========================================================================
@@ -117,7 +202,7 @@ function __shouldShow(el, filterConfig) {
 
   // Nav links filter
   if (filterConfig.showNavLinks === false) {
-    if (tag === 'a' && el.closest('nav, [role=navigation], .sidebar, #nav-sidebar')) {
+    if (tag === 'a' && el.closest(__NAV_SELECTOR)) {
       return false;
     }
   }
@@ -416,6 +501,55 @@ window.__pageMap = (maxChars, filterConfig) => {
   const url = location.href;
   const title = document.title || '';
   _add(`[${title}] ${url}\n`);
+
+  // --- Page metadata — type classification from structured signals ---
+  const _meta = window.__pageMetadata ? window.__pageMetadata() : {};
+  const metaParts = [];
+  if (_meta.schema) metaParts.push(`schema:${_meta.schema}`);
+  if (_meta.ogType) metaParts.push(`type:${_meta.ogType}`);
+  if (_meta.forms && _meta.forms.length > 0) {
+    const fDesc = _meta.forms.map(f => `${f.purpose}(${f.inputs})`).join(', ');
+    metaParts.push(`forms:${fDesc}`);
+  }
+  if (metaParts.length > 0) _add(`[${metaParts.join(' | ')}]\n`);
+
+  // --- Semantic landmarks — region summary for fast orientation ---
+  const _regionSel = 'form, table, nav, [role=search], [role=navigation], .sidebar, #nav-sidebar, .pagination, .paginator';
+  const regions = root.querySelectorAll(_regionSel);
+  const seenRegions = new Set();
+  for (const r of regions) {
+    // Skip if any ancestor is already a seen region (walk up the DOM)
+    let dominated = false;
+    let parent = r.parentElement;
+    while (parent && parent !== root) {
+      if (seenRegions.has(parent)) { dominated = true; break; }
+      parent = parent.parentElement;
+    }
+    if (dominated) continue;
+    seenRegions.add(r);
+
+    const tag = r.tagName.toLowerCase();
+    const id = r.getAttribute('id');
+    const role = r.getAttribute('role');
+    const label = id ? `${tag}#${id}` : (role ? `[role=${role}]` : tag);
+
+    if (tag === 'form' || role === 'search') {
+      const inputs = r.querySelectorAll('input:not([type=hidden]), select, textarea');
+      const buttons = r.querySelectorAll('button, input[type=submit]');
+      _add(`  ${label}: form (${inputs.length} inputs, ${buttons.length} buttons)\n`);
+    } else if (tag === 'table') {
+      const cols = r.querySelectorAll('thead th').length;
+      const rows = r.querySelectorAll('tbody tr').length;
+      _add(`  ${label}: table (${cols} cols, ${rows} rows)\n`);
+    } else if (tag === 'nav' || role === 'navigation' || r.classList.contains('sidebar')) {
+      const links = r.querySelectorAll('a').length;
+      _add(`  ${label}: navigation (${links} links)\n`);
+    } else {
+      // pagination or other landmark
+      const items = r.querySelectorAll('a, button').length;
+      if (items > 0) _add(`  ${label}: (${items} items)\n`);
+    }
+  }
 
   // Headings — quick page structure overview
   const contentArea = root.querySelector(

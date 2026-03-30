@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import time
@@ -77,6 +78,33 @@ async def quick_dom_snapshot(
         return ""
 
 
+async def quick_axtree_snapshot(
+    page: Page, max_chars: int = _AUTO_DOM_MAX_CHARS
+) -> str:
+    """Accessibility tree snapshot via Playwright's ariaSnapshot API.
+
+    Returns a compact hierarchical YAML with ARIA roles, names, and states.
+    Natively filters decorative/invisible elements. Used as last-resort
+    fallback when page map is unavailable (JS globals cleared).
+
+    Note: does not apply Cognitive Blinders JS-side filtering (no
+    filter_config). Python-side blinders in ActionRouter still apply.
+    """
+    try:
+        snapshot = await page.locator("body").aria_snapshot()
+        if not snapshot:
+            return ""
+        title = await page.title()
+        url = page.url
+        header = f"[{title}] {url}\n"
+        # Truncate to budget
+        if len(snapshot) > max_chars:
+            snapshot = snapshot[:max_chars] + "\n[...truncated]"
+        return header + snapshot
+    except Exception:
+        return ""
+
+
 async def quick_page_map(
     page: Page,
     max_chars: int = 6000,
@@ -111,48 +139,36 @@ async def attach_page_context(
     if not ctx:
         ctx = await quick_page_map(page, filter_config=filter_config)
     if not ctx:
-        ctx = await quick_dom_snapshot(page, filter_config=filter_config)
+        ctx = await quick_axtree_snapshot(page)
     if ctx:
         return f"\n\n{DOM_MARKER}\n{ctx}"
     return ""
 
 
-_FINGERPRINT_CALL_JS = """([initJS]) => {
-    if (!window.__pageFingerprint) new Function(initJS)();
-    return window.__pageFingerprint ? window.__pageFingerprint() : null;
+_START_OBSERVING_JS = """([initJS]) => {
+    if (!window.__startObserving) new Function(initJS)();
+    if (window.__startObserving) window.__startObserving();
+}"""
+
+_STOP_OBSERVING_JS = """([initJS]) => {
+    if (!window.__stopObserving) new Function(initJS)();
+    return window.__stopObserving ? window.__stopObserving() : null;
 }"""
 
 
-async def _page_fingerprint(page: Page) -> dict | None:
-    """Capture lightweight page state for change detection.
+async def _start_mutation_observer(page: Page) -> None:
+    """Start DOM Mutation Observer before an action."""
+    with contextlib.suppress(Exception):
+        await page.evaluate(_START_OBSERVING_JS, [PAGE_CONTEXT_INIT_JS])
 
-    Self-healing: re-injects PAGE_CONTEXT_INIT_JS if the global is missing,
-    matching the pattern used by quick_dom_snapshot / quick_page_map.
-    """
+
+async def _stop_mutation_observer(page: Page) -> str:
+    """Stop observer and return a compact change summary."""
     try:
-        result = await page.evaluate(_FINGERPRINT_CALL_JS, [PAGE_CONTEXT_INIT_JS])
-        return result
+        summary = await page.evaluate(_STOP_OBSERVING_JS, [PAGE_CONTEXT_INIT_JS])
+        return f"[{summary}]" if summary else ""
     except Exception:
-        return None
-
-
-def _describe_change(before: dict | None, after: dict | None) -> str:
-    """Produce a one-line delta description from two fingerprints."""
-    if not before or not after:
         return ""
-    parts: list[str] = []
-    if after["url"] != before["url"]:
-        parts.append(f"URL changed → {after['url'][:80]}")
-    if after["title"] != before["title"]:
-        parts.append(f"title changed → {after['title'][:60]}")
-    if after["formHash"] != before["formHash"]:
-        parts.append("form values changed")
-    if after["elementCount"] != before["elementCount"]:
-        diff = after["elementCount"] - before["elementCount"]
-        parts.append(f"elements {'+' if diff > 0 else ''}{diff}")
-    if not parts:
-        return ""
-    return f"[{', '.join(parts)}]"
 
 
 async def page_screenshot(page: Page) -> str:
@@ -207,20 +223,23 @@ async def execute_dom_action(
             return ActionResult(text=nav_text)
 
         if action == "click":
-            fp_before = await _page_fingerprint(page)
-            await execute_page_action(
-                page,
-                action,
-                params,
-                config=_TOOL_ACTION_CONFIG,
-            )
-            # Start page map prefetch — overlaps with fingerprint below
+            await _start_mutation_observer(page)
+            try:
+                await execute_page_action(
+                    page,
+                    action,
+                    params,
+                    config=_TOOL_ACTION_CONFIG,
+                )
+            except Exception:
+                await _stop_mutation_observer(page)
+                raise
+            # Start page map prefetch — overlaps with mutation summary below
             if not _skip_screenshot:
                 browser.start_prefetch(
                     quick_page_map(page, filter_config=filter_config)
                 )
-            fp_after = await _page_fingerprint(page)
-            delta = _describe_change(fp_before, fp_after)
+            delta = await _stop_mutation_observer(page)
             click_text = f"Clicked {delta}" if delta else "Clicked"
             if _skip_screenshot:
                 return ActionResult(text=click_text)
