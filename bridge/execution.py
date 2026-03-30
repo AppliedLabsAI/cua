@@ -1,46 +1,33 @@
-"""Browser action execution and page-observation helpers."""
+"""Browser action execution and page-observation orchestration."""
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import contextlib
-import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from patchright.async_api import Page
 
 from bridge import DOM_MARKER, ActionResult
-from bridge.browser import (
-    _AUTO_DOM_MAX_CHARS,
-    _DOM_MAX_CHARS,
+from bridge.browser import _DOM_MAX_CHARS
+from bridge.observation import (
+    attach_page_context,
+    get_dom_snapshot,
+    page_screenshot,
+    quick_dom_snapshot,
+    quick_page_map,
+    start_mutation_observer,
+    stop_mutation_observer,
 )
-from bridge.js_helpers import PAGE_CONTEXT_INIT_JS
 from bridge.page_actions import PageActionConfig, execute_page_action
 from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS, SETTLE_TIMEOUT_MS
 
 if TYPE_CHECKING:
     from bridge.browser import BrowserManager
 
-
-# ---------------------------------------------------------------------------
-# Self-healing JS calls — each checks for its helper, re-injects if missing,
-# and executes in a single evaluate round-trip.  The helpers are pre-loaded
-# via add_init_script, but re-injection guards against edge cases where
-# globals are cleared (e.g. certain navigations or page errors).
-# ---------------------------------------------------------------------------
-
-_DOM_SNAPSHOT_CALL_JS = """([s, m, f, initJS]) => {
-    if (!window.__domSnapshot) new Function(initJS)();
-    return window.__domSnapshot ? window.__domSnapshot(s, m, f) : null;
-}"""
-
-_PAGE_MAP_CALL_JS = """([m, f, initJS]) => {
-    if (!window.__pageMap) new Function(initJS)();
-    return window.__pageMap ? window.__pageMap(m, f) : null;
-}"""
+_seq_log = logging.getLogger("bridge.sequence")
 
 _TOOL_ACTION_CONFIG = PageActionConfig(
     action_timeout_ms=ACTION_TIMEOUT_MS,
@@ -54,132 +41,223 @@ _TOOL_ACTION_CONFIG = PageActionConfig(
 )
 
 
-# ---------------------------------------------------------------------------
-# Page observation helpers
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ExecutionPolicy:
+    """Per-call output policy for DOM action execution."""
+
+    include_page_context: bool = True
+    dom_only: bool = False
 
 
-async def quick_dom_snapshot(
-    page: Page,
-    max_chars: int = _AUTO_DOM_MAX_CHARS,
-    filter_config: dict | None = None,
+@dataclass(frozen=True)
+class ExecutionContext:
+    """Runtime state passed to individual action handlers."""
+
+    browser: BrowserManager
+    filter_config: dict | None
+    policy: ExecutionPolicy
+
+    @property
+    def page(self) -> Page:
+        return self.browser.page
+
+
+async def _append_page_context(
+    text: str,
+    ctx: ExecutionContext,
+    *,
+    force: bool = False,
 ) -> str:
-    """Fast DOM snapshot — single evaluate with self-healing fallback."""
-    try:
-        raw = await page.evaluate(
-            _DOM_SNAPSHOT_CALL_JS,
-            [None, max_chars, filter_config, PAGE_CONTEXT_INIT_JS],
-        )
-        if raw is None:
-            return ""
-        data = json.loads(raw)
-        return f"[{data['title']}] {data['url']}\n{data['dom']}"
-    except Exception:
-        return ""
+    if not force and not ctx.policy.include_page_context:
+        return text
+    return text + await attach_page_context(ctx.browser, ctx.filter_config)
 
 
-async def quick_axtree_snapshot(
-    page: Page, max_chars: int = _AUTO_DOM_MAX_CHARS
-) -> str:
-    """Accessibility tree snapshot via Playwright's ariaSnapshot API.
-
-    Returns a compact hierarchical YAML with ARIA roles, names, and states.
-    Natively filters decorative/invisible elements. Used as last-resort
-    fallback when page map is unavailable (JS globals cleared).
-
-    Note: does not apply Cognitive Blinders JS-side filtering (no
-    filter_config). Python-side blinders in ActionRouter still apply.
-    """
-    try:
-        snapshot = await page.locator("body").aria_snapshot()
-        if not snapshot:
-            return ""
-        title = await page.title()
-        url = page.url
-        header = f"[{title}] {url}\n"
-        # Truncate to budget
-        if len(snapshot) > max_chars:
-            snapshot = snapshot[:max_chars] + "\n[...truncated]"
-        return header + snapshot
-    except Exception:
-        return ""
-
-
-async def quick_page_map(
-    page: Page,
-    max_chars: int = 6000,
-    filter_config: dict | None = None,
-) -> str:
-    """Full page action map — all links, buttons, fields regardless of visibility."""
-    try:
-        raw = await page.evaluate(
-            _PAGE_MAP_CALL_JS,
-            [max_chars, filter_config, PAGE_CONTEXT_INIT_JS],
-        )
-        if raw is None:
-            return ""
-        data = json.loads(raw)
-        return data["map"]
-    except Exception:
-        return ""
-
-
-async def attach_page_context(
+def _context_for(
     browser: BrowserManager,
-    filter_config: dict | None = None,
-) -> str:
-    """Get page map (preferred) or DOM snapshot fallback, with DOM_MARKER prefix.
-
-    Consumes a prefetched page map if one was started via
-    browser.start_prefetch(). Otherwise falls back to a fresh fetch.
-    """
-    page = browser.page
-    ctx = await browser.consume_prefetch()
-
-    if not ctx:
-        ctx = await quick_page_map(page, filter_config=filter_config)
-    if not ctx:
-        ctx = await quick_axtree_snapshot(page)
-    if ctx:
-        return f"\n\n{DOM_MARKER}\n{ctx}"
-    return ""
+    params: dict[str, Any],
+    *,
+    include_page_context: bool,
+    filter_config: dict | None,
+) -> ExecutionContext:
+    return ExecutionContext(
+        browser=browser,
+        filter_config=filter_config,
+        policy=ExecutionPolicy(
+            include_page_context=include_page_context,
+            dom_only=bool(params.get("dom_only", False)),
+        ),
+    )
 
 
-_START_OBSERVING_JS = """([initJS]) => {
-    if (!window.__startObserving) new Function(initJS)();
-    if (window.__startObserving) window.__startObserving();
-}"""
-
-_STOP_OBSERVING_JS = """([initJS]) => {
-    if (!window.__stopObserving) new Function(initJS)();
-    return window.__stopObserving ? window.__stopObserving() : null;
-}"""
+def _normalize_action(action: str) -> str:
+    if action in {"type", "text"}:
+        return "key_press"
+    return action
 
 
-async def _start_mutation_observer(page: Page) -> None:
-    """Start DOM Mutation Observer before an action."""
-    with contextlib.suppress(Exception):
-        await page.evaluate(_START_OBSERVING_JS, [PAGE_CONTEXT_INIT_JS])
+async def _handle_screenshot(
+    params: dict[str, Any],
+    ctx: ExecutionContext,
+) -> ActionResult:
+    b64, dom = await asyncio.gather(
+        page_screenshot(ctx.page),
+        quick_dom_snapshot(ctx.page, filter_config=ctx.filter_config),
+    )
+    text = f"{DOM_MARKER}\n{dom}" if dom else None
+    return ActionResult(screenshot_b64=b64, text=text)
 
 
-async def _stop_mutation_observer(page: Page) -> str:
-    """Stop observer and return a compact change summary."""
+async def _handle_goto(params: dict[str, Any], ctx: ExecutionContext) -> ActionResult:
+    url = params["url"]
+    outcome = await execute_page_action(
+        ctx.page,
+        "goto",
+        params,
+        config=_TOOL_ACTION_CONFIG,
+    )
+    status = outcome.navigation_status or "unknown"
+    text = f"Navigated to {url} (status {status})"
+    return ActionResult(text=await _append_page_context(text, ctx))
+
+
+async def _handle_click(params: dict[str, Any], ctx: ExecutionContext) -> ActionResult:
+    await start_mutation_observer(ctx.page)
     try:
-        summary = await page.evaluate(_STOP_OBSERVING_JS, [PAGE_CONTEXT_INIT_JS])
-        return f"[{summary}]" if summary else ""
+        await execute_page_action(
+            ctx.page,
+            "click",
+            params,
+            config=_TOOL_ACTION_CONFIG,
+        )
     except Exception:
-        return ""
+        await stop_mutation_observer(ctx.page)
+        raise
+
+    if ctx.policy.include_page_context:
+        ctx.browser.start_prefetch(
+            quick_page_map(ctx.page, filter_config=ctx.filter_config)
+        )
+    delta = await stop_mutation_observer(ctx.page)
+    text = f"Clicked {delta}" if delta else "Clicked"
+    return ActionResult(text=await _append_page_context(text, ctx))
 
 
-async def page_screenshot(page: Page) -> str:
-    """Capture the browser viewport as base64 JPEG via Playwright."""
-    jpeg_bytes = await page.screenshot(type="jpeg", quality=55)
-    return base64.standard_b64encode(jpeg_bytes).decode("ascii")
+async def _handle_extract(
+    params: dict[str, Any],
+    ctx: ExecutionContext,
+) -> ActionResult:
+    outcome = await execute_page_action(
+        ctx.page,
+        "extract",
+        params,
+        config=_TOOL_ACTION_CONFIG,
+    )
+    text = outcome.text or ""
+    return ActionResult(text=await _append_page_context(text, ctx))
 
 
-# ---------------------------------------------------------------------------
-# Action execution
-# ---------------------------------------------------------------------------
+async def _handle_evaluate(
+    params: dict[str, Any],
+    ctx: ExecutionContext,
+) -> ActionResult:
+    outcome = await execute_page_action(
+        ctx.page,
+        "evaluate",
+        params,
+        config=_TOOL_ACTION_CONFIG,
+    )
+    text = "Evaluated script"
+    if outcome.page_changed:
+        dom = await quick_dom_snapshot(ctx.page, filter_config=ctx.filter_config)
+        if dom:
+            text += f"\n\n{DOM_MARKER}\n{dom}"
+    return ActionResult(text=text)
+
+
+async def _handle_select(
+    params: dict[str, Any],
+    ctx: ExecutionContext,
+) -> ActionResult:
+    outcome = await execute_page_action(
+        ctx.page,
+        "select",
+        params,
+        config=_TOOL_ACTION_CONFIG,
+    )
+    return ActionResult(text=outcome.text or "Selected option")
+
+
+async def _handle_wait_for(
+    params: dict[str, Any],
+    ctx: ExecutionContext,
+) -> ActionResult:
+    outcome = await execute_page_action(
+        ctx.page,
+        "wait_for",
+        params,
+        config=_TOOL_ACTION_CONFIG,
+    )
+    return ActionResult(text=outcome.text or "Done")
+
+
+async def _handle_key_press(
+    params: dict[str, Any],
+    ctx: ExecutionContext,
+) -> ActionResult:
+    outcome = await execute_page_action(
+        ctx.page,
+        "key_press",
+        params,
+        config=_TOOL_ACTION_CONFIG,
+    )
+    return ActionResult(text=outcome.text or "Done")
+
+
+async def _handle_scroll(
+    params: dict[str, Any],
+    ctx: ExecutionContext,
+) -> ActionResult:
+    await execute_page_action(
+        ctx.page,
+        "scroll",
+        params,
+        config=_TOOL_ACTION_CONFIG,
+    )
+    direction = params.get("direction", "down")
+    text = f"Scrolled {direction}"
+    if ctx.policy.dom_only:
+        return ActionResult(text=text)
+    return ActionResult(text=await _append_page_context(text, ctx))
+
+
+async def _handle_get_dom(
+    params: dict[str, Any],
+    ctx: ExecutionContext,
+) -> ActionResult:
+    dom = await get_dom_snapshot(
+        ctx.page,
+        selector=params.get("selector"),
+        max_chars=_DOM_MAX_CHARS,
+        filter_config=ctx.filter_config,
+    )
+    if dom is None:
+        return ActionResult(error="DOM snapshot unavailable")
+    return ActionResult(text=dom)
+
+
+_ACTION_HANDLERS = {
+    "click": _handle_click,
+    "evaluate": _handle_evaluate,
+    "extract": _handle_extract,
+    "get_dom": _handle_get_dom,
+    "goto": _handle_goto,
+    "key_press": _handle_key_press,
+    "screenshot": _handle_screenshot,
+    "scroll": _handle_scroll,
+    "select": _handle_select,
+    "wait_for": _handle_wait_for,
+}
 
 
 async def execute_dom_action(
@@ -187,139 +265,39 @@ async def execute_dom_action(
     params: dict,
     browser: BrowserManager,
     *,
-    _skip_screenshot: bool = False,
+    include_page_context: bool = True,
     filter_config: dict | None = None,
 ) -> ActionResult:
     """Execute a browser_dom tool action via Patchright."""
-    if action in ("type", "text"):
-        action = "key_press"
-
-    dom_only = params.get("dom_only", False)
+    normalized_action = _normalize_action(action)
+    ctx = _context_for(
+        browser,
+        params,
+        include_page_context=include_page_context,
+        filter_config=filter_config,
+    )
 
     try:
-        page = browser.page
-
-        if action == "screenshot":
-            b64, dom = await asyncio.gather(
-                page_screenshot(page),
-                quick_dom_snapshot(page, filter_config=filter_config),
-            )
-            text = f"{DOM_MARKER}\n{dom}" if dom else None
-            return ActionResult(screenshot_b64=b64, text=text)
-
-        if action == "goto":
-            url = params["url"]
-            outcome = await execute_page_action(
-                page,
-                action,
-                params,
-                config=_TOOL_ACTION_CONFIG,
-            )
-            status = outcome.navigation_status or "unknown"
-            nav_text = f"Navigated to {url} (status {status})"
-            if _skip_screenshot:
-                return ActionResult(text=nav_text)
-            nav_text += await attach_page_context(browser, filter_config)
-            return ActionResult(text=nav_text)
-
-        if action == "click":
-            await _start_mutation_observer(page)
-            try:
-                await execute_page_action(
-                    page,
-                    action,
-                    params,
-                    config=_TOOL_ACTION_CONFIG,
-                )
-            except Exception:
-                await _stop_mutation_observer(page)
-                raise
-            # Start page map prefetch — overlaps with mutation summary below
-            if not _skip_screenshot:
-                browser.start_prefetch(
-                    quick_page_map(page, filter_config=filter_config)
-                )
-            delta = await _stop_mutation_observer(page)
-            click_text = f"Clicked {delta}" if delta else "Clicked"
-            if _skip_screenshot:
-                return ActionResult(text=click_text)
-            click_text += await attach_page_context(browser, filter_config)
-            return ActionResult(text=click_text)
-
-        if action in {
-            "key_press",
-            "scroll",
-            "wait_for",
-            "extract",
-            "select",
-            "evaluate",
-        }:
-            outcome = await execute_page_action(
-                page,
-                action,
-                params,
-                config=_TOOL_ACTION_CONFIG,
-            )
-
-            if action == "extract":
-                extract_text = outcome.text or ""
-                if not _skip_screenshot:
-                    # Include page map so the agent can act immediately
-                    extract_text += await attach_page_context(browser, filter_config)
-                return ActionResult(text=extract_text)
-
-            if action in {"wait_for", "key_press"}:
-                return ActionResult(text=outcome.text or "Done")
-
-            if action == "select":
-                return ActionResult(text=outcome.text or "Selected option")
-
-            if action == "evaluate":
-                eval_text = "Evaluated script"
-                if outcome.page_changed:
-                    dom = await quick_dom_snapshot(page, filter_config=filter_config)
-                    if dom:
-                        eval_text += f"\n\n{DOM_MARKER}\n{dom}"
-                return ActionResult(text=eval_text)
-
-            direction = params.get("direction", "down")
-            scroll_text = f"Scrolled {direction}"
-            if _skip_screenshot or dom_only:
-                return ActionResult(text=scroll_text)
-            # Return DOM context instead of screenshot by default;
-            # agent can explicitly call screenshot if visual is needed
-            scroll_text += await attach_page_context(browser, filter_config)
-            return ActionResult(text=scroll_text)
-
-        if action == "get_dom":
-            selector = params.get("selector")
-            raw = await page.evaluate(
-                _DOM_SNAPSHOT_CALL_JS,
-                [selector, _DOM_MAX_CHARS, filter_config, PAGE_CONTEXT_INIT_JS],
-            )
-            if raw is None:
-                return ActionResult(error="DOM snapshot unavailable")
-            data = json.loads(raw)
-            header = f"[{data['title']}] {data['url']}\n"
-            return ActionResult(text=header + data["dom"])
-
-        if action == "execute_sequence":
+        if normalized_action == "execute_sequence":
             return await _execute_sequence(params, browser, filter_config=filter_config)
 
-        return ActionResult(error=f"Unknown browser_dom action: {action}")
-
+        handler = _ACTION_HANDLERS.get(normalized_action)
+        if handler is None:
+            return ActionResult(
+                error=f"Unknown browser_dom action: {normalized_action}"
+            )
+        return await handler(params, ctx)
     except TimeoutError:
         timeout_used = (
             _TOOL_ACTION_CONFIG.navigation_timeout_ms
-            if action == "goto"
+            if normalized_action == "goto"
             else _TOOL_ACTION_CONFIG.action_timeout_ms
         )
-        return ActionResult(error=f"{action} timed out after {timeout_used // 1000}s")
+        return ActionResult(
+            error=f"{normalized_action} timed out after {timeout_used // 1000}s"
+        )
     except Exception as exc:
-        return ActionResult(error=f"browser_dom.{action} failed: {exc}")
-
-
-_seq_log = logging.getLogger("bridge.sequence")
+        return ActionResult(error=f"browser_dom.{normalized_action} failed: {exc}")
 
 
 async def _execute_sequence(
@@ -345,7 +323,6 @@ async def _execute_sequence(
     tracer = get_tracer()
     results: list[str] = []
     last_step = len(steps) - 1
-    step_timings: list[int] = []
     final_result = ActionResult(text="")
 
     for i, raw_step in enumerate(steps):
@@ -385,11 +362,10 @@ async def _execute_sequence(
                 action,
                 step,
                 browser,
-                _skip_screenshot=not is_last,
+                include_page_context=is_last,
                 filter_config=filter_config,
             )
             step_ms = int((time.monotonic() - step_start) * 1000)
-            step_timings.append(step_ms)
             summary = summarize_action("browser_dom", action, step)
 
             if result.error:
