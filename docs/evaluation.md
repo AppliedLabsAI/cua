@@ -61,7 +61,7 @@ cases:
 | Mode | Behavior |
 |---|---|
 | `hybrid_auto` (default) | Uses playbook if one is specified, otherwise uses the LLM agent. Playbook failures can hand off to the agent. |
-| `playbook_only` | Runs the specified playbook only. Requires the `playbook` field. |
+| `playbook_only` | Runs the specified playbook with no LLM fallback. Requires the `playbook` field. |
 | `agent_only` | Runs the LLM agent directly, ignoring any playbook. |
 
 ## Expectations

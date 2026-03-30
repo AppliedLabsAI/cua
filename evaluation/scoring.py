@@ -168,7 +168,7 @@ def aggregate_case_results(
     aggregate_success = (
         trial_pass_rate >= case.expect.min_trial_pass_rate
         if case.expect.min_trial_pass_rate is not None
-        else all(trial.success for trial in trial_results)
+        else all(trial.passed for trial in trial_results)
     )
     unique_modes = {trial.mode for trial in trial_results}
     avg_duration = mean(durations)
@@ -200,7 +200,11 @@ def aggregate_case_results(
         data=next(
             (trial.data for trial in reversed(trial_results) if trial.data), None
         ),
-        extracted_texts=trial_results[0].extracted_texts,
+        extracted_texts=list(
+            dict.fromkeys(
+                text for trial in trial_results for text in trial.extracted_texts
+            )
+        ),
         trials_run=len(trial_results),
         trial_pass_rate=trial_pass_rate,
         avg_duration_ms=avg_duration,

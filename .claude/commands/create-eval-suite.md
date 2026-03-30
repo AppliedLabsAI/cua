@@ -82,10 +82,10 @@ Convert the gathered information into a suite YAML file. Apply these rules:
 - Use consistent tag categories across the suite: `smoke`, `regression`, `deterministic`, `public`, `internal_replica`
 
 **Cost tracking (for agent cases):**
-- If the user set `max_estimated_cost_usd`, add `input_token_cost_per_million_usd` and `output_token_cost_per_million_usd` fields with current pricing for the model they use. Common rates:
-  - Claude Sonnet: input $3, output $15
-  - Gemini Flash: input $0.10, output $0.40
-  - GPT-4.1: input $2, output $8
+- If the user set `max_estimated_cost_usd`, add `input_token_cost_per_million_usd` and `output_token_cost_per_million_usd` fields with current pricing for the model they use. Approximate rates (verify against provider pricing pages as these change frequently):
+  - Claude Sonnet: input ~$3, output ~$15
+  - Gemini Flash: input ~$0.10, output ~$0.40
+  - GPT-4.1: input ~$2, output ~$8
 
 **Defaults to omit:**
 - `execution_mode: hybrid_auto` (it's the default)
