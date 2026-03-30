@@ -31,7 +31,7 @@ class EvalCase(BaseModel):
     profile: str = "default"
     playbook: str | None = None
     playbook_params: dict[str, Any] = Field(default_factory=dict)
-    credentials: dict[str, dict[str, str]] | None = None
+    credentials: dict[str, str] | None = None
     allow_private_networks: bool = False
     start_url: str | None = None
     max_steps: int = 50

@@ -413,7 +413,7 @@ requires-dist = [
     { name = "opentelemetry-sdk", specifier = ">=1.40" },
     { name = "patchright", specifier = ">=1.58.2" },
     { name = "pydantic", specifier = ">=2.12.5" },
-    { name = "pydantic-ai-slim", extras = ["anthropic", "openai", "google"], specifier = ">=1.73" },
+    { name = "pydantic-ai-slim", extras = ["anthropic", "google", "openai"], specifier = ">=1.73" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "uvicorn", specifier = ">=0.42" },

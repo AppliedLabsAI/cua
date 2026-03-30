@@ -138,8 +138,20 @@ class DashboardAuth:
 
         Looks for common login form patterns and fills them.
         """
-        username = self._credentials.get("username", self._credentials.get("email", ""))
-        password = self._credentials.get("password", "")
+        from credentials import SecretValue
+
+        raw_user = self._credentials.get("username") or self._credentials.get("email")
+        raw_pass = self._credentials.get("password")
+        username = (
+            raw_user.get_secret_value()
+            if isinstance(raw_user, SecretValue)
+            else str(raw_user or "")
+        )
+        password = (
+            raw_pass.get_secret_value()
+            if isinstance(raw_pass, SecretValue)
+            else str(raw_pass or "")
+        )
 
         if not username or not password:
             log.error("Missing username/email or password in credentials")

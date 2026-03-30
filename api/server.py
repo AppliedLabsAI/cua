@@ -187,7 +187,10 @@ async def create_run(config: RunConfig) -> RunResponse:
                 # Inject trace context into sandbox env vars
                 trace_ctx = inject_trace_context()
                 sandbox = await create_cua_sandbox(
-                    config, modal_app, extra_env=trace_ctx
+                    config,
+                    modal_app,
+                    credentials=config.credentials,
+                    extra_env=trace_ctx,
                 )
                 run_id = sandbox.object_id
 

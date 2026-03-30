@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
     from actionlog.actions import ActionLog
     from bridge.router import ActionRouter
+    from credentials import SecretValue
 
 
 @dataclass
@@ -19,7 +20,7 @@ class AgentDeps:
     bridge: ActionRouter
     directive: str
     max_steps: int = 50
-    credentials: dict[str, Any] | None = None
+    credentials: dict[str, SecretValue] | None = None
     profile_prompt: str | None = None
     output_schema: dict[str, Any] | None = None
     on_action: Callable[[ActionLog], None] | None = None

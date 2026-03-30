@@ -12,7 +12,7 @@ RunStatusValue = Literal[
     "starting", "running", "completed", "failed", "timeout", "terminated"
 ]
 
-CredentialsMap = dict[str, dict[str, str]]
+CredentialsMap = dict[str, str]
 
 
 class RecordingSettings(BaseModel):

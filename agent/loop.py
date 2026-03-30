@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from credentials import SecretValue
 
 from pydantic_ai import ModelSettings
 from pydantic_ai.usage import UsageLimits
@@ -33,7 +36,7 @@ async def run_agent(
     model: str = PRIMARY_MODEL,
     max_steps: int = 50,
     thinking: bool | Literal["minimal", "low", "medium", "high", "xhigh"] = "high",
-    credentials: dict[str, Any] | None = None,
+    credentials: dict[str, SecretValue] | None = None,
     on_action: Callable[[ActionLog], None] | None = None,
     profile_prompt: str | None = None,
     allowed_actions: frozenset[str] | None = None,
