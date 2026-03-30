@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bridge.browser import BrowserManager
 from recording.manager import RecordingManager
 from settings import PRIMARY_MODEL
-from telemetry.logging import setup_logging
+from telemetry.logging import C_DIM, C_RESET, setup_logging
 
 setup_logging()
 
@@ -183,7 +183,12 @@ async def _run_agent(
             credentials=credentials,
             profile_prompt=profile.prompt_extension,
             on_action=lambda a: logger.info(
-                "  Step %d: %s (%dms)", a.step, a.input_summary, a.duration_ms
+                "  Step %d: %s %s(%dms)%s",
+                a.step,
+                a.input_summary,
+                C_DIM,
+                a.duration_ms,
+                C_RESET,
             ),
             allowed_actions=scope.allowed_actions,
             output_schema=output_schema,

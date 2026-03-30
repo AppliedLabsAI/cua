@@ -15,6 +15,7 @@ from typing import Any, Literal, get_args
 from pydantic_ai import BinaryContent, RunContext, ToolReturn
 
 from agent.deps import AgentDeps
+from telemetry.logging import C_GREEN_ITALIC, C_RESET
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ _TOOL_PARAMS = (
 async def browser_dom(
     ctx: RunContext[AgentDeps],
     action: BrowserAction,
+    reasoning: str,
     selector: str | None = None,
     text: str | None = None,
     key: str | None = None,
@@ -73,6 +75,7 @@ async def browser_dom(
 
     Args:
         action: The browser action to perform.
+        reasoning: Brief explanation of why this action advances the task goal.
         selector: CSS, text=, or role= selector for the target element.
         text: Text to type (key_press action).
         key: Key to press, e.g. Enter, Tab (key_press action).
@@ -98,8 +101,19 @@ async def browser_dom(
     local_vars = locals()
     tool_input = {k: local_vars[k] for k in _TOOL_PARAMS if local_vars[k] is not None}
 
-    logger.info("Step %d: browser_dom.%s", deps.step + 1, action)
-    tool_result = await deps.bridge.execute("browser_dom", tool_input)
+    if reasoning:
+        display = reasoning.replace("\n", " ")
+        logger.info(
+            "Step %d: %s%s%s",
+            deps.step + 1,
+            C_GREEN_ITALIC,
+            display,
+            C_RESET,
+        )
+
+    tool_result = await deps.bridge.execute(
+        "browser_dom", tool_input, reasoning=reasoning or None
+    )
     deps.step += 1
 
     if deps.on_action and deps.bridge.action_log:
