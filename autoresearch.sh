@@ -68,14 +68,15 @@ run_case "admin-shop-hours" \
     20 \
     "--allow-private-networks"
 
-# Case 2: Simple public page extraction
-run_case "example-dot-com" \
-    "Go to https://example.com and tell me the exact text of the heading and the first paragraph" \
-    8
+# Case 2: Admin detail extraction (navigate to model → click into record → read fields)
+run_case "admin-agent-details" \
+    "Go to http://localhost:8000/admin, use test@appliedlabs.ai for email and icarus9211 for the password, login, go to the Agents section under CORE, click on the first agent listed, and tell me the agent's name and which shop it belongs to" \
+    15 \
+    "--allow-private-networks"
 
-# Case 3: Admin counting task
+# Case 3: Admin counting + sorting task
 run_case "admin-count-shops" \
-    "Go to http://localhost:8000/admin, use test@appliedlabs.ai for email and icarus9211 for the password, login, go to the Shops section, and tell me how many shops are listed" \
+    "Go to http://localhost:8000/admin, use test@appliedlabs.ai for email and icarus9211 for the password, login, go to the Shops section, and tell me how many shops are listed and the name of the first shop" \
     15 \
     "--allow-private-networks"
 
