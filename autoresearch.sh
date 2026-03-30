@@ -7,6 +7,8 @@ set -euo pipefail
 
 PYTHON=".venv/bin/python"
 SCRIPT="scripts/run_local.py"
+# Override model via CUA_MODEL env var (e.g. CUA_MODEL="anthropic:claude-sonnet-4-20250514")
+MODEL_FLAG="${CUA_MODEL:+--model $CUA_MODEL}"
 TOTAL_STEPS=0
 TOTAL_DURATION_MS=0
 TOTAL_INPUT_TOKENS=0
@@ -28,6 +30,7 @@ run_case() {
     if output=$(timeout 180 $PYTHON $SCRIPT \
         --directive "$directive" \
         --max-steps "$max_steps" \
+        $MODEL_FLAG \
         $extra_flags 2>&1); then
         local exit_code=0
     else
