@@ -11,7 +11,7 @@ CUA exposes a single `browser_dom` tool with 9 actions. The agent chooses which 
 | `screenshot` | Capture the viewport | Screenshot + DOM |
 | `key_press(text, key)` | Type text and/or press a key (Enter, Tab, etc.) | Confirmation |
 | `scroll(direction, amount)` | Scroll the page | Screenshot |
-| `extract(selector, mode)` | Extract text, HTML, or form values from elements | Content string |
+| `extract(selector, mode)` | Extract content as markdown (default), text, HTML, or form values | Content string + DOM |
 | `get_dom(selector?)` | Get a compact DOM snapshot (optionally scoped) | DOM string |
 | `wait_for(selector, state)` | Wait for an element to be visible, hidden, etc. | Confirmation |
 | `execute_sequence(steps)` | **Batch multiple actions in a single tool call** | Combined results + DOM |
@@ -37,10 +37,11 @@ Intermediate steps skip screenshots for speed. Only the final step captures the 
 
 ## Design Choices
 
-- **DOM-first, not screenshot-first.** `goto` and `click` return a compact DOM snapshot (~200-500 tokens) instead of a screenshot (~1-2K image tokens). The agent only takes screenshots when it needs to *see* the page visually.
+- **Full page map, not screenshot-first.** `goto` and `click` return a full page map of every link, button, field, and table regardless of viewport visibility. The agent never needs to scroll to discover elements — it acts directly from the DOM.
+- **Readability-based extraction.** `extract` defaults to `markdown` mode, using a Readability-style content extractor + markdown conversion to produce clean, structured output with headings, links, and tables preserved.
 - **Streaming execution.** Tool calls execute as they arrive from the Claude API stream, not after the full response.
 - **Adaptive thinking budget.** Full budget for planning (first 2 steps), reduced after 3+ consecutive successes, reset on errors.
-- **Aggressive context pruning.** Old screenshots, DOM snapshots, and thinking blocks are stripped every iteration. Input tokens stay flat regardless of run length.
+- **Context pruning via HistoryProcessor.** Old screenshots, DOM snapshots, and thinking blocks are automatically pruned before each model request. Input tokens stay flat regardless of run length.
 - **Page-change detection.** After `goto`/`click`/`execute_sequence`, remaining tool calls in the same response are skipped — they were planned on stale state.
 - **CAPTCHA auto-resolution.** Patchright stealth patches + auto-wait up to 30s for Cloudflare/reCAPTCHA/hCaptcha.
-- **Stuck detection.** System hint after 4+ of the last 6 actions produce identical results.
+- **Stuck detection.** Repetition and cycle analysis with 3-tier escalation (hint → warning → stop). See [Guardrails](guardrails.md#stuck-detection).

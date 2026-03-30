@@ -113,6 +113,7 @@ class ActionRouter:
         self._filter_config = blinders.to_js_filter_config() if blinders else None
         self.action_log: list[ActionLog] = []
         self._step = 0
+        self._stopped = False
         self._tracer = get_tracer()
         self._recording = recording
 
@@ -132,6 +133,12 @@ class ActionRouter:
 
         Checks guardrails before execution. Returns Anthropic tool_result format.
         """
+        if self._stopped:
+            return _error_result(
+                "Session stopped due to stuck loop. "
+                "Summarize what you accomplished and any remaining steps."
+            )
+
         self._step += 1
         action = tool_input.get("action", "")
         start = time.monotonic()
@@ -191,6 +198,7 @@ class ActionRouter:
                     },
                 )
             if verdict.severity is StuckSeverity.STOP:
+                self._stopped = True
                 result = ActionResult(error=verdict.message)
             else:
                 # Prepend hint/warning to result text
