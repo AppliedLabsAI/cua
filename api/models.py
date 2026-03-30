@@ -81,7 +81,7 @@ class RunResponse(BaseModel):
     """POST /runs response."""
 
     run_id: str
-    status: RunStatusValue = RunStatusValue.RUNNING
+    status: RunStatusValue = RunStatusValue.STARTING
     status_url: str
     stream_url: str
 

@@ -134,7 +134,10 @@ async def get_events(request: Request) -> StreamingResponse:
     after the given ID are sent.
     """
     last_id = request.headers.get("Last-Event-ID")
-    start_after = int(last_id) if last_id else 0
+    try:
+        start_after = int(last_id) if last_id else 0
+    except ValueError:
+        start_after = 0
 
     async def event_generator():
         q: asyncio.Queue[ActionLog | None] = asyncio.Queue(maxsize=200)

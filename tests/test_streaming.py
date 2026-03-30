@@ -276,7 +276,7 @@ class TestRunResponseModel:
         )
         assert resp.status == "running"
 
-    def test_default_status_is_running(self):
+    def test_default_status_is_starting(self):
         from api.models import RunResponse
 
         resp = RunResponse(
@@ -284,4 +284,4 @@ class TestRunResponseModel:
             status_url="/runs/r1",
             stream_url="/runs/r1/stream",
         )
-        assert resp.status == "running"
+        assert resp.status == "starting"

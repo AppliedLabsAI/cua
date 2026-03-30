@@ -371,7 +371,10 @@ async def stream_run(run_id: str, request: Request) -> StreamingResponse:
     when the sandbox is no longer running.
     """
     last_event_id = request.headers.get("Last-Event-ID")
-    start_after = int(last_event_id) if last_event_id else 0
+    try:
+        start_after = int(last_event_id) if last_event_id else 0
+    except ValueError:
+        start_after = 0
 
     if await _cleanup_finished_sandbox(run_id):
         resp = _replay_persisted_events(run_id, start_after)
