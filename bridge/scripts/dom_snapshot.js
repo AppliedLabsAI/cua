@@ -206,7 +206,7 @@ window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
     parts.push(header);
     len += header.length;
     const rows = table.querySelectorAll('tbody tr');
-    const maxRows = Math.min(rows.length, 3);
+    const maxRows = Math.min(rows.length, 5);
     for (let i = 0; i < maxRows && len < MAX; i++) {
       const cells = rows[i].querySelectorAll('td, th');
       const vals = [];
@@ -220,14 +220,14 @@ window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
       parts.push(row);
       len += row.length;
     }
-    if (rows.length > 3) {
-      const more = `(${rows.length - 3} more rows)\n`;
+    if (rows.length > 5) {
+      const more = `(${rows.length - 5} more rows)\n`;
       parts.push(more);
       len += more.length;
     }
   }
 
-  // Phase 3: Content summary — headings from main area
+  // Phase 3: Content summary — headings + page info from main area
   const contentArea =
     root.querySelector(
       'main, [role=main], #content, #content-main, article, .content',
@@ -244,6 +244,16 @@ window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
         const line = `${h.tagName.toLowerCase()}: ${t}\n`;
         parts.push(line);
         len += line.length;
+      }
+    }
+    // Capture page-level counts/summaries (e.g., "3 results", "Showing 1 to 10 of 50")
+    const countEl = contentArea.querySelector('.paginator, .pagination, .results, .object-tools, p.paginator');
+    if (countEl && len < MAX) {
+      const countText = (countEl.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+      if (countText) {
+        const countLine = `page-info: ${countText}\n`;
+        parts.push(countLine);
+        len += countLine.length;
       }
     }
   }
