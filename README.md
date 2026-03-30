@@ -44,7 +44,7 @@ sequenceDiagram
     Sandbox->>Sandbox: Start status API (:8090)
     Sandbox->>Browser: Launch stealth Chromium
     Sandbox->>Guard: Init guardrails, extract TaskScope,<br/>create Cognitive Blinders
-    Sandbox->>Sandbox: Init recording (trace + screenshots)
+    Sandbox->>Sandbox: Init recording (Playwright trace)
 
     opt start_url provided
         Browser-->>Agent: Initial page map (all elements)
@@ -184,7 +184,7 @@ cua/
 ├── api/             FastAPI server, API models, SSE streaming, run registry
 ├── evaluation/      Local evaluation suites, scoring, and benchmark runner
 ├── guardrails/      Domain/action/SSRF safety engine
-├── recording/       Session recording (Playwright tracing + screenshots)
+├── recording/       Session recording (Playwright tracing)
 ├── sandbox/         Modal sandbox image and entrypoint
 ├── profiles/        Agent profile configuration
 ├── telemetry/       OpenTelemetry instrumentation
@@ -204,7 +204,7 @@ cua/
 | [Playbooks](docs/playbooks.md) | Deterministic workflows, selector fallbacks, LLM handoff |
 | [Authentication](docs/authentication.md) | Session persistence, credential security, `SecretValue` |
 | [Guardrails](docs/guardrails.md) | Cognitive Blinders, runtime safety, domain/action controls |
-| [Recording](docs/recording.md) | Playwright tracing, screenshots, session replay |
+| [Recording](docs/recording.md) | Playwright tracing, session replay |
 | [Evaluation](docs/evaluation.md) | Benchmark suites, trial scoring, pass/fail expectations |
 | [Observability](docs/observability.md) | OpenTelemetry traces, metrics, Jaeger setup |
 | [Configuration](docs/configuration.md) | CLI parameters, model selection, provider setup |

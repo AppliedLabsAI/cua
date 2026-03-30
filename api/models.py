@@ -28,7 +28,6 @@ class RecordingSettings(BaseModel):
     """API-facing representation of recording configuration."""
 
     enabled: bool = True
-    screenshots: bool = True
     trace: bool = True
 
 

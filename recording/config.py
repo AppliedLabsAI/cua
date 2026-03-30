@@ -11,7 +11,6 @@ class RecordingConfig(BaseModel):
     """Runtime configuration for session recording."""
 
     enabled: bool = True
-    screenshots: bool = True
     trace: bool = True
     upload: bool = True
     output_dir: str = DEFAULT_OUTPUT_DIR

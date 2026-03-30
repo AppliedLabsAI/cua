@@ -137,13 +137,6 @@ class ActionRouter:
         self.action_log.append(entry)
         self._background.schedule(persist_action_log(entry))
 
-        if self._recording and result.screenshot_b64:
-            self._background.schedule(
-                self._recording.on_screenshot(
-                    request.step, request.action, result.screenshot_b64
-                )
-            )
-
         logger.info(
             "Step %d: %s%s.%s%s %s %s",
             request.step,

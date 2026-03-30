@@ -202,13 +202,3 @@ async def get_recording_trace() -> FileResponse:
     if not trace_path.exists():
         raise HTTPException(status_code=404, detail="Trace not available")
     return FileResponse(trace_path, media_type="application/zip", filename="trace.zip")
-
-
-@app.get("/recording/screenshots/{filename}")
-async def get_recording_screenshot(filename: str) -> FileResponse:
-    """Download an individual screenshot."""
-    safe_name = Path(filename).name
-    path = _RECORDING_DIR / "screenshots" / safe_name
-    if not path.exists() or path.suffix != ".jpg":
-        raise HTTPException(status_code=404, detail="Screenshot not found")
-    return FileResponse(path, media_type="image/jpeg")
