@@ -149,7 +149,7 @@ async def test_attach_thinking_does_not_overwrite_existing():
 
 
 @pytest.mark.asyncio
-async def test_attach_thinking_clearslast_thinking():
+async def test_attach_thinking_clears_last_thinking():
     ctx = _make_ctx(last_thinking="Some thinking", action_log=[])
 
     await attach_thinking_to_action_log(
