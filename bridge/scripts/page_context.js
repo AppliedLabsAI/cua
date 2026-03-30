@@ -24,18 +24,38 @@
 // =========================================================================
 
 window.__pageFingerprint = () => {
-  // Hash of visible form field values (detects form state changes)
+  // Hash of visible, interactive form field state (detects form changes)
   let formHash = 0;
+  const _hash = (s) => {
+    for (let i = 0; i < s.length; i++) formHash = ((formHash << 5) - formHash + s.charCodeAt(i)) | 0;
+  };
   const inputs = document.querySelectorAll('input, select, textarea');
   for (const el of inputs) {
-    const v = el.value || '';
-    for (let i = 0; i < v.length; i++) formHash = ((formHash << 5) - formHash + v.charCodeAt(i)) | 0;
+    // Skip hidden inputs — they don't reflect user-visible state
+    if (el.tagName === 'INPUT' && (el.type === 'hidden' || el.hidden)) continue;
+    if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) continue;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'input') {
+      _hash(el.type || '');
+      if (el.type === 'checkbox' || el.type === 'radio') {
+        _hash(el.checked ? '1' : '0');
+      } else {
+        _hash(el.value || '');
+      }
+    } else if (tag === 'select') {
+      _hash(String(el.selectedIndex));
+    } else {
+      _hash(el.value || '');
+    }
   }
+  // Use the same interactive selector used elsewhere for consistency
+  const interactiveSelector =
+    'a, button, input, select, textarea, [role=button], [role=link]';
   return {
     url: location.href,
     title: document.title,
     formHash,
-    elementCount: document.querySelectorAll('a, button, input, select, textarea').length,
+    elementCount: document.querySelectorAll(interactiveSelector).length,
   };
 };
 

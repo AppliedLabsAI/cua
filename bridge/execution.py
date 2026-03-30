@@ -109,12 +109,21 @@ async def _attach_page_context(
     return ""
 
 
+_FINGERPRINT_CALL_JS = """([initJS]) => {
+    if (!window.__pageFingerprint) new Function(initJS)();
+    return window.__pageFingerprint ? window.__pageFingerprint() : null;
+}"""
+
+
 async def _page_fingerprint(page: Page) -> dict | None:
-    """Capture lightweight page state for change detection."""
+    """Capture lightweight page state for change detection.
+
+    Self-healing: re-injects PAGE_CONTEXT_INIT_JS if the global is missing,
+    matching the pattern used by quick_dom_snapshot / quick_page_map.
+    """
     try:
-        return await page.evaluate(
-            "() => window.__pageFingerprint ? window.__pageFingerprint() : null"
-        )
+        result = await page.evaluate(_FINGERPRINT_CALL_JS, [PAGE_CONTEXT_INIT_JS])
+        return result
     except Exception:
         return None
 
@@ -134,7 +143,7 @@ def _describe_change(before: dict | None, after: dict | None) -> str:
         diff = after["elementCount"] - before["elementCount"]
         parts.append(f"elements {'+' if diff > 0 else ''}{diff}")
     if not parts:
-        return "[no visible change]"
+        return ""
     return f"[{', '.join(parts)}]"
 
 
