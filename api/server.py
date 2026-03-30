@@ -23,7 +23,6 @@ from starlette.responses import Response
 from api.auth import auth_settings, verify_api_key
 from api.models import RunConfig, RunResponse, RunStatus
 from api.run_registry import InMemoryRunRegistry, RunHandle
-from exceptions import ConfigError
 from recording.manager import scan_recording_artifacts
 from settings import get_settings
 from telemetry import get_tracer, setup_telemetry
@@ -161,49 +160,10 @@ def serve():
     return web_app
 
 
-@web_app.get("/public-key")
-async def public_key() -> Response:
-    """Return the server's RSA public key for credential encryption."""
-    from credentials import get_public_key_pem
-
-    settings = get_settings()
-    if not settings.cua_private_key_pem.get_secret_value():
-        raise HTTPException(
-            status_code=503,
-            detail="Credential encryption is not configured (CUA_PRIVATE_KEY_PEM not set)",
-        )
-    pem = get_public_key_pem(settings.cua_private_key_pem.get_secret_value().encode())
-    return Response(content=pem, media_type="application/x-pem-file")
-
-
 @web_app.post("/runs", response_model=RunResponse)
 async def create_run(config: RunConfig) -> RunResponse:
     """Create a new CUA run by spawning a Modal sandbox."""
     from sandbox.image import PORT_STATUS, create_cua_sandbox
-
-    # Decrypt encrypted credentials if provided
-    decrypted_credentials = None
-    if config.encrypted_credentials:
-        from credentials import decrypt_credentials
-
-        settings = get_settings()
-        private_key_pem = settings.cua_private_key_pem.get_secret_value()
-        if not private_key_pem:
-            raise HTTPException(
-                status_code=400,
-                detail="encrypted_credentials sent but CUA_PRIVATE_KEY_PEM not configured",
-            )
-        try:
-            decrypted_credentials = decrypt_credentials(
-                config.encrypted_credentials,
-                private_key_pem.encode(),
-            )
-        except (ValueError, ConfigError) as exc:
-            log.warning("Credential decryption failed: %s", exc)
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid or corrupted encrypted credentials",
-            ) from exc
 
     tracer = get_tracer()
 
@@ -229,7 +189,7 @@ async def create_run(config: RunConfig) -> RunResponse:
                 sandbox = await create_cua_sandbox(
                     config,
                     modal_app,
-                    credentials=decrypted_credentials,
+                    credentials=config.credentials,
                     extra_env=trace_ctx,
                 )
                 run_id = sandbox.object_id

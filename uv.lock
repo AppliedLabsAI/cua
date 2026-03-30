@@ -377,7 +377,6 @@ source = { virtual = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "click" },
-    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "modal" },
@@ -405,7 +404,6 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.86" },
     { name = "click", specifier = ">=8.3.1" },
-    { name = "cryptography", specifier = ">=46.0.6" },
     { name = "fastapi", specifier = ">=0.135.2" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "modal", specifier = ">=1.4" },
@@ -415,7 +413,7 @@ requires-dist = [
     { name = "opentelemetry-sdk", specifier = ">=1.40" },
     { name = "patchright", specifier = ">=1.58.2" },
     { name = "pydantic", specifier = ">=2.12.5" },
-    { name = "pydantic-ai-slim", extras = ["anthropic", "openai", "google"], specifier = ">=1.73" },
+    { name = "pydantic-ai-slim", extras = ["anthropic", "google", "openai"], specifier = ">=1.73" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "uvicorn", specifier = ">=0.42" },
