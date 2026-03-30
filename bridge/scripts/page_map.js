@@ -80,7 +80,7 @@ window.__pageMap = (maxChars, filterConfig) => {
         sel = '';
       }
       if (val || sel) {
-        fieldLines.push(`  ${labelText}: ${val.slice(0, 80)}${sel ? ` [${sel}]` : ''}\n`);
+        fieldLines.push(`  ${labelText}: ${val.slice(0, 150)}${sel ? ` [${sel}]` : ''}\n`);
       }
     }
     if (fieldLines.length > 0) {
@@ -226,11 +226,18 @@ window.__pageMap = (maxChars, filterConfig) => {
     if (line) navActions.push(line);
   }
 
+  // Nav links — budget-aware: reserve at most 30% of total budget for nav
+  // so content-heavy pages don't get starved by massive sidebars
   if (navActions.length > 0 && _fits()) {
+    const navBudget = Math.max(MAX * 0.3, MAX - len); // at least 30% or whatever remains
+    const navStart = len;
     _add('--- Navigation ---\n');
     for (const line of navActions) {
-      if (!_fits()) break;
+      if (!_fits() || (len - navStart) > navBudget) break;
       _add(line);
+    }
+    if (navActions.length > 0 && (len - navStart) > navBudget) {
+      _add(`(${navActions.length} nav links total)\n`);
     }
   }
 
