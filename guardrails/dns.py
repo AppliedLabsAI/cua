@@ -8,7 +8,7 @@ import logging
 import socket
 from collections import OrderedDict
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _PRIVATE_NETWORKS = [
     ipaddress.ip_network("0.0.0.0/8"),
@@ -79,7 +79,7 @@ class DnsProtection:
                 except ValueError:
                     continue
                 if is_private_ip(addr):
-                    log.warning(
+                    logger.warning(
                         "SSRF blocked: %s resolves to private IP %s", hostname, ip_str
                     )
                     return (
@@ -87,7 +87,7 @@ class DnsProtection:
                         "(SSRF protection)"
                     )
         except (socket.gaierror, concurrent.futures.TimeoutError) as exc:
-            log.debug(
+            logger.debug(
                 "DNS resolution failed for %s: %s",
                 hostname,
                 exc,

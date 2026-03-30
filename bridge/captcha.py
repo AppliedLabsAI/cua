@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 
 from bridge.js_helpers import CAPTCHA_DETECT_INIT_JS
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_MS = 500
 _DEFAULT_TIMEOUT_MS = 30_000
@@ -70,7 +70,7 @@ async def detect_captcha(page: Page) -> CaptchaDetection:
     try:
         result = await page.evaluate(_DETECT_JS, CAPTCHA_DETECT_INIT_JS)
     except Exception as exc:
-        log.debug("detect_captcha failed during page.evaluate: %s", exc)
+        logger.debug("detect_captcha failed during page.evaluate: %s", exc)
         return CaptchaDetection(detected=False)
 
     if result is None:
@@ -121,7 +121,7 @@ async def handle_captcha_if_present(page: Page) -> CaptchaHandleResult:
     if not detection.detected:
         return CaptchaHandleResult(detected=False, message="")
 
-    log.info(
+    logger.info(
         "CAPTCHA detected: %s (blocking=%s)",
         detection.captcha_type,
         detection.is_blocking,
@@ -133,7 +133,7 @@ async def handle_captcha_if_present(page: Page) -> CaptchaHandleResult:
     wait_ms = int((time.monotonic() - start) * 1000)
 
     if resolved:
-        log.info("CAPTCHA auto-resolved in %dms", wait_ms)
+        logger.info("CAPTCHA auto-resolved in %dms", wait_ms)
         return CaptchaHandleResult(
             detected=True,
             resolved=True,
@@ -142,7 +142,7 @@ async def handle_captcha_if_present(page: Page) -> CaptchaHandleResult:
             message=f"[{detection.captcha_type} challenge auto-resolved in {wait_ms}ms]",
         )
 
-    log.warning("CAPTCHA did not resolve within timeout (%dms)", wait_ms)
+    logger.warning("CAPTCHA did not resolve within timeout (%dms)", wait_ms)
     return CaptchaHandleResult(
         detected=True,
         resolved=False,

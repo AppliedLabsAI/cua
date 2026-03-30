@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from bridge.browser import BrowserManager
     from recording.manager import RecordingManager
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class PlaybookRunner:
@@ -50,7 +50,7 @@ class PlaybookRunner:
         page = self._browser.page
         final_extracted: str | None = None
 
-        log.info(
+        logger.info(
             "Executing playbook '%s' (%d steps, params=%s)",
             playbook.id,
             len(playbook.steps),
@@ -60,7 +60,7 @@ class PlaybookRunner:
         for index in range(len(playbook.steps)):
             step = materialize_step(playbook, index, runtime_params)
             step_start = time.monotonic()
-            log.info(
+            logger.info(
                 "  Step %d/%d: %s - %s",
                 index + 1,
                 len(playbook.steps),
@@ -88,7 +88,7 @@ class PlaybookRunner:
                     final_extracted = result.extracted_text
                 if step.store_as and result.extracted_text is not None:
                     runtime_params[step.store_as] = result.extracted_text
-                log.info("  Step %d OK (%dms)", index + 1, result.duration_ms)
+                logger.info("  Step %d OK (%dms)", index + 1, result.duration_ms)
                 if result.recovery_used:
                     # LLM completed all remaining steps — stop the loop
                     return PlaybookResult(
@@ -112,7 +112,7 @@ class PlaybookRunner:
                     extracted_text=result.extracted_text or final_extracted,
                 )
 
-            log.error("  Step %d aborted: %s", index + 1, result.error)
+            logger.error("  Step %d aborted: %s", index + 1, result.error)
             screenshot_b64 = await self._capture_failure_screenshot(page)
             return PlaybookResult(
                 playbook_id=playbook.id,
@@ -125,7 +125,7 @@ class PlaybookRunner:
             )
 
         total_ms = int((time.monotonic() - start) * 1000)
-        log.info("Playbook '%s' completed in %dms", playbook.id, total_ms)
+        logger.info("Playbook '%s' completed in %dms", playbook.id, total_ms)
 
         # Structured extraction from collected texts
         data = await extract_structured_data(

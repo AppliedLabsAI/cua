@@ -28,7 +28,7 @@ from telemetry.spans import (
 if TYPE_CHECKING:
     from guardrails.stuck import StuckVerdict
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _BLOCKED_DOMAINS_DEFAULT = [
     "*.gov",
@@ -257,7 +257,7 @@ class GuardrailEngine:
                 )
                 if result.output.destructive:
                     reason = result.output.reason
-                    log.warning(
+                    logger.warning(
                         "Haiku flagged destructive click: %s (%s)", selector, reason
                     )
                     llm_span.set_attributes(
@@ -269,12 +269,12 @@ class GuardrailEngine:
                     return f"Destructive action blocked (LLM): {reason}"
 
                 llm_span.set_attributes({ATTR_GUARD_ALLOWED: True})
-                log.debug(
+                logger.debug(
                     "Haiku approved click: %s (%s)", selector, result.output.reason
                 )
                 return None
             except Exception as exc:
-                log.warning(
+                logger.warning(
                     "Haiku destructive check unavailable, blocking ambiguous click: %s",
                     exc,
                 )

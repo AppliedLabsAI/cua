@@ -21,7 +21,7 @@ import sys
 from telemetry.logging import setup_logging
 
 setup_logging()
-log = logging.getLogger("cua.agent")
+logger = logging.getLogger("cua.agent")
 
 STATUS_API_PORT = 8090
 
@@ -71,7 +71,7 @@ async def main() -> int:
     try:
         config = CUAConfig.from_env()
     except (ValueError, Exception) as exc:
-        log.error("Configuration error: %s", exc)
+        logger.error("Configuration error: %s", exc)
         return 1
 
     from settings import get_settings
@@ -79,7 +79,7 @@ async def main() -> int:
     # Use sandbox object ID as run ID (set by Modal)
     run_id = get_settings().modal_sandbox_id
 
-    log.info(
+    logger.info(
         "Starting CUA agent: model=%s, max_steps=%d, %dx%d, profile=%s",
         config.model,
         config.max_steps,
@@ -87,11 +87,11 @@ async def main() -> int:
         config.height,
         config.profile_name,
     )
-    log.info("Directive: %s", config.directive[:200])
+    logger.info("Directive: %s", config.directive[:200])
 
     # Start status API in-process (shares globals with agent loop)
     status_task = await _start_status_api()
-    log.info("Status API started on port %d (in-process)", STATUS_API_PORT)
+    logger.info("Status API started on port %d (in-process)", STATUS_API_PORT)
 
     # Initialize status API state
     init_status(run_id)

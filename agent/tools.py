@@ -16,7 +16,7 @@ from pydantic_ai import BinaryContent, RunContext, ToolReturn
 
 from agent.deps import AgentDeps
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 BrowserAction = Literal[
     "goto",
@@ -98,7 +98,7 @@ async def browser_dom(
     local_vars = locals()
     tool_input = {k: local_vars[k] for k in _TOOL_PARAMS if local_vars[k] is not None}
 
-    log.info("Step %d: browser_dom.%s", deps.step + 1, action)
+    logger.info("Step %d: browser_dom.%s", deps.step + 1, action)
     tool_result = await deps.bridge.execute("browser_dom", tool_input)
     deps.step += 1
 

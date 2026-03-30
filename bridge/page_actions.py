@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from bridge.js_helpers import EXTRACT_VALUE_INIT_JS, READABILITY_EXTRACT_INIT_JS
 from settings import SETTLE_SLEEP_S, SETTLE_TIMEOUT_MS
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 EXTRACT_VALUE_CALL_JS = """([sel, initJS]) => {
     if (!window.__extractValue) new Function(initJS)();
@@ -137,10 +137,10 @@ async def execute_page_action(
     if action == "evaluate":
         script = params.get("script", "")
         if not script or not script.strip():
-            log.warning("evaluate called with empty script — skipping")
+            logger.warning("evaluate called with empty script — skipping")
             return PageActionOutcome()
-        log.info("Executing JS evaluate (len=%d)", len(script))
-        log.debug(
+        logger.info("Executing JS evaluate (len=%d)", len(script))
+        logger.debug(
             "JS evaluate script: %.200s%s", script, "..." if len(script) > 200 else ""
         )
         url_before = page.url
@@ -200,7 +200,7 @@ async def _extract_markdown(page: Any) -> str:
             md = html_to_markdown(data["html"], base_url=data.get("url", ""))
             return truncate_markdown(md)
         except Exception:
-            log.warning("Markdown extraction failed, falling back to innerText")
+            logger.warning("Markdown extraction failed, falling back to innerText")
     # Fallback to plain innerText
     return await page.inner_text("body")
 

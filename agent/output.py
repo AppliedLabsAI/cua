@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from agent.result import AgentResult
     from playbooks.schema import PlaybookResult
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _EXTRACTION_MAX_TOKENS = 1024
 
@@ -107,13 +107,13 @@ async def extract_structured_output(
 
         data = result.output
         if not isinstance(data, dict):
-            log.warning("Extraction returned non-object: %s", type(data).__name__)
+            logger.warning("Extraction returned non-object: %s", type(data).__name__)
             return None, ext_input_tokens, ext_output_tokens
 
         return data, ext_input_tokens, ext_output_tokens
 
     except Exception as e:
-        log.warning("Structured extraction failed: %s", e)
+        logger.warning("Structured extraction failed: %s", e)
         return None, 0, 0
 
 

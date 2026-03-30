@@ -25,7 +25,7 @@ from api.models import RunStatus, RunStatusValue
 from recording import DEFAULT_OUTPUT_DIR
 from recording.manager import scan_recording_artifacts
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CUA Sandbox Status")
 
@@ -61,7 +61,7 @@ def push_action(action: ActionLog) -> None:
         try:
             q.put_nowait(action)
         except asyncio.QueueFull:
-            log.warning("Subscriber queue full, dropping action %d", action.step)
+            logger.warning("Subscriber queue full, dropping action %d", action.step)
 
 
 async def complete_run(
@@ -84,9 +84,9 @@ async def complete_run(
                 timeout=_COMPLETION_SENTINEL_TIMEOUT_SECONDS,
             )
         except TimeoutError:
-            log.error("Timed out sending completion sentinel to subscriber")
+            logger.error("Timed out sending completion sentinel to subscriber")
         except Exception:
-            log.exception("Cannot send completion sentinel to subscriber")
+            logger.exception("Cannot send completion sentinel to subscriber")
 
 
 async def persist_status(output_dir: str) -> None:
@@ -106,7 +106,7 @@ async def persist_status(output_dir: str) -> None:
             f.write(_status.model_dump_json(indent=2))
 
     await asyncio.to_thread(_write)
-    log.info("Persisted run status to %s", path)
+    logger.info("Persisted run status to %s", path)
 
 
 @app.get("/status")

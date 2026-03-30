@@ -27,7 +27,7 @@ from telemetry.spans import (
     ATTR_GUARD_REASON,
 )
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # Actions that are always safe — skip LLM validation
 _SAFE_ACTIONS = frozenset(
@@ -150,7 +150,7 @@ class ActionValidator:
         if action == "goto":
             domain = _extract_domain(tool_input.get("url", ""))
             if domain and domain in self._approved_domains:
-                log.debug("Skipping validation for approved domain: %s", domain)
+                logger.debug("Skipping validation for approved domain: %s", domain)
                 return None
 
         # For execute_sequence, check if any steps actually need validation
@@ -200,7 +200,9 @@ class ActionValidator:
                 reason = result.output.reason
 
                 if not is_safe:
-                    log.warning("Action validator blocked %s: %s", action_desc, reason)
+                    logger.warning(
+                        "Action validator blocked %s: %s", action_desc, reason
+                    )
                     span.set_attributes(
                         {
                             ATTR_GUARD_ALLOWED: False,
@@ -210,7 +212,7 @@ class ActionValidator:
                     return f"Action validator blocked: {reason}"
 
                 span.set_attributes({ATTR_GUARD_ALLOWED: True})
-                log.debug("Action validator approved: %s (%s)", action_desc, reason)
+                logger.debug("Action validator approved: %s (%s)", action_desc, reason)
                 if action == "goto":
                     domain = _extract_domain(tool_input.get("url", ""))
                     if domain:
@@ -218,7 +220,7 @@ class ActionValidator:
                 return None
 
             except Exception as exc:
-                log.warning(
+                logger.warning(
                     "Action validation unavailable, blocking ambiguous action: %s", exc
                 )
                 safety_degraded_total().add(

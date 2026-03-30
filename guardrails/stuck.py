@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class StuckSeverity(Enum):

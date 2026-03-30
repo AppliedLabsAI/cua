@@ -23,7 +23,7 @@ from settings import (
     SETTLE_TIMEOUT_MS,
 )
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class PlaybookStepExecutor:
@@ -94,7 +94,7 @@ class PlaybookStepExecutor:
                     timeout=SELECTOR_PROBE_TIMEOUT_MS,
                 )
                 if handle:
-                    log.debug("Selector resolved: %s", selector)
+                    logger.debug("Selector resolved: %s", selector)
                     return selector
             except Exception:
                 continue

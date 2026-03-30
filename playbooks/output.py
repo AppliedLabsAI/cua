@@ -7,7 +7,7 @@ from typing import Any
 
 from playbooks.schema import StepResult
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 async def extract_structured_data(
@@ -34,7 +34,7 @@ async def extract_structured_data(
             extracted_texts=extracted_texts,
             output_schema=output_schema,
         )
-        log.info(
+        logger.info(
             "Structured extraction for playbook '%s' used %d input and %d output tokens",
             playbook_name,
             input_tokens,
@@ -42,7 +42,7 @@ async def extract_structured_data(
         )
         return data
     except Exception as exc:
-        log.warning(
+        logger.warning(
             "Structured extraction failed for playbook '%s': %s",
             playbook_name,
             exc,

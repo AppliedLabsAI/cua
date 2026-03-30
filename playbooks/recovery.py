@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from playbooks.executor import PlaybookStepExecutor
     from recording.manager import RecordingManager
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 RETRY_DELAY_S = 1.0
 
@@ -93,13 +93,13 @@ class StepRecoveryPolicy:
         if result.success or step.on_failure == "abort":
             return result
 
-        log.info("  Step failed, retrying after %.1fs...", self._retry_delay_s)
+        logger.info("  Step failed, retrying after %.1fs...", self._retry_delay_s)
         await asyncio.sleep(self._retry_delay_s)
         result = await self._executor.execute_step(step, page)
         if result.success or step.on_failure == "retry":
             return result
 
-        log.info("  Step failed twice - handing off to LLM agent")
+        logger.info("  Step failed twice - handing off to LLM agent")
         llm_result = await self._handoff_runner(
             playbook=playbook,
             remaining_steps=remaining_steps,
@@ -152,7 +152,7 @@ class StepRecoveryPolicy:
                 recovery_used=True,
             )
         except Exception as exc:
-            log.warning("LLM agent handoff failed: %s", exc)
+            logger.warning("LLM agent handoff failed: %s", exc)
             return StepResult(
                 step_index=0,
                 action="llm_handoff",

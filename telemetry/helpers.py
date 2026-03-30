@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
     from bridge.router import ActionRouter
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _strip_dom(text: str) -> str:
@@ -89,7 +89,7 @@ def record_text_block(block: Any, llm_span: Span, text_parts: list[str]) -> None
     if text:
         text_parts.append(text)
         stripped = _strip_dom(text)
-        log.debug("Agent text: %s", stripped)
+        logger.debug("Agent text: %s", stripped)
         llm_span.add_event(EVENT_TEXT_OUTPUT, attributes={"text": stripped})
 
 
@@ -97,7 +97,7 @@ def record_thinking_block(block: Any, llm_span: Span) -> None:
     """Process a thinking content block: log and emit span event."""
     thinking_text = getattr(block, "thinking", "") or ""
     if thinking_text:
-        log.debug("Thinking: %s", thinking_text)
+        logger.debug("Thinking: %s", thinking_text)
         llm_span.add_event(EVENT_THINKING, attributes={"thinking_text": thinking_text})
 
 

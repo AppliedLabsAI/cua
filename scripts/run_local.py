@@ -34,7 +34,7 @@ setup_logging()
 
 # Suppress noisy HTTP request logs from httpx
 logging.getLogger("httpx").setLevel(logging.WARNING)
-log = logging.getLogger("cua.local")
+logger = logging.getLogger("cua.local")
 
 
 async def _launch_browser(
@@ -43,7 +43,7 @@ async def _launch_browser(
     os.environ["DISPLAY"] = display
     browser = BrowserManager()
     await browser.launch(width=width, height=height, start_url=start_url, proxy=proxy)
-    log.info("Browser launched")
+    logger.info("Browser launched")
     return browser
 
 
@@ -56,7 +56,7 @@ async def _init_recording(browser: BrowserManager) -> tuple[RecordingManager, st
     config = RecordingConfig(output_dir=output_dir, upload=False)
     recording = RecordingManager(config, run_id="local")
     await recording.start(browser.context)
-    log.info("Session recording started: %s", output_dir)
+    logger.info("Session recording started: %s", output_dir)
     return recording, output_dir
 
 
@@ -75,7 +75,7 @@ async def _run_playbook(
 
     store = PlaybookStore()
     playbook = store.load(playbook_id)
-    log.info("Loaded playbook: %s (%d steps)", playbook.id, len(playbook.steps))
+    logger.info("Loaded playbook: %s (%d steps)", playbook.id, len(playbook.steps))
 
     pb_params: dict = {}
     if playbook_params:
@@ -91,7 +91,7 @@ async def _run_playbook(
         auth = DashboardAuth(browser, credentials or {})
         login_url = playbook.start_url or ""
         if not await auth.ensure_authenticated(login_url):
-            log.error("Authentication failed")
+            logger.error("Authentication failed")
             with contextlib.suppress(Exception):
                 await recording.stop()
             await browser.close()
@@ -123,11 +123,11 @@ async def _run_playbook(
 
     try:
         manifest = await recording.stop()
-        log.info("Recording saved: %d artifacts", len(manifest.artifacts))
+        logger.info("Recording saved: %d artifacts", len(manifest.artifacts))
     except Exception as rec_exc:
-        log.warning("Recording finalization failed: %s", rec_exc)
+        logger.warning("Recording finalization failed: %s", rec_exc)
     await browser.close()
-    log.info("Browser closed")
+    logger.info("Browser closed")
     return 0 if pb_result.success else 1
 
 
@@ -159,7 +159,7 @@ async def _run_agent(
 
     scope = await extract_task_scope(directive, profile)
     blinders = DOMBlinders(scope)
-    log.info(
+    logger.info(
         "Blinders: goal_type=%s, actions=%d",
         scope.goal_type,
         len(scope.allowed_actions),
@@ -182,7 +182,7 @@ async def _run_agent(
             thinking=thinking,
             credentials=credentials,
             profile_prompt=profile.prompt_extension,
-            on_action=lambda a: log.info(
+            on_action=lambda a: logger.info(
                 "  Step %d: %s (%dms)", a.step, a.input_summary, a.duration_ms
             ),
             allowed_actions=scope.allowed_actions,
@@ -191,18 +191,18 @@ async def _run_agent(
     finally:
         try:
             manifest = await recording.stop()
-            log.info(
+            logger.info(
                 "Recording saved: %d artifacts at %s",
                 len(manifest.artifacts),
                 output_dir,
             )
             trace_path = os.path.join(output_dir, "trace.zip")
             if os.path.exists(trace_path):
-                log.info("View trace: npx playwright show-trace %s", trace_path)
+                logger.info("View trace: npx playwright show-trace %s", trace_path)
         except Exception as rec_exc:
-            log.warning("Recording finalization failed: %s", rec_exc)
+            logger.warning("Recording finalization failed: %s", rec_exc)
         await browser.close()
-        log.info("Browser closed")
+        logger.info("Browser closed")
 
     output = agent_result_to_output(result)
     print("\n" + "=" * 60)
@@ -212,7 +212,7 @@ async def _run_agent(
     os.makedirs(output_dir, exist_ok=True)
     log_path = os.path.join(output_dir, "action_log.json")
     await save_action_log(result.action_log, log_path)
-    log.info("Action log saved to %s", log_path)
+    logger.info("Action log saved to %s", log_path)
 
     return 0 if result.success else 1
 
@@ -272,13 +272,13 @@ def main(
         from profiles.loader import load_profile
 
         prof = load_profile(profile)
-        log.info("Display: %s (%dx%d), profile: %s", display, width, height, profile)
-        log.info("Directive: %s", directive)
+        logger.info("Display: %s (%dx%d), profile: %s", display, width, height, profile)
+        logger.info("Directive: %s", directive)
 
         try:
             browser = await _launch_browser(display, width, height, start_url, proxy)
         except Exception as e:
-            log.error("Failed to launch browser: %s", e)
+            logger.error("Failed to launch browser: %s", e)
             return 1
 
         recording, output_dir = await _init_recording(browser)
@@ -288,7 +288,7 @@ def main(
             try:
                 raw_creds = json.loads(credentials)
             except json.JSONDecodeError as exc:
-                log.error("Invalid --credentials JSON: %s", exc)
+                logger.error("Invalid --credentials JSON: %s", exc)
                 with contextlib.suppress(Exception):
                     await recording.stop()
                 await browser.close()
@@ -308,7 +308,7 @@ def main(
             try:
                 parsed_schema = json.loads(output_schema)
             except json.JSONDecodeError as exc:
-                log.error("Invalid --output-schema JSON: %s", exc)
+                logger.error("Invalid --output-schema JSON: %s", exc)
                 with contextlib.suppress(Exception):
                     await recording.stop()
                 await browser.close()

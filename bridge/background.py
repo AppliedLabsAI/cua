@@ -7,7 +7,7 @@ import logging
 from collections.abc import Coroutine
 from typing import Any
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class BackgroundTasks:
@@ -28,4 +28,4 @@ class BackgroundTasks:
     def _on_done(self, task: asyncio.Task[Any]) -> None:
         self._tasks.discard(task)
         if not task.cancelled() and task.exception():
-            log.warning("Background task failed: %s", task.exception())
+            logger.warning("Background task failed: %s", task.exception())

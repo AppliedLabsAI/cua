@@ -31,7 +31,7 @@ from bridge.js_helpers import (
 )
 from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _DOM_MAX_CHARS = 4000
 # Compact DOM auto-attached to goto/click responses

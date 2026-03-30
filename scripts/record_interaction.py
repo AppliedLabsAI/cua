@@ -31,7 +31,7 @@ from patchright.async_api import async_playwright
 from bridge.js_helpers import RECORDER_INIT_JS
 from settings import LOGIN_TIMEOUT_MS
 
-log = logging.getLogger("cua.recorder")
+logger = logging.getLogger("cua.recorder")
 
 _DEFAULT_OUTPUT = "output/recording.json"
 
@@ -50,7 +50,7 @@ class InteractionRecorder:
         try:
             data = json.loads(payload_json)
         except (json.JSONDecodeError, Exception) as exc:
-            log.error(
+            logger.error(
                 "Failed to parse recorder event: %s (payload: %s)",
                 exc,
                 payload_json[:200],
@@ -58,7 +58,7 @@ class InteractionRecorder:
             return
 
         if data.get("action") == "__done":
-            log.info("Done signal received (Ctrl+Shift+S)")
+            logger.info("Done signal received (Ctrl+Shift+S)")
             self._done.set()
             return
 
@@ -68,7 +68,7 @@ class InteractionRecorder:
 
         action = data.get("action", "?")
         desc = self._describe_event(data)
-        log.info("  [%d] %s  %s", self._seq, action.ljust(10), desc)
+        logger.info("  [%d] %s  %s", self._seq, action.ljust(10), desc)
 
     @staticmethod
     def _describe_event(data: dict) -> str:
@@ -165,17 +165,17 @@ async def run(args: argparse.Namespace) -> int:
         else:
             signal.signal(signal.SIGINT, lambda *_: recorder.done.set())
 
-        log.info("=" * 60)
-        log.info("RECORDING STARTED")
-        log.info("Interact with the browser to record your workflow.")
-        log.info("When done: close the browser OR press Ctrl+Shift+S")
-        log.info("=" * 60)
+        logger.info("=" * 60)
+        logger.info("RECORDING STARTED")
+        logger.info("Interact with the browser to record your workflow.")
+        logger.info("When done: close the browser OR press Ctrl+Shift+S")
+        logger.info("=" * 60)
 
         if args.start_url:
             await page.goto(
                 args.start_url, wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
             )
-            log.info("Navigated to %s", args.start_url)
+            logger.info("Navigated to %s", args.start_url)
 
         # Wait for done signal
         await recorder.done.wait()
@@ -184,7 +184,7 @@ async def run(args: argparse.Namespace) -> int:
         if recorder.done.is_set():
             pass  # Browser disconnected — expected during shutdown
         else:
-            log.exception("Recording failed")
+            logger.exception("Recording failed")
             return 1
     finally:
         if browser is not None:
@@ -207,7 +207,7 @@ async def run(args: argparse.Namespace) -> int:
     output_path.write_text(json.dumps(output, indent=2))
 
     count = len(output["interactions"])
-    log.info(
+    logger.info(
         "Recording saved: %s (%d events, %dms)",
         output_path,
         count,

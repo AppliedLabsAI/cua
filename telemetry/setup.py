@@ -17,7 +17,7 @@ _initialized = False
 _tracer_provider = None
 _meter_provider = None
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -95,14 +95,14 @@ def shutdown_telemetry() -> None:
             _tracer_provider.force_flush()
             _tracer_provider.shutdown()
         except Exception:
-            log.debug("Tracer provider shutdown error", exc_info=True)
+            logger.debug("Tracer provider shutdown error", exc_info=True)
         _tracer_provider = None
     if _meter_provider is not None:
         try:
             _meter_provider.force_flush()
             _meter_provider.shutdown()
         except Exception:
-            log.debug("Meter provider shutdown error", exc_info=True)
+            logger.debug("Meter provider shutdown error", exc_info=True)
         _meter_provider = None
 
 

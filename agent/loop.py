@@ -25,7 +25,7 @@ from bridge.execution import attach_page_context
 from bridge.router import ActionRouter
 from settings import PRIMARY_MODEL
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 async def run_agent(
@@ -83,7 +83,7 @@ async def run_agent(
         summary = result.output or ""
 
     except Exception as e:
-        log.error("Agent error: %s", e, exc_info=True)
+        logger.error("Agent error: %s", e, exc_info=True)
         return AgentResult(
             success=False,
             summary="",
@@ -109,7 +109,7 @@ async def run_agent(
         deps.total_input_tokens += ext_in
         deps.total_output_tokens += ext_out
 
-    log.info(
+    logger.info(
         "Stats: %d actions, %dms, %d input tokens, %d output tokens",
         deps.step,
         int((time.monotonic() - run_start) * 1000),
