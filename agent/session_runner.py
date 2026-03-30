@@ -8,7 +8,7 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 
 from agent.loop import run_agent
-from api.streaming import complete_run, push_action
+from api.streaming import complete_run, persist_status, push_action
 from blinders.filters import DOMBlinders
 from blinders.scope import extract_task_scope
 from bridge.browser import BrowserManager
@@ -106,6 +106,7 @@ async def run_sandbox_session(
             active_sessions().add(-1)
             sessions_total().add(1, {"status": "failed"})
             await complete_run(error=f"Setup failed: {exc}")
+            await persist_status(f"/recordings/{run_id}")
             await browser.close()
             return 1
 
@@ -137,6 +138,7 @@ async def run_sandbox_session(
             active_sessions().add(-1)
             sessions_total().add(1, {"status": "failed"})
             await complete_run(error=str(exc))
+            await persist_status(f"/recordings/{run_id}")
             return 1
         finally:
             if recording:
@@ -190,6 +192,8 @@ async def run_sandbox_session(
             result.total_input_tokens,
             result.total_output_tokens,
         )
+
+        await persist_status(f"/recordings/{run_id}")
 
         status = "success" if result.success else "failed"
         active_sessions().add(-1)

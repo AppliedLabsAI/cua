@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+
+
+class RunPhase(StrEnum):
+    """Lifecycle phase of a sandbox as tracked by the outer API."""
+
+    RUNNING = "running"
+    TERMINATED = "terminated"
+    FAILED = "failed"
 
 
 class RunHandle(BaseModel):
@@ -15,6 +24,8 @@ class RunHandle(BaseModel):
     run_id: str
     sandbox: Any
     status_base_url: str
+    phase: RunPhase = RunPhase.RUNNING
+    error: str | None = None
 
 
 class RunRegistry:

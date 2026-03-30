@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 import modal
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from modal import FilePatternMatcher
@@ -21,8 +21,8 @@ from opentelemetry import trace as otel_trace  # StatusCode used below
 from starlette.responses import Response
 
 from api.auth import auth_settings, verify_api_key
-from api.models import RunConfig, RunResponse, RunStatus
-from api.run_registry import InMemoryRunRegistry, RunHandle
+from api.models import RunConfig, RunResponse, RunStatus, RunStatusValue
+from api.run_registry import InMemoryRunRegistry, RunHandle, RunPhase
 from recording.manager import scan_recording_artifacts
 from settings import get_settings
 from telemetry import get_tracer, setup_telemetry
@@ -104,6 +104,32 @@ def _get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
+async def _get_or_reconstruct_handle(run_id: str) -> RunHandle | None:
+    """Look up a run handle, reconstructing from Modal if not in local registry.
+
+    This allows any API container to serve status/stream/stop requests,
+    even if a different container originally created the sandbox.
+    """
+    from sandbox.image import PORT_STATUS
+
+    handle = _run_registry.get(run_id)
+    if handle is not None:
+        return handle
+
+    # Attempt to reconstruct from Modal's API
+    try:
+        sandbox = await modal.Sandbox.from_id.aio(run_id)
+        tunnels = await sandbox.tunnels.aio()
+        url = tunnels[PORT_STATUS].url
+        handle = RunHandle(run_id=run_id, sandbox=sandbox, status_base_url=url)
+        _run_registry.add(handle)
+        log.info("Reconstructed handle for run %s from Modal", run_id)
+        return handle
+    except Exception:
+        log.warning("Could not reconstruct handle for run %s", run_id, exc_info=True)
+        return None
+
+
 async def _cleanup_finished_sandbox(run_id: str) -> bool:
     handle = _run_registry.get(run_id)
     if handle is None:
@@ -153,7 +179,17 @@ web_app = FastAPI(
 )
 
 
-@modal_app.function(timeout=3600)
+_VOLUME_MOUNT = "/recordings"
+
+_recording_volume = modal.Volume.from_name(
+    "cua-recordings", create_if_missing=True, version=2
+)
+
+
+@modal_app.function(
+    timeout=3600,
+    volumes={_VOLUME_MOUNT: _recording_volume},
+)
 @modal.asgi_app()
 def serve():
     """Serve the CUA FastAPI app as a Modal web endpoint."""
@@ -184,7 +220,6 @@ async def create_run(config: RunConfig) -> RunResponse:
         run_id: str | None = None
         try:
             with tracer.start_as_current_span(SANDBOX_CREATE):
-                # Inject trace context into sandbox env vars
                 trace_ctx = inject_trace_context()
                 sandbox = await create_cua_sandbox(
                     config,
@@ -204,7 +239,6 @@ async def create_run(config: RunConfig) -> RunResponse:
             sessions_total().add(1, {"status": "failed"})
             session_span.set_status(otel_trace.StatusCode.ERROR, str(exc))
             session_span.record_exception(exc)
-            # Log full error server-side; return sanitized message to client
             error_msg = str(exc)
             raise HTTPException(
                 status_code=502,
@@ -226,24 +260,47 @@ async def create_run(config: RunConfig) -> RunResponse:
 
         return RunResponse(
             run_id=run_id,
+            status=RunStatusValue.RUNNING,
             status_url=f"/runs/{run_id}",
             stream_url=f"/runs/{run_id}/stream",
         )
+
+
+def _load_persisted_status(run_id: str) -> RunStatus | None:
+    """Try to load persisted status from the recordings volume."""
+    status_path = Path(_VOLUME_MOUNT) / run_id / "status.json"
+    if not status_path.exists():
+        return None
+    try:
+        return RunStatus.model_validate_json(status_path.read_text())
+    except Exception:
+        log.warning("Failed to read persisted status for run %s", run_id)
+        return None
 
 
 @web_app.get("/runs/{run_id}", response_model=RunStatus)
 async def get_run_status(run_id: str) -> RunStatus:
     """Get the status of a CUA run."""
     if await _cleanup_finished_sandbox(run_id):
+        persisted = _load_persisted_status(run_id)
+        if persisted:
+            return persisted
         return RunStatus(
             run_id=run_id,
-            status="terminated",
+            status=RunStatusValue.TERMINATED,
             error="Sandbox has already exited",
         )
 
-    handle = _run_registry.get(run_id)
+    handle = await _get_or_reconstruct_handle(run_id)
     if not handle:
+        # Sandbox gone — try persisted status from volume
+        persisted = _load_persisted_status(run_id)
+        if persisted:
+            return persisted
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    if handle.phase == RunPhase.TERMINATED:
+        return RunStatus(run_id=run_id, status=RunStatusValue.TERMINATED)
 
     client = _get_http_client()
     try:
@@ -254,9 +311,12 @@ async def get_run_status(run_id: str) -> RunStatus:
     except httpx.HTTPError as exc:
         _remove_run_registry(run_id)
         log.warning("Status request failed for run %s: %s", run_id, exc)
+        persisted = _load_persisted_status(run_id)
+        if persisted:
+            return persisted
         return RunStatus(
             run_id=run_id,
-            status="terminated",
+            status=RunStatusValue.TERMINATED,
             error="Sandbox is no longer reachable",
         )
 
@@ -264,32 +324,83 @@ async def get_run_status(run_id: str) -> RunStatus:
 @web_app.post("/runs/{run_id}/stop")
 async def stop_run(run_id: str) -> dict:
     """Terminate a CUA run early."""
-    handle = _run_registry.get(run_id)
+    handle = await _get_or_reconstruct_handle(run_id)
     if not handle:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
-    await handle.sandbox.terminate.aio()
+    handle.phase = RunPhase.TERMINATED
+
+    try:
+        await handle.sandbox.terminate.aio()
+    except Exception as exc:
+        log.warning("Terminate call failed for run %s: %s", run_id, exc)
+
     _remove_run_registry(run_id)
     log.info("Terminated run %s", run_id)
-    return {"status": "terminated", "run_id": run_id}
+    return {"status": RunStatusValue.TERMINATED, "run_id": run_id}
+
+
+def _replay_persisted_events(
+    run_id: str, start_after: int = 0
+) -> StreamingResponse | None:
+    """Build an SSE response from persisted status on the volume."""
+    persisted = _load_persisted_status(run_id)
+    if not persisted:
+        return None
+
+    async def replay():
+        for action in persisted.actions:
+            if action.step > start_after:
+                payload = action.model_dump()
+                yield f"id: {action.step}\ndata: {json.dumps(payload)}\n\n"
+        yield f"event: complete\ndata: {json.dumps({'status': persisted.status})}\n\n"
+
+    return StreamingResponse(
+        replay(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @web_app.get("/runs/{run_id}/stream")
-async def stream_run(run_id: str) -> StreamingResponse:
-    """Proxy SSE events from the sandbox's internal status API."""
+async def stream_run(run_id: str, request: Request) -> StreamingResponse:
+    """Proxy SSE events from the sandbox's internal status API.
+
+    Forwards ``Last-Event-ID`` so the sandbox replays missed events
+    on reconnection. Falls back to persisted status from the volume
+    when the sandbox is no longer running.
+    """
+    last_event_id = request.headers.get("Last-Event-ID")
+    try:
+        start_after = int(last_event_id) if last_event_id else 0
+    except ValueError:
+        start_after = 0
+
     if await _cleanup_finished_sandbox(run_id):
+        resp = _replay_persisted_events(run_id, start_after)
+        if resp:
+            return resp
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
-    handle = _run_registry.get(run_id)
+    handle = await _get_or_reconstruct_handle(run_id)
     if not handle:
+        resp = _replay_persisted_events(run_id, start_after)
+        if resp:
+            return resp
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     client = _get_http_client()
 
     async def proxy_events():
+        headers: dict[str, str] = {}
+        if last_event_id:
+            headers["Last-Event-ID"] = last_event_id
         try:
             async with client.stream(
-                "GET", f"{handle.status_base_url}/events", timeout=None
+                "GET",
+                f"{handle.status_base_url}/events",
+                headers=headers,
+                timeout=None,
             ) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
@@ -312,8 +423,6 @@ async def stream_run(run_id: str) -> StreamingResponse:
 # Recording retrieval — reads from Modal Volume or proxies from live sandbox
 # ---------------------------------------------------------------------------
 
-_VOLUME_MOUNT = "/recordings"
-
 
 def _volume_path(run_id: str, *parts: str) -> Path:
     """Build a path inside the recordings volume, guarded against traversal."""
@@ -327,7 +436,7 @@ def _volume_path(run_id: str, *parts: str) -> Path:
 @web_app.get("/runs/{run_id}/recording/manifest")
 async def get_recording_manifest(run_id: str) -> dict:
     """List recording artifacts. Proxies to sandbox if live, reads volume if completed."""
-    handle = _run_registry.get(run_id)
+    handle = await _get_or_reconstruct_handle(run_id)
     if handle:
         client = _get_http_client()
         try:
@@ -348,7 +457,7 @@ async def get_recording_manifest(run_id: str) -> dict:
 @web_app.get("/runs/{run_id}/recording/trace")
 async def get_recording_trace(run_id: str) -> Response:
     """Download the Playwright trace ZIP."""
-    handle = _run_registry.get(run_id)
+    handle = await _get_or_reconstruct_handle(run_id)
     if handle:
         client = _get_http_client()
         try:

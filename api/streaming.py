@@ -2,7 +2,7 @@
 
 Runs inside each Modal sandbox alongside the agent loop. Exposes:
 - GET /status — current RunStatus
-- GET /events — SSE stream of ActionLog events (supports multiple consumers)
+- GET /events — SSE stream of ActionLog events with replay support
 
 The agent loop pushes events via push_action() / complete_run().
 Started by the entrypoint script before the agent loop begins.
@@ -17,11 +17,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from actionlog.actions import ActionLog, format_sse_event
-from api.models import RunStatus
+from api.models import RunStatus, RunStatusValue
 from recording import DEFAULT_OUTPUT_DIR
 from recording.manager import scan_recording_artifacts
 
@@ -30,8 +30,9 @@ log = logging.getLogger(__name__)
 app = FastAPI(title="CUA Sandbox Status")
 
 # Shared state — set by the agent loop, read by the status endpoints.
-_status = RunStatus(run_id="", status="starting")
+_status = RunStatus(run_id="", status=RunStatusValue.STARTING)
 _subscribers: list[asyncio.Queue[ActionLog | None]] = []
+_action_log: list[ActionLog] = []  # Full ActionLog history for SSE replay
 _run_start: float = 0.0
 _COMPLETION_SENTINEL_TIMEOUT_SECONDS = 1.0
 
@@ -40,12 +41,13 @@ def init_status(run_id: str) -> None:
     """Initialize status state. Called once at sandbox startup."""
     global _run_start
     _status.run_id = run_id
-    _status.status = "running"
+    _status.status = RunStatusValue.RUNNING
     _status.action_count = 0
     _status.actions.clear()
     _status.result = None
     _status.error = None
     _status.duration_ms = None
+    _action_log.clear()
     _run_start = time.monotonic()
 
 
@@ -54,6 +56,7 @@ def push_action(action: ActionLog) -> None:
     _status.action_count = action.step
     _status.actions.append(action.to_event())
     _status.duration_ms = int((time.monotonic() - _run_start) * 1000)
+    _action_log.append(action)
     for q in list(_subscribers):
         try:
             q.put_nowait(action)
@@ -68,7 +71,7 @@ async def complete_run(
     extracted_texts: list[str] | None = None,
 ) -> None:
     """Mark the run as completed or failed. Called by the agent loop on exit."""
-    _status.status = "failed" if error else "completed"
+    _status.status = RunStatusValue.FAILED if error else RunStatusValue.COMPLETED
     _status.result = summary
     _status.error = error
     _status.data = data
@@ -86,27 +89,82 @@ async def complete_run(
             log.exception("Cannot send completion sentinel to subscriber")
 
 
+async def persist_status(output_dir: str) -> None:
+    """Save the current RunStatus to disk for post-termination retrieval.
+
+    Called by the agent before exit so the outer API can serve status
+    from the Modal Volume after the sandbox is gone.
+    """
+    import asyncio
+    import os
+
+    path = os.path.join(output_dir, "status.json")
+
+    def _write() -> None:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            f.write(_status.model_dump_json(indent=2))
+
+    await asyncio.to_thread(_write)
+    log.info("Persisted run status to %s", path)
+
+
 @app.get("/status")
 async def get_status() -> RunStatus:
     """Return current run status."""
     return _status
 
 
+_TERMINAL_STATUSES = frozenset(
+    {
+        RunStatusValue.COMPLETED,
+        RunStatusValue.FAILED,
+        RunStatusValue.TERMINATED,
+        RunStatusValue.TIMEOUT,
+    }
+)
+
+
 @app.get("/events")
-async def get_events() -> StreamingResponse:
-    """SSE stream of action events. Each consumer gets its own queue."""
+async def get_events(request: Request) -> StreamingResponse:
+    """SSE stream of action events with replay.
+
+    New subscribers receive all past events first, then live events.
+    Supports ``Last-Event-ID`` header for reconnection — only events
+    after the given ID are sent.
+    """
+    last_id = request.headers.get("Last-Event-ID")
+    try:
+        start_after = int(last_id) if last_id else 0
+    except ValueError:
+        start_after = 0
 
     async def event_generator():
         q: asyncio.Queue[ActionLog | None] = asyncio.Queue(maxsize=200)
+        # Subscribe before replay so events pushed during replay land in queue
         _subscribers.append(q)
         try:
+            # Phase 1: Replay past events
+            snapshot = list(_action_log)
+            last_replayed = start_after
+            for action in snapshot:
+                if action.step > start_after:
+                    yield format_sse_event(action)
+                    last_replayed = action.step
+
+            # If already completed, send final event and close
+            if _status.status in _TERMINAL_STATUSES:
+                yield f"event: complete\ndata: {json.dumps({'status': _status.status})}\n\n"
+                return
+
+            # Phase 2: Live stream (dedup against replayed events)
             while True:
                 action = await q.get()
                 if action is None:
-                    payload = {"status": _status.status}
-                    yield f"event: complete\ndata: {json.dumps(payload)}\n\n"
+                    yield f"event: complete\ndata: {json.dumps({'status': _status.status})}\n\n"
                     return
-                yield format_sse_event(action)
+                if action.step > last_replayed:
+                    yield format_sse_event(action)
         finally:
             if q in _subscribers:
                 _subscribers.remove(q)

@@ -24,7 +24,6 @@ export DISPLAY=":${DISPLAY_NUM}"
 XVFB_PID=""
 OPENBOX_PID=""
 TINT2_PID=""
-STATUS_PID=""
 AGENT_PID=""
 
 log() { echo "[entrypoint] $(date -u +%H:%M:%S) $*" >&2; }
@@ -34,7 +33,7 @@ die() {
 }
 cleanup() {
 	log "Received termination signal, cleaning up background processes"
-	for pid in "$AGENT_PID" "$STATUS_PID" "$TINT2_PID" "$OPENBOX_PID" "$XVFB_PID"; do
+	for pid in "$AGENT_PID" "$TINT2_PID" "$OPENBOX_PID" "$XVFB_PID"; do
 		if [ -n "${pid:-}" ]; then
 			kill "$pid" 2>/dev/null || true
 		fi
@@ -63,21 +62,12 @@ TINT2_PID=$!
 sleep 0.5
 
 # ---------------------------------------------------------------------------
-# 3. Internal status API (port 8090)
+# 3. Agent loop (also starts the status API in-process on port 8090)
 # ---------------------------------------------------------------------------
-log "Starting status API on port 8090"
 if ! cd /opt/cua; then
 	die "Failed to change directory to /opt/cua"
 fi
-python3 -m uvicorn api.streaming:app --host 0.0.0.0 --port 8090 --log-level warning &
-STATUS_PID=$!
-sleep 1
-kill -0 "$STATUS_PID" 2>/dev/null || die "Status API failed to start"
-
-# ---------------------------------------------------------------------------
-# 4. Agent loop
-# ---------------------------------------------------------------------------
-log "Starting agent loop"
+log "Starting agent loop (status API on port 8090)"
 log "  Directive: ${DIRECTIVE:0:100}"
 log "  Model: ${MODEL:-claude-sonnet-4-6}"
 log "  Max steps: ${MAX_STEPS:-50}"

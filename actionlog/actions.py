@@ -198,10 +198,11 @@ SSE_EXCLUDED_FIELDS = {"tool_input", "thinking"}
 
 
 def format_sse_event(action: ActionLog) -> str:
-    """Format an ActionLog as an SSE data line.
+    """Format an ActionLog as an SSE data line with event ID.
 
     Excludes tool_input and thinking (too large for streaming).
-    Returns "data: {json}\\n\\n".
+    Uses action.step as the SSE event ID for Last-Event-ID reconnection.
+    Returns "id: N\\ndata: {json}\\n\\n".
     """
     payload = action.to_event().model_dump()
-    return f"data: {json.dumps(payload)}\n\n"
+    return f"id: {action.step}\ndata: {json.dumps(payload)}\n\n"
