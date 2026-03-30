@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -18,6 +17,7 @@ from evaluation.models import (
     ExecutionMode,
     ObservedMode,
 )
+from evaluation.runtime import trial_runtime
 from evaluation.scoring import (
     aggregate_case_results,
     estimate_cost_usd,
@@ -27,9 +27,7 @@ from evaluation.scoring import (
 from settings import PRIMARY_MODEL
 
 if TYPE_CHECKING:
-    from bridge.browser import BrowserManager
     from evaluation.models import EvalSuiteResult
-    from recording.manager import RecordingManager
 
 
 async def load_suite(path: str | Path) -> EvalSuite:
@@ -37,36 +35,6 @@ async def load_suite(path: str | Path) -> EvalSuite:
     content = await asyncio.to_thread(Path(path).read_text)
     raw = yaml.safe_load(content) or {}
     return EvalSuite.model_validate(raw)
-
-
-async def _launch_browser(
-    *,
-    display: str,
-    width: int,
-    height: int,
-    start_url: str | None,
-    proxy: str | None = None,
-) -> BrowserManager:
-    from bridge.browser import BrowserManager
-
-    os.environ["DISPLAY"] = display
-    browser = BrowserManager()
-    await browser.launch(width=width, height=height, start_url=start_url, proxy=proxy)
-    return browser
-
-
-async def _init_recording(
-    run_id: str,
-    output_root: Path,
-    browser: BrowserManager,
-) -> RecordingManager:
-    from recording import RecordingConfig
-    from recording.manager import RecordingManager
-
-    config = RecordingConfig(output_dir=str(output_root / run_id), upload=False)
-    recording = RecordingManager(config, run_id=run_id)
-    await recording.start(browser.context)
-    return recording
 
 
 async def _run_playbook_case(
@@ -79,14 +47,14 @@ async def _run_playbook_case(
     width: int,
     height: int,
 ) -> EvalTrialResult:
-    browser = await _launch_browser(
+    async with trial_runtime(
+        run_id=run_id,
+        output_root=output_root,
         display=display,
         width=width,
         height=height,
         start_url=case.start_url,
-    )
-    recording = await _init_recording(run_id, output_root, browser)
-    try:
+    ) as runtime:
         from playbooks.auth import DashboardAuth
         from playbooks.runner import PlaybookRunner
         from playbooks.store import PlaybookStore
@@ -96,11 +64,18 @@ async def _run_playbook_case(
         if playbook.auth_required:
             from credentials import resolve_credentials
 
-            auth = DashboardAuth(browser, resolve_credentials(case.credentials) or {})
+            auth = DashboardAuth(
+                runtime.browser,
+                resolve_credentials(case.credentials) or {},
+            )
             login_url = playbook.start_url or case.start_url or ""
             await auth.ensure_authenticated(login_url)
 
-        runner = PlaybookRunner(browser, recording, output_schema=case.output_schema)
+        runner = PlaybookRunner(
+            runtime.browser,
+            runtime.recording,
+            output_schema=case.output_schema,
+        )
         raw = await runner.execute(playbook, case.playbook_params)
         extracted = [sr.extracted_text for sr in raw.step_results if sr.extracted_text]
         recovery_used = any(sr.recovery_used for sr in raw.step_results)
@@ -131,9 +106,6 @@ async def _run_playbook_case(
             data=raw.data,
             extracted_texts=extracted,
         )
-    finally:
-        await recording.stop()
-        await browser.close()
 
 
 async def _run_agent_case(
@@ -154,14 +126,14 @@ async def _run_agent_case(
     from bridge.router import ActionRouter
     from profiles.loader import apply_guardrail_overrides, load_profile
 
-    browser = await _launch_browser(
+    async with trial_runtime(
+        run_id=run_id,
+        output_root=output_root,
         display=display,
         width=width,
         height=height,
         start_url=case.start_url,
-    )
-    recording = await _init_recording(run_id, output_root, browser)
-    try:
+    ) as runtime:
         profile = load_profile(case.profile)
         guardrail_config = apply_guardrail_overrides(profile)
         if case.allow_private_networks:
@@ -170,11 +142,11 @@ async def _run_agent_case(
         scope = await extract_task_scope(case.directive, profile)
         blinders = DOMBlinders(scope)
         bridge = ActionRouter(
-            browser=browser,
+            browser=runtime.browser,
             guardrail_config=guardrail_config,
             blinders=blinders,
             directive=case.directive,
-            recording=recording,
+            recording=runtime.recording,
         )
 
         from credentials import resolve_credentials
@@ -217,9 +189,6 @@ async def _run_agent_case(
             data=output.data,
             extracted_texts=raw.extracted_texts,
         )
-    finally:
-        await recording.stop()
-        await browser.close()
 
 
 async def _run_trial(

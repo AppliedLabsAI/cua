@@ -7,17 +7,19 @@ stealth to auto-resolve them. Enforces guardrails before every action.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from actionlog.actions import ActionLog, persist_action_log, summarize_action
 from bridge import DOM_MARKER, ActionResult
+from bridge.background import BackgroundTasks
 from bridge.browser import BrowserManager
 from bridge.captcha import handle_captcha_if_present
 from bridge.execution import execute_dom_action
+from bridge.tool_result import action_result_to_tool_result, error_result
 from guardrails import GuardrailConfig, GuardrailEngine, GuardrailResult
 from guardrails.stuck import StuckSeverity
 from telemetry import get_tracer
@@ -50,51 +52,14 @@ log = logging.getLogger(__name__)
 _CAPTCHA_CHECK_ACTIONS = {"goto", "click"}
 
 
-# ---------------------------------------------------------------------------
-# ToolResult helpers — Anthropic's tool_result content format
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ActionRequest:
+    """Normalized action request passed through the router pipeline."""
 
-
-def _image_block(b64: str) -> dict:
-    return {
-        "type": "image",
-        "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-    }
-
-
-def _screenshot_result(b64: str) -> dict:
-    return {"content": [_image_block(b64)], "is_error": False}
-
-
-def _text_result(text: str) -> dict:
-    return {"content": [{"type": "text", "text": text}], "is_error": False}
-
-
-def _screenshot_and_text_result(b64: str, text: str) -> dict:
-    return {
-        "content": [_image_block(b64), {"type": "text", "text": text}],
-        "is_error": False,
-    }
-
-
-def _error_result(msg: str) -> dict:
-    return {
-        "content": [{"type": "text", "text": f"Error: {msg}"}],
-        "is_error": True,
-    }
-
-
-def _action_result_to_tool_result(result: ActionResult) -> dict:
-    """Convert an ActionResult from an executor into Anthropic's tool_result format."""
-    if result.error:
-        return _error_result(result.error)
-    if result.screenshot_b64 and result.text:
-        return _screenshot_and_text_result(result.screenshot_b64, result.text)
-    if result.screenshot_b64:
-        return _screenshot_result(result.screenshot_b64)
-    if result.text:
-        return _text_result(result.text)
-    return _text_result("Done")
+    step: int
+    tool_name: str
+    action: str
+    tool_input: dict
 
 
 class ActionRouter:
@@ -117,7 +82,7 @@ class ActionRouter:
         self._stopped = False
         self._tracer = get_tracer()
         self._recording = recording
-        self._bg_tasks: set[asyncio.Task[Any]] = set()
+        self._background = BackgroundTasks()
 
         self._verifier = None
         self._skip_captcha = False
@@ -130,21 +95,9 @@ class ActionRouter:
                 directive=directive,
             )
 
-    def _fire_and_forget(self, coro) -> None:
-        """Schedule a coroutine as a background task (no await needed)."""
-        task = asyncio.create_task(coro)
-        self._bg_tasks.add(task)
-        task.add_done_callback(self._on_bg_done)
-
-    def _on_bg_done(self, task: asyncio.Task[Any]) -> None:
-        self._bg_tasks.discard(task)
-        if not task.cancelled() and task.exception():
-            log.warning("Background task failed: %s", task.exception())
-
     async def drain_background(self) -> None:
         """Await all pending background tasks (call before shutdown)."""
-        if self._bg_tasks:
-            await asyncio.gather(*self._bg_tasks, return_exceptions=True)
+        await self._background.drain()
 
     async def execute(self, tool_name: str, tool_input: dict) -> dict:
         """Route a tool call from Claude to the appropriate executor.
@@ -152,18 +105,66 @@ class ActionRouter:
         Checks guardrails before execution. Returns Anthropic tool_result format.
         """
         if self._stopped:
-            return _error_result(
+            return error_result(
                 "Session stopped due to stuck loop. "
                 "Summarize what you accomplished and any remaining steps."
             )
 
-        self._step += 1
-        action = tool_input.get("action", "")
+        request = self._build_request(tool_name, tool_input)
         start = time.monotonic()
 
+        guardrail_block = await self._guard_phase(request)
+        result = await self._dispatch_phase(request, guardrail_block)
+        result = self._postprocess_phase(request, result)
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        tool_result = action_result_to_tool_result(result)
+
+        entry = ActionLog.now(
+            step=request.step,
+            tool=request.tool_name,
+            action=request.action,
+            tool_input=request.tool_input,
+            duration_ms=duration_ms,
+            success=result.error is None,
+            result_text=result.text,
+            has_screenshot=result.screenshot_b64 is not None,
+            error=result.error,
+        )
+        self.action_log.append(entry)
+        self._background.schedule(persist_action_log(entry))
+
+        if self._recording and result.screenshot_b64:
+            self._background.schedule(
+                self._recording.on_screenshot(
+                    request.step, request.action, result.screenshot_b64
+                )
+            )
+
+        log.info(
+            "Step %d: %s.%s (%dms) %s",
+            request.step,
+            request.tool_name,
+            request.action,
+            duration_ms,
+            "OK" if result.error is None else f"ERR: {result.error[:80]}",
+        )
+
+        return tool_result
+
+    def _build_request(self, tool_name: str, tool_input: dict) -> ActionRequest:
+        self._step += 1
+        return ActionRequest(
+            step=self._step,
+            tool_name=tool_name,
+            action=tool_input.get("action", ""),
+            tool_input=tool_input,
+        )
+
+    async def _guard_phase(self, request: ActionRequest) -> str | None:
         with self._tracer.start_as_current_span(GUARDRAIL_CHECK) as guard_span:
             guardrail_result = await self._check_guardrails(
-                tool_name, action, tool_input
+                request.tool_name, request.action, request.tool_input
             )
             guardrail_block = (
                 guardrail_result.reason
@@ -180,16 +181,32 @@ class ActionRouter:
                 guard_attrs[ATTR_GUARD_REASON] = guardrail_block[:500]
                 guardrail_blocks_total().add(1, {"check_type": check_type})
             guard_span.set_attributes(guard_attrs)
+        return guardrail_block
 
+    async def _dispatch_phase(
+        self,
+        request: ActionRequest,
+        guardrail_block: str | None,
+    ) -> ActionResult:
         if guardrail_block:
-            result = ActionResult(error=f"Guardrail blocked: {guardrail_block}")
-        else:
-            try:
-                result = await self._dispatch(tool_name, action, tool_input)
-            except Exception as e:
-                result = ActionResult(error=f"{tool_name}.{action} failed: {e}")
+            return ActionResult(error=f"Guardrail blocked: {guardrail_block}")
 
-        # Track consecutive errors for guardrail engine
+        try:
+            return await self._dispatch(
+                request.tool_name,
+                request.action,
+                request.tool_input,
+            )
+        except Exception as exc:
+            return ActionResult(
+                error=f"{request.tool_name}.{request.action} failed: {exc}"
+            )
+
+    def _postprocess_phase(
+        self,
+        request: ActionRequest,
+        result: ActionResult,
+    ) -> ActionResult:
         if result.error:
             stop = self.guardrails.record_error()
             if stop:
@@ -197,71 +214,42 @@ class ActionRouter:
         else:
             self.guardrails.record_success()
 
-        # Stuck pattern detection (repetition + cycle analysis)
-        input_summary = summarize_action(tool_name, action, tool_input)
+        input_summary = summarize_action(
+            request.tool_name,
+            request.action,
+            request.tool_input,
+        )
         verdict = self.guardrails.record_action(
             input_summary, success=result.error is None
         )
-        if verdict.severity is not StuckSeverity.NONE:
-            log.warning(
-                "Stuck detected (%s): %s", verdict.severity.value, input_summary
+        if verdict.severity is StuckSeverity.NONE:
+            return result
+
+        log.warning("Stuck detected (%s): %s", verdict.severity.value, input_summary)
+        stuck_detections_total().add(1, {"severity": verdict.severity.value})
+        from opentelemetry import trace as otel_trace
+
+        span = otel_trace.get_current_span()
+        if span.is_recording():
+            span.add_event(
+                EVENT_STUCK,
+                attributes={
+                    ATTR_STUCK_SEVERITY: verdict.severity.value,
+                    ATTR_STUCK_SUMMARY: input_summary[:200],
+                },
             )
-            stuck_detections_total().add(1, {"severity": verdict.severity.value})
-            from opentelemetry import trace as otel_trace
+        if verdict.severity is StuckSeverity.STOP:
+            self._stopped = True
+            return ActionResult(error=verdict.message)
+        if result.error:
+            return result
 
-            span = otel_trace.get_current_span()
-            if span.is_recording():
-                span.add_event(
-                    EVENT_STUCK,
-                    attributes={
-                        ATTR_STUCK_SEVERITY: verdict.severity.value,
-                        ATTR_STUCK_SUMMARY: input_summary[:200],
-                    },
-                )
-            if verdict.severity is StuckSeverity.STOP:
-                self._stopped = True
-                result = ActionResult(error=verdict.message)
-            elif not result.error:
-                # Prepend hint/warning only when the action itself succeeded
-                prefix = verdict.message
-                text = f"{prefix}\n{result.text}" if result.text else prefix
-                result = ActionResult(
-                    screenshot_b64=result.screenshot_b64,
-                    text=text,
-                )
-
-        duration_ms = int((time.monotonic() - start) * 1000)
-        tool_result = _action_result_to_tool_result(result)
-
-        entry = ActionLog.now(
-            step=self._step,
-            tool=tool_name,
-            action=action,
-            tool_input=tool_input,
-            duration_ms=duration_ms,
-            success=result.error is None,
-            result_text=result.text,
-            has_screenshot=result.screenshot_b64 is not None,
-            error=result.error,
+        prefix = verdict.message
+        text = f"{prefix}\n{result.text}" if result.text else prefix
+        return ActionResult(
+            screenshot_b64=result.screenshot_b64,
+            text=text,
         )
-        self.action_log.append(entry)
-        self._fire_and_forget(persist_action_log(entry))
-
-        if self._recording and result.screenshot_b64:
-            self._fire_and_forget(
-                self._recording.on_screenshot(self._step, action, result.screenshot_b64)
-            )
-
-        log.info(
-            "Step %d: %s.%s (%dms) %s",
-            self._step,
-            tool_name,
-            action,
-            duration_ms,
-            "OK" if result.error is None else f"ERR: {result.error[:80]}",
-        )
-
-        return tool_result
 
     async def _check_guardrails(
         self, tool_name: str, action: str, tool_input: dict
@@ -337,6 +325,7 @@ class ActionRouter:
                     action,
                     tool_input,
                     self.browser,
+                    include_page_context=True,
                     filter_config=self._filter_config,
                 )
 
