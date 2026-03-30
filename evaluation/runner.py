@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import yaml
 
@@ -14,23 +14,22 @@ from evaluation.models import (
     EvalCase,
     EvalCaseResult,
     EvalSuite,
-    EvalSuiteResult,
+    EvalTrialResult,
+    ExecutionMode,
+    ObservedMode,
+)
+from evaluation.scoring import (
+    aggregate_case_results,
+    estimate_cost_usd,
+    score_case_result,
+    summarize_suite_results,
 )
 from settings import PRIMARY_MODEL
 
 if TYPE_CHECKING:
     from bridge.browser import BrowserManager
+    from evaluation.models import EvalSuiteResult
     from recording.manager import RecordingManager
-
-
-def _lookup_data_path(data: dict | None, path: str) -> object | None:
-    """Resolve a dotted path like ``details.title`` from nested result data."""
-    current: object | None = data
-    for segment in path.split("."):
-        if not isinstance(current, dict) or segment not in current:
-            return None
-        current = current[segment]
-    return current
 
 
 async def load_suite(path: str | Path) -> EvalSuite:
@@ -38,69 +37,6 @@ async def load_suite(path: str | Path) -> EvalSuite:
     content = await asyncio.to_thread(Path(path).read_text)
     raw = yaml.safe_load(content) or {}
     return EvalSuite.model_validate(raw)
-
-
-def _evaluate_case(case: EvalCase, result: EvalCaseResult) -> EvalCaseResult:
-    """Apply expectations and mark the case as passed/failed."""
-    failed_checks: list[str] = []
-    expect = case.expect
-
-    if expect.must_succeed and not result.success:
-        failed_checks.append("must_succeed")
-    if expect.summary_contains and not all(
-        needle.lower() in result.summary.lower() for needle in expect.summary_contains
-    ):
-        failed_checks.append("summary_contains")
-    if expect.error_contains and not all(
-        needle.lower() in (result.error or "").lower()
-        for needle in expect.error_contains
-    ):
-        failed_checks.append("error_contains")
-    if expect.extracted_text_contains:
-        joined = "\n".join(result.extracted_texts).lower()
-        if not all(
-            needle.lower() in joined for needle in expect.extracted_text_contains
-        ):
-            failed_checks.append("extracted_text_contains")
-    if expect.required_data_keys and not all(
-        _lookup_data_path(result.data, key) is not None
-        for key in expect.required_data_keys
-    ):
-        failed_checks.append("required_data_keys")
-    if expect.data_values_contain:
-        for path, needle in expect.data_values_contain.items():
-            value = _lookup_data_path(result.data, path)
-            if value is None or needle.lower() not in str(value).lower():
-                failed_checks.append("data_values_contain")
-                break
-    if (
-        expect.max_duration_ms is not None
-        and result.duration_ms > expect.max_duration_ms
-    ):
-        failed_checks.append("max_duration_ms")
-    if expect.max_actions is not None and result.actions > expect.max_actions:
-        failed_checks.append("max_actions")
-    if expect.min_actions is not None and result.actions < expect.min_actions:
-        failed_checks.append("min_actions")
-    if (
-        expect.max_input_tokens is not None
-        and result.input_tokens > expect.max_input_tokens
-    ):
-        failed_checks.append("max_input_tokens")
-    if (
-        expect.max_output_tokens is not None
-        and result.output_tokens > expect.max_output_tokens
-    ):
-        failed_checks.append("max_output_tokens")
-
-    result.failed_checks = failed_checks
-    result.passed = not failed_checks
-    return result
-
-
-def score_case_result(case: EvalCase, result: EvalCaseResult) -> EvalCaseResult:
-    """Public wrapper for applying expectations to a normalized case result."""
-    return _evaluate_case(case, result)
 
 
 async def _launch_browser(
@@ -120,15 +56,15 @@ async def _launch_browser(
 
 
 async def _init_recording(
-    case_id: str,
+    run_id: str,
     output_root: Path,
     browser: BrowserManager,
 ) -> RecordingManager:
     from recording import RecordingConfig
     from recording.manager import RecordingManager
 
-    config = RecordingConfig(output_dir=str(output_root / case_id), upload=False)
-    recording = RecordingManager(config, run_id=case_id)
+    config = RecordingConfig(output_dir=str(output_root / run_id), upload=False)
+    recording = RecordingManager(config, run_id=run_id)
     await recording.start(browser.context)
     return recording
 
@@ -137,17 +73,19 @@ async def _run_playbook_case(
     case: EvalCase,
     output_root: Path,
     *,
+    trial_index: int,
+    run_id: str,
     display: str,
     width: int,
     height: int,
-) -> EvalCaseResult:
+) -> EvalTrialResult:
     browser = await _launch_browser(
         display=display,
         width=width,
         height=height,
         start_url=case.start_url,
     )
-    recording = await _init_recording(case.id, output_root, browser)
+    recording = await _init_recording(run_id, output_root, browser)
     try:
         from playbooks.auth import DashboardAuth
         from playbooks.runner import PlaybookRunner
@@ -165,18 +103,31 @@ async def _run_playbook_case(
         runner = PlaybookRunner(browser, recording, output_schema=case.output_schema)
         raw = await runner.execute(playbook, case.playbook_params)
         extracted = [sr.extracted_text for sr in raw.step_results if sr.extracted_text]
-        return EvalCaseResult(
+        recovery_used = any(sr.recovery_used for sr in raw.step_results)
+        summary = ""
+        if raw.data:
+            summary = str(raw.data.get("summary", ""))
+        if not summary and raw.extracted_text:
+            summary = raw.extracted_text
+        return EvalTrialResult(
             id=case.id,
+            trial_index=trial_index,
             passed=False,
             success=raw.success,
-            mode="playbook",
-            summary=(raw.data or {}).get("summary", "") if raw.data else "",
+            mode=ObservedMode.HYBRID if recovery_used else ObservedMode.PLAYBOOK,
+            requested_mode=case.execution_mode,
+            summary=summary,
             error=raw.error,
             duration_ms=raw.total_duration_ms,
             actions=len(raw.step_results),
             input_tokens=0,
             output_tokens=0,
-            recovery_used=any(sr.recovery_used for sr in raw.step_results),
+            recovery_used=recovery_used,
+            playbook_hit=raw.success and not recovery_used,
+            handoff_occurred=recovery_used,
+            handoff_succeeded=recovery_used and raw.success,
+            estimated_cost_usd=0.0,
+            benchmark_tags=list(case.benchmark_tags),
             data=raw.data,
             extracted_texts=extracted,
         )
@@ -189,11 +140,13 @@ async def _run_agent_case(
     case: EvalCase,
     output_root: Path,
     *,
+    trial_index: int,
+    run_id: str,
     model: str,
     display: str,
     width: int,
     height: int,
-) -> EvalCaseResult:
+) -> EvalTrialResult:
     from agent.loop import run_agent
     from agent.output import agent_result_to_output
     from blinders.filters import DOMBlinders
@@ -207,7 +160,7 @@ async def _run_agent_case(
         height=height,
         start_url=case.start_url,
     )
-    recording = await _init_recording(case.id, output_root, browser)
+    recording = await _init_recording(run_id, output_root, browser)
     try:
         profile = load_profile(case.profile)
         guardrail_config = apply_guardrail_overrides(profile)
@@ -238,11 +191,13 @@ async def _run_agent_case(
             output_schema=case.output_schema,
         )
         output = agent_result_to_output(raw)
-        return EvalCaseResult(
+        return EvalTrialResult(
             id=case.id,
+            trial_index=trial_index,
             passed=False,
             success=raw.success,
-            mode="agent",
+            mode=ObservedMode.AGENT,
+            requested_mode=case.execution_mode,
             summary=output.summary,
             error=raw.error,
             duration_ms=raw.total_duration_ms,
@@ -250,12 +205,78 @@ async def _run_agent_case(
             input_tokens=raw.total_input_tokens,
             output_tokens=raw.total_output_tokens,
             recovery_used=False,
+            playbook_hit=False,
+            handoff_occurred=False,
+            handoff_succeeded=False,
+            estimated_cost_usd=estimate_cost_usd(
+                case,
+                raw.total_input_tokens,
+                raw.total_output_tokens,
+            ),
+            benchmark_tags=list(case.benchmark_tags),
             data=output.data,
             extracted_texts=raw.extracted_texts,
         )
     finally:
         await recording.stop()
         await browser.close()
+
+
+async def _run_trial(
+    case: EvalCase,
+    output_root: Path,
+    *,
+    trial_index: int,
+    model: str,
+    display: str,
+    width: int,
+    height: int,
+) -> EvalTrialResult:
+    """Run one trial in the requested execution mode."""
+    run_id = case.id if case.trials == 1 else f"{case.id}/trial-{trial_index:02d}"
+    if case.execution_mode is ExecutionMode.PLAYBOOK_ONLY:
+        if not case.playbook:
+            raise ValueError("playbook_only evaluation cases require a playbook")
+        return await _run_playbook_case(
+            case,
+            output_root,
+            trial_index=trial_index,
+            run_id=run_id,
+            display=display,
+            width=width,
+            height=height,
+        )
+    if case.execution_mode is ExecutionMode.AGENT_ONLY:
+        return await _run_agent_case(
+            case,
+            output_root,
+            trial_index=trial_index,
+            run_id=run_id,
+            model=model,
+            display=display,
+            width=width,
+            height=height,
+        )
+    if case.playbook:
+        return await _run_playbook_case(
+            case,
+            output_root,
+            trial_index=trial_index,
+            run_id=run_id,
+            display=display,
+            width=width,
+            height=height,
+        )
+    return await _run_agent_case(
+        case,
+        output_root,
+        trial_index=trial_index,
+        run_id=run_id,
+        model=model,
+        display=display,
+        width=width,
+        height=height,
+    )
 
 
 async def run_case(
@@ -270,24 +291,19 @@ async def run_case(
     """Run and score one evaluation case."""
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
-    if case.playbook:
-        result = await _run_playbook_case(
+    trial_results: list[EvalTrialResult] = []
+    for trial_index in range(1, case.trials + 1):
+        trial = await _run_trial(
             case,
-            output_root,
-            display=display,
-            width=width,
-            height=height,
-        )
-    else:
-        result = await _run_agent_case(
-            case,
-            output_root,
+            output_root=output_root,
+            trial_index=trial_index,
             model=model,
             display=display,
             width=width,
             height=height,
         )
-    return _evaluate_case(case, result)
+        trial_results.append(cast(EvalTrialResult, score_case_result(case, trial)))
+    return aggregate_case_results(case, trial_results)
 
 
 async def run_suite(
@@ -312,16 +328,7 @@ async def run_suite(
                 height=height,
             )
         )
-    passed = sum(1 for r in results if r.passed)
-    total = len(results)
-    return EvalSuiteResult(
-        name=suite.name,
-        passed=passed,
-        failed=total - passed,
-        total=total,
-        pass_rate=(passed / total) if total else 0.0,
-        case_results=results,
-    )
+    return summarize_suite_results(suite.name, results)
 
 
 async def write_suite_report(report: EvalSuiteResult, path: str | Path) -> None:

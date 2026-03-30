@@ -3,6 +3,9 @@ cases:
   - id: agent-example-dot-com
     directive: Open example.com and return the page title
     start_url: https://example.com
+    execution_mode: agent_only
+    trials: 2
+    benchmark_tags: [public, smoke]
     max_steps: 5
     output_schema:
       type: object
@@ -25,12 +28,17 @@ cases:
         - details.title
       data_values_contain:
         details.title: Example Domain
+      min_trial_pass_rate: 1.0
+      max_p95_duration_ms: 10000
       max_actions: 4
 
   # - id: example-cancel-order
   #   directive: Cancel order 12345
   #   playbook: example_cancel_order
+  #   execution_mode: playbook_only
+  #   benchmark_tags: [internal_replica, deterministic]
   #   playbook_params:
   #     order_id: "12345"
   #   expect:
   #     must_succeed: true
+  #     handoff: forbid

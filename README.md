@@ -100,6 +100,7 @@ cua/
 ├── blinders/        Cognitive Blinders (scope, DOM filters, verifier)
 ├── bridge/          Browser lifecycle, DOM execution, CAPTCHA handling, router
 ├── api/             FastAPI server, API models, SSE streaming, run registry
+├── evaluation/      Local evaluation suites, scoring, and benchmark runner
 ├── guardrails/      Domain/action/SSRF safety engine
 ├── recording/       Session recording (Playwright tracing + screenshots)
 ├── profiles/        Agent profile configuration
@@ -120,6 +121,7 @@ cua/
 | [Authentication](docs/authentication.md) | Session persistence, credential security, `SecretValue` |
 | [Guardrails](docs/guardrails.md) | Cognitive Blinders, runtime safety, domain/action controls |
 | [Recording](docs/recording.md) | Playwright tracing, screenshots, session replay |
+| [Evaluation](docs/evaluation.md) | Benchmark suites, trial scoring, pass/fail expectations |
 | [Observability](docs/observability.md) | OpenTelemetry traces, metrics, Jaeger setup |
 | [Configuration](docs/configuration.md) | CLI parameters, model selection, provider setup |
 
