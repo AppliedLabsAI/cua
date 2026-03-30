@@ -131,19 +131,15 @@ modal setup
 **2. Create a secret with your API keys:**
 
 ```bash
-# Generate encryption key (one-time)
-openssl genrsa -out private.pem 4096
-
 modal secret create llm-secret \
   ANTHROPIC_API_KEY=sk-ant-... \
   OPENAI_API_KEY=sk-... \
   GOOGLE_API_KEY=... \
   CUA_API_KEY=your-secret-api-key \
-  CUA_PRIVATE_KEY_PEM="$(cat private.pem)" \
   ENVIRONMENT=production
 ```
 
-Set at least one LLM provider key. `CUA_API_KEY` is the Bearer token clients use to authenticate — pick any strong secret. `CUA_PRIVATE_KEY_PEM` enables credential encryption (see [Credential Security](#credential-security)). `ENVIRONMENT=production` enables auth enforcement.
+Set at least one LLM provider key. `CUA_API_KEY` is the Bearer token clients use to authenticate — pick any strong secret. `ENVIRONMENT=production` enables auth enforcement.
 
 **3. Deploy:**
 
@@ -331,74 +327,30 @@ Sessions are stored at `~/.cua/sessions/` and reused across runs.
 
 ## Credential Security
 
-CUA uses hybrid RSA + AES-256-GCM encryption to protect credentials in transit. Clients encrypt credentials with the server's public key before sending; the server decrypts with its private key. Credentials are wrapped in `SecretValue` in memory, which masks them in logs, `repr()`, and prevents accidental JSON serialization.
+Credentials are passed as a flat JSON dict (`{"username": "...", "password": "..."}`) over HTTPS. On the server, values are immediately wrapped in `SecretValue` to prevent accidental exposure.
 
-### Setup (Modal deployment)
+**Protection at each layer:**
 
-**1. Generate an RSA key pair:**
+| Layer | Protection |
+|---|---|
+| Client to API | HTTPS (Modal enforces TLS) |
+| API to sandbox | Modal encrypts sandbox env vars |
+| In server memory | `SecretValue` — `str()` / `repr()` return `******`, `json.dumps()` raises `TypeError` |
+| In logs | `SecretValue` blocks accidental logging of raw values |
+| At rest | Credentials are never persisted to disk |
 
-```bash
-openssl genrsa -out private.pem 4096
-```
-
-**2. Add the private key to your Modal secret:**
-
-```bash
-modal secret create llm-secret \
-  ANTHROPIC_API_KEY=sk-ant-... \
-  OPENAI_API_KEY=sk-... \
-  GOOGLE_API_KEY=... \
-  CUA_API_KEY=your-secret-api-key \
-  CUA_PRIVATE_KEY_PEM="$(cat private.pem)" \
-  ENVIRONMENT=production
-```
-
-**3. Deploy as usual:**
+**Via the API:**
 
 ```bash
-modal deploy api/server.py::modal_app
-```
-
-### Client usage
-
-**Step 1 — Fetch the server's public key:**
-
-```bash
-curl https://<workspace>--cua-serve.modal.run/public-key \
+curl -X POST https://<workspace>--cua-serve.modal.run/runs \
   -H "Authorization: Bearer your-secret-api-key" \
-  -o public_key.pem
+  -d '{
+    "directive": "Log into GitHub and check notifications",
+    "credentials": {"username": "bot", "password": "ghp_abc123"}
+  }'
 ```
 
-Cache this key — it only changes if you rotate the private key.
-
-**Step 2 — Encrypt credentials and send:**
-
-```python
-from credentials import encrypt_credentials
-
-# Load the server's public key
-with open("public_key.pem", "rb") as f:
-    public_key = f.read()
-
-# Encrypt credentials
-token = encrypt_credentials(
-    {"username": "bot", "password": "ghp_abc123"},
-    public_key,
-)
-
-# Send the encrypted token (not the raw credentials)
-import httpx
-resp = httpx.post(
-    "https://<workspace>--cua-serve.modal.run/runs",
-    headers={"Authorization": "Bearer your-secret-api-key"},
-    json={
-        "directive": "Log into GitHub and check notifications",
-        "encrypted_credentials": token,
-    },
-)
-```
-
-For local development (without the API), you can pass credentials directly via the CLI — these are not encrypted but never leave your machine:
+**Via the CLI (local development):**
 
 ```bash
 python scripts/run_local.py \
@@ -406,43 +358,18 @@ python scripts/run_local.py \
   --credentials '{"username": "admin", "password": "secret"}'
 ```
 
-### How it works
-
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant A as Modal API
     participant S as Modal Sandbox
 
-    C->>A: GET /public-key
-    A-->>C: RSA public key (PEM)
-
-    Note over C: encrypt(creds, public_key)
-
-    C->>A: POST /runs<br/>{encrypted_credentials: token}
-    Note over A: decrypt(token, private_key)
+    C->>A: POST /runs (HTTPS)<br/>{credentials: {username, password}}
+    Note over A: Wrap in SecretValue
 
     A->>S: CREDENTIALS_JSON env var<br/>(Modal encrypts in transit)
     Note over S: SecretValue wrapping<br/>Agent uses creds to log in
 ```
-
-**Security properties:**
-- Raw credentials never appear in API request bodies (only the encrypted token)
-- `SecretValue` wrapper masks credentials in logs, `str()`, `repr()`, and blocks `json.dumps()`
-- Private key stays in Modal's encrypted secret store, never leaves the server
-- AES-256-GCM provides authenticated encryption (tampered tokens are rejected)
-- Public key can be freely distributed — it can only encrypt, not decrypt
-
-### Key rotation
-
-To rotate the encryption key:
-
-1. Generate a new key pair: `openssl genrsa -out private_new.pem 4096`
-2. Update the Modal secret: `modal secret create llm-secret ... CUA_PRIVATE_KEY_PEM="$(cat private_new.pem)"`
-3. Redeploy: `modal deploy api/server.py::modal_app`
-4. Clients fetch the new public key from `GET /public-key`
-
-Tokens encrypted with the old key will fail to decrypt — clients must re-encrypt with the new public key.
 
 ## Guardrails
 
