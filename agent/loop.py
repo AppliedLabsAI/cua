@@ -21,7 +21,7 @@ from agent.output import (
     extract_structured_output,
 )
 from agent.result import AgentResult
-from bridge.execution import _attach_page_context
+from bridge.execution import attach_page_context
 from bridge.router import ActionRouter
 from settings import PRIMARY_MODEL
 
@@ -57,7 +57,7 @@ async def run_agent(
     # Build initial user message with DOM context if available
     page_url = bridge.browser.page.url
     if page_url and page_url != "about:blank":
-        page_ctx = await _attach_page_context(
+        page_ctx = await attach_page_context(
             bridge.browser, filter_config=bridge._filter_config
         )
         if page_ctx:

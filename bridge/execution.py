@@ -96,7 +96,7 @@ async def quick_page_map(
         return ""
 
 
-async def _attach_page_context(
+async def attach_page_context(
     browser: BrowserManager,
     filter_config: dict | None = None,
 ) -> str:
@@ -203,7 +203,7 @@ async def execute_dom_action(
             nav_text = f"Navigated to {url} (status {status})"
             if _skip_screenshot:
                 return ActionResult(text=nav_text)
-            nav_text += await _attach_page_context(browser, filter_config)
+            nav_text += await attach_page_context(browser, filter_config)
             return ActionResult(text=nav_text)
 
         if action == "click":
@@ -224,7 +224,7 @@ async def execute_dom_action(
             click_text = f"Clicked {delta}" if delta else "Clicked"
             if _skip_screenshot:
                 return ActionResult(text=click_text)
-            click_text += await _attach_page_context(browser, filter_config)
+            click_text += await attach_page_context(browser, filter_config)
             return ActionResult(text=click_text)
 
         if action in {
@@ -246,7 +246,7 @@ async def execute_dom_action(
                 extract_text = outcome.text or ""
                 if not _skip_screenshot:
                     # Include page map so the agent can act immediately
-                    extract_text += await _attach_page_context(browser, filter_config)
+                    extract_text += await attach_page_context(browser, filter_config)
                 return ActionResult(text=extract_text)
 
             if action in {"wait_for", "key_press"}:
@@ -269,7 +269,7 @@ async def execute_dom_action(
                 return ActionResult(text=scroll_text)
             # Return DOM context instead of screenshot by default;
             # agent can explicitly call screenshot if visual is needed
-            scroll_text += await _attach_page_context(browser, filter_config)
+            scroll_text += await attach_page_context(browser, filter_config)
             return ActionResult(text=scroll_text)
 
         if action == "get_dom":
@@ -412,7 +412,7 @@ async def _execute_sequence(
 
     combined_text = "\n".join(results)
     if DOM_MARKER not in (final_result.text or ""):
-        combined_text += await _attach_page_context(browser, filter_config)
+        combined_text += await attach_page_context(browser, filter_config)
     return ActionResult(
         screenshot_b64=final_result.screenshot_b64,
         text=combined_text,

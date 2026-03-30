@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Coroutine
+from typing import Any
 
 from patchright.async_api import (
     Browser,
@@ -115,7 +117,7 @@ class BrowserManager:
     # Speculative prefetch
     # ------------------------------------------------------------------
 
-    def start_prefetch(self, coro: asyncio.coroutines) -> None:  # type: ignore[type-arg]
+    def start_prefetch(self, coro: Coroutine[Any, Any, str]) -> None:
         """Start a speculative page map fetch in the background.
 
         The task is consumed by consume_prefetch() if the URL still matches.
