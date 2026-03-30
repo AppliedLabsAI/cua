@@ -62,7 +62,7 @@ async def browser_dom(
     direction: Literal["up", "down", "left", "right"] | None = None,
     amount: int | None = None,
     steps: list[dict[str, Any]] | None = None,
-    mode: Literal["text", "html", "value"] | None = None,
+    mode: Literal["text", "html", "value", "markdown"] | None = None,
     state: Literal["visible", "hidden", "attached", "detached"] | None = None,
     dom_only: bool | None = None,
 ) -> ToolReturn:
@@ -80,7 +80,7 @@ async def browser_dom(
         direction: Scroll direction (scroll action).
         amount: Scroll amount in units (scroll action).
         steps: Array of batched actions (execute_sequence action).
-        mode: Content extraction mode (extract action).
+        mode: Content extraction mode (extract action). One of "text", "html", "value", or "markdown" (Readability + markdown conversion).
         state: Element state to wait for (wait_for action).
         dom_only: Skip screenshot, return DOM only. Saves tokens.
     """

@@ -22,13 +22,14 @@ from bridge.js_helpers import (
     CAPTCHA_DETECT_INIT_JS,
     DOM_SNAPSHOT_INIT_JS,
     EXTRACT_VALUE_INIT_JS,
-    SMART_EXTRACT_INIT_JS,
+    PAGE_MAP_INIT_JS,
+    READABILITY_EXTRACT_INIT_JS,
 )
 from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS
 
-_DOM_MAX_CHARS = 3500
+_DOM_MAX_CHARS = 4000
 # Compact DOM auto-attached to goto/click responses
-_AUTO_DOM_MAX_CHARS = 2500  # Leave room for nav text + content summary
+_AUTO_DOM_MAX_CHARS = 3000  # Leave room for nav text + content summary
 
 
 class BrowserManager:
@@ -77,9 +78,10 @@ class BrowserManager:
 
         # Pre-load JS helpers on every page (survives navigations)
         await self._context.add_init_script(script=DOM_SNAPSHOT_INIT_JS)
-        await self._context.add_init_script(script=SMART_EXTRACT_INIT_JS)
         await self._context.add_init_script(script=CAPTCHA_DETECT_INIT_JS)
         await self._context.add_init_script(script=EXTRACT_VALUE_INIT_JS)
+        await self._context.add_init_script(script=PAGE_MAP_INIT_JS)
+        await self._context.add_init_script(script=READABILITY_EXTRACT_INIT_JS)
 
         self._page = await self._context.new_page()
 

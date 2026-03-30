@@ -23,7 +23,7 @@ from agent.output import (
 )
 from agent.result import AgentResult
 from bridge import DOM_MARKER
-from bridge.execution import quick_dom_snapshot
+from bridge.execution import quick_dom_snapshot, quick_page_map
 from bridge.router import ActionRouter
 from settings import PRIMARY_MODEL
 
@@ -59,11 +59,16 @@ async def run_agent(
     # Build initial user message with DOM context if available
     page_url = bridge.browser.page.url
     if page_url and page_url != "about:blank":
-        dom = await quick_dom_snapshot(
+        page_map = await quick_page_map(
             bridge.browser.page,
-            filter_config=getattr(bridge, "_filter_config", None),
+            filter_config=bridge._filter_config,
         )
-        if dom:
+        if page_map:
+            initial_msg = f"Current page:\n{DOM_MARKER}\n{page_map}\n\n{directive}"
+        elif dom := await quick_dom_snapshot(
+            bridge.browser.page,
+            filter_config=bridge._filter_config,
+        ):
             initial_msg = f"Current page:\n{DOM_MARKER}\n{dom}\n\n{directive}"
         else:
             initial_msg = directive
