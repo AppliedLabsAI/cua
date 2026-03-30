@@ -72,6 +72,16 @@ def errors_total():
 
 
 @lru_cache(maxsize=1)
+def stuck_detections_total():
+    """Total stuck pattern detections."""
+    return _meter().create_counter(
+        "cua.stuck.detections.total",
+        unit="1",
+        description="Total stuck pattern detections",
+    )
+
+
+@lru_cache(maxsize=1)
 def safety_degraded_total():
     """Total times safety fell back to deterministic degraded mode."""
     return _meter().create_counter(

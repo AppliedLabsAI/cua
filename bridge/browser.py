@@ -20,9 +20,8 @@ from patchright.async_api import (
 
 from bridge.js_helpers import (
     CAPTCHA_DETECT_INIT_JS,
-    DOM_SNAPSHOT_INIT_JS,
     EXTRACT_VALUE_INIT_JS,
-    PAGE_MAP_INIT_JS,
+    PAGE_CONTEXT_INIT_JS,
     READABILITY_EXTRACT_INIT_JS,
 )
 from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS
@@ -77,10 +76,9 @@ class BrowserManager:
         self._context.set_default_timeout(ACTION_TIMEOUT_MS)
 
         # Pre-load JS helpers on every page (survives navigations)
-        await self._context.add_init_script(script=DOM_SNAPSHOT_INIT_JS)
+        await self._context.add_init_script(script=PAGE_CONTEXT_INIT_JS)
         await self._context.add_init_script(script=CAPTCHA_DETECT_INIT_JS)
         await self._context.add_init_script(script=EXTRACT_VALUE_INIT_JS)
-        await self._context.add_init_script(script=PAGE_MAP_INIT_JS)
         await self._context.add_init_script(script=READABILITY_EXTRACT_INIT_JS)
 
         self._page = await self._context.new_page()

@@ -12,7 +12,11 @@ import ipaddress
 import logging
 import re
 import socket
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from guardrails.stuck import StuckVerdict
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent
@@ -156,6 +160,14 @@ class GuardrailConfig(BaseModel):
     allow_private_networks: bool = False
     enable_llm_action_check: bool = True
 
+    # Stuck detection thresholds
+    stuck_window_size: int = 8
+    stuck_repeat_hint: int = 3
+    stuck_repeat_warn: int = 5
+    stuck_repeat_stop: int = 7
+    stuck_cycle_max_length: int = 3
+    stuck_cycle_repeats: int = 3
+
 
 # Private IP ranges blocked by SSRF protection
 _PRIVATE_NETWORKS = [
@@ -295,12 +307,22 @@ class GuardrailEngine:
     """Enforces safety boundaries on CUA actions."""
 
     def __init__(self, config: GuardrailConfig | None = None) -> None:
+        from guardrails.stuck import StuckDetector
+
         self.config = config or GuardrailConfig()
         self.urls_visited: set[str] = set()
         self.consecutive_errors: int = 0
         self._llm_enabled = self.config.enable_llm_action_check
         self._approved_selectors: set[str] = set()
         self._tracer = get_tracer()
+        self._stuck = StuckDetector(
+            window_size=self.config.stuck_window_size,
+            repeat_hint=self.config.stuck_repeat_hint,
+            repeat_warn=self.config.stuck_repeat_warn,
+            repeat_stop=self.config.stuck_repeat_stop,
+            cycle_max_length=self.config.stuck_cycle_max_length,
+            cycle_repeats=self.config.stuck_cycle_repeats,
+        )
 
     def check_url(self, url: str) -> GuardrailResult:
         """Check if a URL is allowed to be visited."""
@@ -489,3 +511,11 @@ class GuardrailEngine:
     def record_success(self) -> None:
         """Reset error counter on success."""
         self.consecutive_errors = 0
+
+    def record_action(self, input_summary: str, *, success: bool) -> StuckVerdict:
+        """Track action for stuck pattern detection.
+
+        Called after every action execution (both success and failure).
+        Returns a verdict indicating whether the agent appears stuck.
+        """
+        return self._stuck.record(input_summary, success=success)

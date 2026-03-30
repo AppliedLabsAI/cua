@@ -1,125 +1,120 @@
-"""Conversation context management for the agent loop.
+"""Conversation context pruning for the CUA agent loop.
 
-Pure functions that prune old messages to keep input tokens flat regardless
-of run length. No side effects — safe to unit test.
+Registered as a Pydantic AI HistoryProcessor on the agent. Runs
+automatically before each model request to keep input tokens flat
+regardless of run length.
+
+Strategies:
+  - Remove old screenshots (keep last MAX_SCREENSHOTS)
+  - Truncate DOM snapshots in old tool results
+  - Strip thinking blocks from old assistant responses
+  - Cap long text in old tool results
 """
 
 from __future__ import annotations
 
-from typing import Any, cast
+from pydantic_ai import BinaryContent
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ThinkingPart,
+    ToolReturnPart,
+)
 
 from bridge import DOM_MARKER
 
-# Tool result text longer than this is truncated before sending back to Claude.
-MAX_RESULT_CHARS = 2000
+# How many recent messages (request+response pairs) to leave untouched
+KEEP_LAST = 4
+# Total screenshots to retain across the full history
+MAX_SCREENSHOTS = 2
+# Max chars for text content in old tool results (after DOM removal)
+MAX_OLD_TEXT = 1000
 
 
-def prune_old_context(messages: list[dict[str, Any]], keep_last: int = 2) -> None:
-    """Aggressively prune old messages to reduce input tokens.
+def prune_context(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """HistoryProcessor: trim old messages to control token growth.
 
-    - Removes all but the last `keep_last` screenshots.
-    - Truncates DOM snapshots in old tool results.
-    - Removes thinking blocks from old assistant messages.
+    Mutates message parts in place for efficiency (Pydantic AI passes
+    ownership of the list to the processor).
     """
-    # Find all message indices that contain screenshots
-    screenshot_indices: list[tuple[int, int]] = []  # (msg_idx, content_idx)
-    for msg_idx, msg in enumerate(messages):
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        for item_idx, item in enumerate(content):
-            d = cast(dict[str, Any], item) if isinstance(item, dict) else None
-            if d is not None and d.get("type") == "image":
-                screenshot_indices.append((msg_idx, item_idx))
+    if len(messages) <= KEEP_LAST:
+        return messages
 
-    # Remove all but the last `keep_last` screenshots
+    old = messages[:-KEEP_LAST]
+    # Recent messages are never touched
+    recent = messages[-KEEP_LAST:]
+
+    _remove_old_screenshots(old, recent)
+    _truncate_old_dom(old)
+    _strip_old_thinking(old)
+
+    return old + recent
+
+
+def _remove_old_screenshots(
+    old: list[ModelMessage], recent: list[ModelMessage]
+) -> None:
+    """Keep only the last MAX_SCREENSHOTS screenshots across all messages."""
+    # Collect all (message, index-in-content-list) locations of screenshots
+    screenshot_locs: list[tuple[ToolReturnPart, int]] = []
+
+    for msg in old + recent:
+        if not isinstance(msg, ModelRequest):
+            continue
+        for part in msg.parts:
+            if isinstance(part, ToolReturnPart) and isinstance(part.content, list):
+                for i, item in enumerate(part.content):
+                    if isinstance(item, BinaryContent):
+                        screenshot_locs.append((part, i))
+
+    # Remove all but the last MAX_SCREENSHOTS
     to_remove = (
-        screenshot_indices[:-keep_last] if len(screenshot_indices) > keep_last else []
+        screenshot_locs[:-MAX_SCREENSHOTS]
+        if len(screenshot_locs) > MAX_SCREENSHOTS
+        else []
     )
-    for msg_idx, item_idx in to_remove:
-        messages[msg_idx]["content"][item_idx] = {
-            "type": "text",
-            "text": "[old screenshot removed]",
-        }
+    for part, idx in to_remove:
+        content = list(part.content)  # type: ignore[arg-type]
+        content[idx] = "[screenshot removed]"
+        part.content = content
 
-    # Truncate DOM snapshots in old tool results (keep only last 2 messages with DOM)
-    dom_msg_indices: list[tuple[int, int]] = []
-    for msg_idx, msg in enumerate(messages):
-        content = msg.get("content")
-        if not isinstance(content, list):
+
+def _truncate_old_dom(old: list[ModelMessage]) -> None:
+    """Truncate DOM snapshots in old tool results, keeping action summaries."""
+    for msg in old:
+        if not isinstance(msg, ModelRequest):
             continue
-        for item_idx, item in enumerate(content):
-            d = cast(dict[str, Any], item) if isinstance(item, dict) else None
-            if (
-                d is not None
-                and d.get("type") == "text"
-                and DOM_MARKER in (d.get("text") or "")
-            ):
-                dom_msg_indices.append((msg_idx, item_idx))
+        for part in msg.parts:
+            if not isinstance(part, ToolReturnPart):
+                continue
 
-    to_trim = dom_msg_indices[:-keep_last] if len(dom_msg_indices) > keep_last else []
-    for msg_idx, item_idx in to_trim:
-        text = messages[msg_idx]["content"][item_idx]["text"]
-        # Keep text before the DOM marker, drop the DOM itself
-        cut_idx = text.index(DOM_MARKER)
-        messages[msg_idx]["content"][item_idx]["text"] = (
-            text[:cut_idx].rstrip() + "\n[DOM removed]"
-        )
+            if isinstance(part.content, str) and DOM_MARKER in part.content:
+                cut = part.content.index(DOM_MARKER)
+                summary = part.content[:cut].rstrip()
+                if len(summary) > MAX_OLD_TEXT:
+                    summary = summary[:MAX_OLD_TEXT] + "..."
+                part.content = summary + "\n[DOM removed]"
 
-    # Truncate text in old user messages (tool results) to save tokens
-    # Keep only the first line (action summary) from old tool results
-    user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
-    old_users = user_indices[:-keep_last] if len(user_indices) > keep_last else []
-    for msg_idx in old_users:
-        content = messages[msg_idx].get("content")
-        if not isinstance(content, list):
+            elif isinstance(part.content, list):
+                new_content = []
+                for item in part.content:
+                    if isinstance(item, str) and DOM_MARKER in item:
+                        cut = item.index(DOM_MARKER)
+                        summary = item[:cut].rstrip()
+                        if len(summary) > MAX_OLD_TEXT:
+                            summary = summary[:MAX_OLD_TEXT] + "..."
+                        new_content.append(summary + "\n[DOM removed]")
+                    elif isinstance(item, str) and len(item) > MAX_OLD_TEXT:
+                        new_content.append(item[:MAX_OLD_TEXT] + "...")
+                    else:
+                        new_content.append(item)
+                part.content = new_content
+
+
+def _strip_old_thinking(old: list[ModelMessage]) -> None:
+    """Remove thinking blocks from old assistant responses."""
+    for msg in old:
+        if not isinstance(msg, ModelResponse):
             continue
-        for item_idx, item in enumerate(content):
-            d = cast(dict[str, Any], item) if isinstance(item, dict) else None
-            if d is not None and d.get("type") == "text":
-                text = str(d.get("text", ""))
-                if len(text) > 80:
-                    # Keep only the first line (e.g. "Navigated to ..." or "Clicked")
-                    first_line = text.split("\n", 1)[0][:80]
-                    messages[msg_idx]["content"][item_idx] = {
-                        "type": "text",
-                        "text": first_line,
-                    }
-
-    # Strip thinking + text from older assistant messages (keep tool_use blocks only)
-    assistant_indices = [
-        i for i, m in enumerate(messages) if m.get("role") == "assistant"
-    ]
-    old_assistants = (
-        assistant_indices[:-keep_last] if len(assistant_indices) > keep_last else []
-    )
-    for msg_idx in old_assistants:
-        content = messages[msg_idx].get("content")
-        if not isinstance(content, list):
-            continue
-        messages[msg_idx]["content"] = [
-            block
-            for block in content
-            if not (hasattr(block, "type") and block.type in ("thinking", "text"))
-        ]
-
-
-def truncate_tool_result(tool_result: dict[str, Any], action: str) -> dict[str, Any]:
-    """Truncate text content in tool results to prevent context bloat."""
-    content = tool_result.get("content")
-    if not content or not isinstance(content, list):
-        return tool_result
-    mutated = False
-    truncated = []
-    for item in content:
-        if item.get("type") == "text":
-            text = item.get("text", "")
-            if len(text) > MAX_RESULT_CHARS:
-                item = {
-                    "type": "text",
-                    "text": text[:MAX_RESULT_CHARS]
-                    + f"\n... [truncated, {len(text)} chars total]",
-                }
-                mutated = True
-        truncated.append(item)
-    return {**tool_result, "content": truncated} if mutated else tool_result
+        msg.parts = [p for p in msg.parts if not isinstance(p, ThinkingPart)]

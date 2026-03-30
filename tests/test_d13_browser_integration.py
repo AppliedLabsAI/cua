@@ -68,10 +68,10 @@ def event_loop():
 
 
 def _load_dom_js() -> str:
-    """Load the dom_snapshot.js script from disk."""
+    """Load the page_context.js script from disk."""
     from pathlib import Path
 
-    js_path = Path(__file__).parent.parent / "bridge" / "scripts" / "dom_snapshot.js"
+    js_path = Path(__file__).parent.parent / "bridge" / "scripts" / "page_context.js"
     return js_path.read_text()
 
 

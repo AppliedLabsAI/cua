@@ -16,7 +16,7 @@ from bridge.browser import (
     _AUTO_DOM_MAX_CHARS,
     _DOM_MAX_CHARS,
 )
-from bridge.js_helpers import DOM_SNAPSHOT_INIT_JS, PAGE_MAP_INIT_JS
+from bridge.js_helpers import PAGE_CONTEXT_INIT_JS
 from bridge.page_actions import PageActionConfig, execute_page_action
 from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS, SETTLE_TIMEOUT_MS
 
@@ -26,18 +26,14 @@ if TYPE_CHECKING:
 
 # ---------------------------------------------------------------------------
 # Self-healing JS calls — each checks for its helper, re-injects if missing,
-# and executes in a single evaluate round-trip. This avoids separate
-# "check + re-inject + call" evaluate chains that clutter Playwright traces.
+# and executes in a single evaluate round-trip.  The helpers are pre-loaded
+# via add_init_script, but re-injection guards against edge cases where
+# globals are cleared (e.g. certain navigations or page errors).
 # ---------------------------------------------------------------------------
 
 _DOM_SNAPSHOT_CALL_JS = """([s, m, f, initJS]) => {
     if (!window.__domSnapshot) new Function(initJS)();
     return window.__domSnapshot ? window.__domSnapshot(s, m, f) : null;
-}"""
-
-_CAPTCHA_DETECT_CALL_JS = """(initJS) => {
-    if (!window.__detectCaptcha) new Function(initJS)();
-    return window.__detectCaptcha ? window.__detectCaptcha() : null;
 }"""
 
 _PAGE_MAP_CALL_JS = """([m, f, initJS]) => {
@@ -58,7 +54,7 @@ _TOOL_ACTION_CONFIG = PageActionConfig(
 
 
 # ---------------------------------------------------------------------------
-# DOM snapshot — single evaluate call
+# Page observation helpers
 # ---------------------------------------------------------------------------
 
 
@@ -67,11 +63,11 @@ async def quick_dom_snapshot(
     max_chars: int = _AUTO_DOM_MAX_CHARS,
     filter_config: dict | None = None,
 ) -> str:
-    """Fast DOM snapshot — single evaluate in all cases."""
+    """Fast DOM snapshot — single evaluate with self-healing fallback."""
     try:
         raw = await page.evaluate(
             _DOM_SNAPSHOT_CALL_JS,
-            [None, max_chars, filter_config, DOM_SNAPSHOT_INIT_JS],
+            [None, max_chars, filter_config, PAGE_CONTEXT_INIT_JS],
         )
         if raw is None:
             return ""
@@ -90,7 +86,7 @@ async def quick_page_map(
     try:
         raw = await page.evaluate(
             _PAGE_MAP_CALL_JS,
-            [max_chars, filter_config, PAGE_MAP_INIT_JS],
+            [max_chars, filter_config, PAGE_CONTEXT_INIT_JS],
         )
         if raw is None:
             return ""
@@ -98,6 +94,19 @@ async def quick_page_map(
         return data["map"]
     except Exception:
         return ""
+
+
+async def _attach_page_context(
+    page: Page,
+    filter_config: dict | None = None,
+) -> str:
+    """Get page map (preferred) or DOM snapshot fallback, with DOM_MARKER prefix."""
+    ctx = await quick_page_map(page, filter_config=filter_config)
+    if not ctx:
+        ctx = await quick_dom_snapshot(page, filter_config=filter_config)
+    if ctx:
+        return f"\n\n{DOM_MARKER}\n{ctx}"
+    return ""
 
 
 async def page_screenshot(page: Page) -> str:
@@ -145,16 +154,10 @@ async def execute_dom_action(
                 config=_TOOL_ACTION_CONFIG,
             )
             status = outcome.navigation_status or "unknown"
-            if _skip_screenshot:
-                return ActionResult(text=f"Navigated to {url} (status {status})")
             nav_text = f"Navigated to {url} (status {status})"
-            page_map = await quick_page_map(page, filter_config=filter_config)
-            if page_map:
-                nav_text += f"\n\n{DOM_MARKER}\n{page_map}"
-            else:
-                dom = await quick_dom_snapshot(page, filter_config=filter_config)
-                if dom:
-                    nav_text += f"\n\n{DOM_MARKER}\n{dom}"
+            if _skip_screenshot:
+                return ActionResult(text=nav_text)
+            nav_text += await _attach_page_context(page, filter_config)
             return ActionResult(text=nav_text)
 
         if action == "click":
@@ -164,16 +167,10 @@ async def execute_dom_action(
                 params,
                 config=_TOOL_ACTION_CONFIG,
             )
-            if _skip_screenshot:
-                return ActionResult(text="Clicked")
             click_text = "Clicked"
-            page_map = await quick_page_map(page, filter_config=filter_config)
-            if page_map:
-                click_text += f"\n\n{DOM_MARKER}\n{page_map}"
-            else:
-                dom = await quick_dom_snapshot(page, filter_config=filter_config)
-                if dom:
-                    click_text += f"\n\n{DOM_MARKER}\n{dom}"
+            if _skip_screenshot:
+                return ActionResult(text=click_text)
+            click_text += await _attach_page_context(page, filter_config)
             return ActionResult(text=click_text)
 
         if action in {
@@ -194,9 +191,7 @@ async def execute_dom_action(
             if action == "extract":
                 # Include page map so the agent can act immediately after extracting
                 extract_text = outcome.text or ""
-                page_map = await quick_page_map(page, filter_config=filter_config)
-                if page_map:
-                    extract_text += f"\n\n{DOM_MARKER}\n{page_map}"
+                extract_text += await _attach_page_context(page, filter_config)
                 return ActionResult(text=extract_text)
 
             if action in {"wait_for", "key_press"}:
@@ -226,7 +221,7 @@ async def execute_dom_action(
             selector = params.get("selector")
             raw = await page.evaluate(
                 _DOM_SNAPSHOT_CALL_JS,
-                [selector, _DOM_MAX_CHARS, filter_config, DOM_SNAPSHOT_INIT_JS],
+                [selector, _DOM_MAX_CHARS, filter_config, PAGE_CONTEXT_INIT_JS],
             )
             if raw is None:
                 return ActionResult(error="DOM snapshot unavailable")
@@ -362,13 +357,7 @@ async def _execute_sequence(
 
     combined_text = "\n".join(results)
     if DOM_MARKER not in (final_result.text or ""):
-        page_map = await quick_page_map(browser.page, filter_config=filter_config)
-        if page_map:
-            combined_text += f"\n\n{DOM_MARKER}\n{page_map}"
-        else:
-            dom = await quick_dom_snapshot(browser.page, filter_config=filter_config)
-            if dom:
-                combined_text += f"\n\n{DOM_MARKER}\n{dom}"
+        combined_text += await _attach_page_context(browser.page, filter_config)
     return ActionResult(
         screenshot_b64=final_result.screenshot_b64,
         text=combined_text,
