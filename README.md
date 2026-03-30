@@ -18,7 +18,7 @@ flowchart LR
 ## Why CUA
 
 - **Playbook + LLM hybrid** — deterministic YAML playbooks for known flows (0 LLM calls, 1-5s), automatic LLM fallback for unknown flows or broken selectors
-- **DOM-first agent** — full page map of every link, button, field, and table regardless of viewport visibility, plus Readability-based markdown extraction — no scrolling needed, token usage stays flat
+- **Semantic page understanding** — unlike screenshot-based agents that "look" at pixels or raw DOM dumpers that flood the context window, CUA builds a structured page map with semantic landmarks (region summaries like `form#login: 3 inputs, 1 button` and `table#results: 5 cols, 47 rows`), parent-context disambiguation (`Edit [row: "john@example.com"]`), and action-outcome verification (`[URL changed → /dashboard]`). The agent understands page structure, not just elements — and every action confirms whether it worked
 - **Multi-provider** — works with Anthropic, OpenAI, Google Gemini, and any [PydanticAI-supported model](https://ai.pydantic.dev/models/)
 - **Safety by default** — Cognitive Blinders filter what the agent can see based on task type, preventing prompt injection and accidental destructive actions
 - **Real-time streaming** — SSE event stream with full replay, `Last-Event-ID` reconnection, and post-completion persistence

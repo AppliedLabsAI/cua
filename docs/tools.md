@@ -37,7 +37,8 @@ Intermediate steps skip screenshots for speed. Only the final step captures the 
 
 ## Design Choices
 
-- **Full page map, not screenshot-first.** `goto` and `click` return a full page map of every link, button, field, and table regardless of viewport visibility. The agent never needs to scroll to discover elements — it acts directly from the DOM.
+- **Semantic page understanding.** `goto` and `click` return a structured page map with three layers: (1) page metadata from Schema.org JSON-LD and Open Graph tags for instant page type classification, (2) semantic landmarks summarizing regions (`form#login: 3 inputs, 1 button`, `table#results: 5 cols, 47 rows`), and (3) all interactive elements with parent-context disambiguation (`Edit [row: "john@example.com"]`). Fallback to Playwright's accessibility tree (ARIA roles/states) when JS-based extraction fails.
+- **Action-outcome verification.** Click actions use a DOM Mutation Observer to report exactly what changed: `[URL → /dashboard; +modal.dialog; 3 attr changes]`. The agent knows immediately whether its action worked without needing a screenshot.
 - **Readability-based extraction.** `extract` defaults to `markdown` mode, using a Readability-style content extractor + markdown conversion to produce clean, structured output with headings, links, and tables preserved.
 - **Streaming execution.** Tool calls execute as they arrive from the Claude API stream, not after the full response.
 - **Adaptive thinking budget.** Full budget for planning (first 2 steps), reduced after 3+ consecutive successes, reset on errors.
