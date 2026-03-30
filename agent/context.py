@@ -68,15 +68,24 @@ def _remove_old_screenshots(
                     if isinstance(item, BinaryContent):
                         screenshot_locs.append((part, i))
 
-    # Remove all but the last MAX_SCREENSHOTS
+    # Remove all but the last MAX_SCREENSHOTS, batched per part
     to_remove = (
         screenshot_locs[:-MAX_SCREENSHOTS]
         if len(screenshot_locs) > MAX_SCREENSHOTS
         else []
     )
+    # Group indices by part to avoid repeated list conversions
+    parts_to_update: dict[int, list[int]] = {}
     for part, idx in to_remove:
+        pid = id(part)
+        parts_to_update.setdefault(pid, []).append(idx)
+
+    seen_parts: dict[int, ToolReturnPart] = {id(p): p for p, _ in to_remove}
+    for pid, indices in parts_to_update.items():
+        part = seen_parts[pid]
         content = list(part.content)  # type: ignore[arg-type]
-        content[idx] = "[screenshot removed]"
+        for idx in indices:
+            content[idx] = "[screenshot removed]"
         part.content = content
 
 

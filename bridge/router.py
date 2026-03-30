@@ -189,8 +189,11 @@ class ActionRouter:
                 "Stuck detected (%s): %s", verdict.severity.value, input_summary
             )
             stuck_detections_total().add(1, {"severity": verdict.severity.value})
-            with self._tracer.start_as_current_span("cua.stuck") as stuck_span:
-                stuck_span.add_event(
+            from opentelemetry import trace as otel_trace
+
+            span = otel_trace.get_current_span()
+            if span.is_recording():
+                span.add_event(
                     EVENT_STUCK,
                     attributes={
                         ATTR_STUCK_SEVERITY: verdict.severity.value,
@@ -200,14 +203,13 @@ class ActionRouter:
             if verdict.severity is StuckSeverity.STOP:
                 self._stopped = True
                 result = ActionResult(error=verdict.message)
-            else:
-                # Prepend hint/warning to result text
+            elif not result.error:
+                # Prepend hint/warning only when the action itself succeeded
                 prefix = verdict.message
                 text = f"{prefix}\n{result.text}" if result.text else prefix
                 result = ActionResult(
                     screenshot_b64=result.screenshot_b64,
                     text=text,
-                    error=result.error,
                 )
 
         duration_ms = int((time.monotonic() - start) * 1000)

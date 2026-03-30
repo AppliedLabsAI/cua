@@ -78,7 +78,7 @@ class TestCycleDetection:
         for _ in range(3):
             det.record("click '#next'", success=True)
             det.record("click '#prev'", success=True)
-        assert det._stuck_count >= 1
+        assert det.stuck_count >= 1
 
     def test_cycle_length_3(self):
         det = _detector(
@@ -88,7 +88,7 @@ class TestCycleDetection:
             det.record("click '#a'", success=True)
             det.record("click '#b'", success=True)
             det.record("click '#c'", success=True)
-        assert det._stuck_count >= 1
+        assert det.stuck_count >= 1
 
     def test_no_cycle_with_varied_pattern(self):
         det = _detector(cycle_max_length=3, cycle_repeats=3, window_size=10)
@@ -109,13 +109,13 @@ class TestCycleDetection:
         for _ in range(3):
             det.record("click '#x'", success=True)
             det.record("click '#y'", success=True)
-        assert det._stuck_count >= 1
+        assert det.stuck_count >= 1
 
         # Second cycle detection -> WARNING
         for _ in range(3):
             det.record("click '#x'", success=True)
             det.record("click '#y'", success=True)
-        assert det._stuck_count >= 2
+        assert det.stuck_count >= 2
 
 
 class TestStuckCountDecay:
@@ -124,8 +124,8 @@ class TestStuckCountDecay:
         # Trigger stuck detection
         for _ in range(3):
             det.record("click '#submit'", success=True)
-        assert det._stuck_count == 1
+        assert det.stuck_count == 1
 
         # Varied actions should decay the count
         det.record("click '#other'", success=True)
-        assert det._stuck_count == 0
+        assert det.stuck_count == 0

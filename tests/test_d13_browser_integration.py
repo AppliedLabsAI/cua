@@ -4,7 +4,7 @@ Launches a local FastAPI server, starts a headless Patchright browser,
 and verifies that the JS-side DOM filtering + Python post-filtering
 work correctly in a real browser environment.
 
-This tests the FULL pipeline: browser → dom_snapshot.js (with filterConfig)
+This tests the FULL pipeline: browser → page_context.js (with filterConfig)
 → Python DOMBlinders → ScopeVerifier — using real HTML pages.
 """
 

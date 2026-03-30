@@ -501,7 +501,8 @@ window.__pageMap = (maxChars, filterConfig) => {
 
     // Button
     const type = el.getAttribute('type') || '';
-    const sel = el.id ? `#${el.id}` : (el.className ? `button.${el.className.split(' ')[0]}` : `text=${text}`);
+    const firstClass = (el.className || '').trim().split(/\s+/).find(Boolean);
+    const sel = el.id ? `#${el.id}` : (firstClass ? `button.${firstClass}` : `text=${text}`);
     return `  <button${type ? ` type="${type}"` : ''}>${text}</button> [${sel}]\n`;
   };
 
@@ -553,12 +554,14 @@ window.__pageMap = (maxChars, filterConfig) => {
     const navBudget = Math.min(MAX * 0.3, MAX - len); // at most 30% or whatever remains
     const navStart = len;
     _add('--- Navigation ---\n');
+    let navShown = 0;
     for (const line of navActions) {
       if (!_fits() || (len - navStart) > navBudget) break;
       _add(line);
+      navShown++;
     }
-    if (navActions.length > 0 && (len - navStart) > navBudget) {
-      _add(`(${navActions.length} nav links total)\n`);
+    if (navShown < navActions.length) {
+      _add(`(${navShown} of ${navActions.length} nav links shown)\n`);
     }
   }
 

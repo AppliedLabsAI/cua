@@ -129,6 +129,11 @@ class StuckDetector:
 
         return StuckVerdict()
 
+    @property
+    def stuck_count(self) -> int:
+        """Cumulative detection count (drives cycle escalation)."""
+        return self._stuck_count
+
     def reset(self) -> None:
         """Clear all state."""
         self._history.clear()
