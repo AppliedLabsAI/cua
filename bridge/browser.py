@@ -22,7 +22,6 @@ from bridge.js_helpers import (
     CAPTCHA_DETECT_INIT_JS,
     DOM_SNAPSHOT_INIT_JS,
     EXTRACT_VALUE_INIT_JS,
-    SMART_EXTRACT_INIT_JS,
 )
 from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS
 
@@ -77,7 +76,6 @@ class BrowserManager:
 
         # Pre-load JS helpers on every page (survives navigations)
         await self._context.add_init_script(script=DOM_SNAPSHOT_INIT_JS)
-        await self._context.add_init_script(script=SMART_EXTRACT_INIT_JS)
         await self._context.add_init_script(script=CAPTCHA_DETECT_INIT_JS)
         await self._context.add_init_script(script=EXTRACT_VALUE_INIT_JS)
 

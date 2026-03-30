@@ -40,7 +40,6 @@ class PlaybookStepExecutor:
             settle_after_evaluate=True,
             settle_timeout_ms=SETTLE_TIMEOUT_MS,
             settle_sleep_s=SETTLE_SLEEP_S,
-            smart_body_extract=True,
         )
 
     async def execute_step(self, step: PlaybookStep, page: Any) -> StepResult:

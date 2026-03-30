@@ -4,28 +4,29 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from typing import Any
 
 from pydantic import BaseModel
 
-from bridge.js_helpers import EXTRACT_VALUE_INIT_JS, SMART_EXTRACT_INIT_JS
+from bridge.js_helpers import EXTRACT_VALUE_INIT_JS, READABILITY_EXTRACT_INIT_JS
 from settings import SETTLE_SLEEP_S, SETTLE_TIMEOUT_MS
 
 log = logging.getLogger(__name__)
-
-SMART_EXTRACT_CALL_JS = """(initJS) => {
-    if (!window.__smartExtract) new Function(initJS)();
-    return window.__smartExtract
-        ? window.__smartExtract()
-        : document.body.innerText;
-}"""
 
 EXTRACT_VALUE_CALL_JS = """([sel, initJS]) => {
     if (!window.__extractValue) new Function(initJS)();
     return window.__extractValue
         ? window.__extractValue(sel)
         : '[not found]';
+}"""
+
+READABILITY_EXTRACT_CALL_JS = """(initJS) => {
+    if (!window.__readabilityExtract) new Function(initJS)();
+    return window.__readabilityExtract
+        ? window.__readabilityExtract()
+        : null;
 }"""
 
 
@@ -40,7 +41,6 @@ class PageActionConfig(BaseModel):
     settle_after_evaluate: bool = True
     settle_timeout_ms: int = SETTLE_TIMEOUT_MS
     settle_sleep_s: float = SETTLE_SLEEP_S
-    smart_body_extract: bool = True
 
 
 class PageActionOutcome(BaseModel):
@@ -153,9 +153,8 @@ async def execute_page_action(
         content = await extract_content(
             page,
             selector=params.get("selector", "body"),
-            mode=params.get("mode", "text"),
+            mode=params.get("mode", "markdown"),
             timeout_ms=config.action_timeout_ms,
-            smart_body_extract=config.smart_body_extract,
         )
         return PageActionOutcome(text=content)
 
@@ -168,12 +167,14 @@ async def extract_content(
     selector: str,
     mode: str,
     timeout_ms: int,
-    smart_body_extract: bool,
 ) -> str:
     """Extract textual or HTML content using shared semantics."""
     is_body = selector.lower() in ("body", "html")
     if is_body and mode == "html":
         mode = "text"
+
+    if mode == "markdown" and is_body:
+        return await _extract_markdown(page)
 
     if mode == "html":
         return await page.inner_html(selector, timeout=timeout_ms)
@@ -182,12 +183,26 @@ async def extract_content(
             EXTRACT_VALUE_CALL_JS,
             [selector, EXTRACT_VALUE_INIT_JS],
         )
-    if is_body and smart_body_extract:
-        return await page.evaluate(
-            SMART_EXTRACT_CALL_JS,
-            SMART_EXTRACT_INIT_JS,
-        )
     return await page.inner_text(selector, timeout=timeout_ms)
+
+
+async def _extract_markdown(page: Any) -> str:
+    """Readability extraction → markdown conversion pipeline."""
+    raw = await page.evaluate(
+        READABILITY_EXTRACT_CALL_JS,
+        READABILITY_EXTRACT_INIT_JS,
+    )
+    if raw:
+        try:
+            data = json.loads(raw)
+            from bridge.markdown import html_to_markdown, truncate_markdown
+
+            md = html_to_markdown(data["html"], base_url=data.get("url", ""))
+            return truncate_markdown(md)
+        except Exception:
+            log.warning("Markdown extraction failed, falling back to innerText")
+    # Fallback to plain innerText
+    return await page.inner_text("body")
 
 
 async def wait_for_stable(page: Any, timeout_ms: int) -> None:

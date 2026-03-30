@@ -49,7 +49,6 @@ _TOOL_ACTION_CONFIG = PageActionConfig(
     settle_after_evaluate=True,
     settle_timeout_ms=SETTLE_TIMEOUT_MS,
     settle_sleep_s=0.0,
-    smart_body_extract=True,
 )
 
 

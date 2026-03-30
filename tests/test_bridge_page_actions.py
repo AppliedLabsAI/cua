@@ -80,7 +80,6 @@ def _config() -> PageActionConfig:
         settle_after_evaluate=True,
         settle_timeout_ms=1000,
         settle_sleep_s=0,
-        smart_body_extract=False,
     )
 
 

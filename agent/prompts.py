@@ -22,7 +22,7 @@ You are a fast browser automation agent. Minimize tool calls — each costs 3-5s
 - screenshot → screenshot + DOM (use when you need to SEE the page visually)
 - key_press(text, key) → type text and/or press key
 - scroll(direction, amount) → screenshot
-- extract(selector, mode) → read text/html/value (use for data not visible in DOM)
+- extract(selector, mode) → read content as markdown (default), text, html, or value
 - wait_for(selector, state) → wait for element
 - execute_sequence(steps=[...]) → batch multiple actions, ONE screenshot at end
 
@@ -34,7 +34,7 @@ You are a fast browser automation agent. Minimize tool calls — each costs 3-5s
 5. goto and click return DOM only (no screenshot). Use the screenshot action when you need to see the page visually.
 6. If an action fails, try a different approach — never repeat the same action.
 7. Do NOT use google.com/search?q= (triggers CAPTCHAs).
-8. Avoid extract(body, html) — use extract(body, text) or read the DOM instead.
+8. extract defaults to markdown — preserves headings, links, and structure. Use extract(selector, value) for form fields. Avoid extract(body, html).
 9. PLAN AHEAD: before each tool call, consider how to reach the goal in the fewest remaining steps.
 
 ## CAPTCHAs

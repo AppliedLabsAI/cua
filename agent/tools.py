@@ -62,7 +62,7 @@ async def browser_dom(
     direction: Literal["up", "down", "left", "right"] | None = None,
     amount: int | None = None,
     steps: list[dict[str, Any]] | None = None,
-    mode: Literal["text", "html", "value"] | None = None,
+    mode: Literal["text", "html", "value", "markdown"] | None = None,
     state: Literal["visible", "hidden", "attached", "detached"] | None = None,
     dom_only: bool | None = None,
 ) -> ToolReturn:
