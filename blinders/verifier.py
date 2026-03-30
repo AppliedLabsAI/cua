@@ -16,7 +16,7 @@ from blinders.action_validator import ActionValidator
 from blinders.scope import TaskScope
 from guardrails import GuardrailEngine
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # Max recursion depth for execute_sequence validation
 _MAX_SEQUENCE_DEPTH = 10
@@ -71,7 +71,7 @@ class ScopeVerifier:
 
         # 1. Action type restriction — structural
         if action not in self.scope.allowed_actions:
-            log.info(
+            logger.info(
                 "Scope blocked action '%s' (goal_type=%s)",
                 action,
                 self.scope.goal_type,
@@ -161,7 +161,7 @@ class ScopeVerifier:
             if fnmatch.fnmatch(domain, pattern):
                 return None
 
-        log.info(
+        logger.info(
             "Scope blocked domain '%s' (allowed: %s)",
             domain,
             self.scope.allowed_domains,

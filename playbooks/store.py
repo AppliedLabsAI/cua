@@ -13,7 +13,7 @@ from playbooks.schema import (
     PlaybookStep,
 )
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _DEFAULT_DIR = Path(__file__).parent / "definitions"
 
@@ -54,7 +54,7 @@ class PlaybookStore:
                 self._cache[pb.id] = pb
                 playbooks.append(pb)
             except Exception as exc:
-                log.warning("Failed to parse playbook %s: %s", path.name, exc)
+                logger.warning("Failed to parse playbook %s: %s", path.name, exc)
         return playbooks
 
     def save(self, playbook: Playbook) -> None:
@@ -67,7 +67,7 @@ class PlaybookStore:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
         self._cache[playbook.id] = playbook
-        log.info("Playbook saved: %s", path)
+        logger.info("Playbook saved: %s", path)
 
     def match_directive(self, directive: str) -> Playbook | None:
         """Find the best matching playbook for a directive using tag matching.
@@ -95,7 +95,7 @@ class PlaybookStore:
                 best = pb
 
         if best and best_score > 0:
-            log.info(
+            logger.info(
                 "Matched directive to playbook '%s' (score=%d)",
                 best.id,
                 best_score,

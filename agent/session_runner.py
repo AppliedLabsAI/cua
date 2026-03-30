@@ -36,7 +36,7 @@ from telemetry.spans import (
     EVENT_AGENT_COMPLETED,
 )
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _RECORDING_VOLUME_NAME = "cua-recordings"
 
@@ -46,9 +46,9 @@ async def _commit_volume() -> None:
     try:
         vol = modal.Volume.from_name(_RECORDING_VOLUME_NAME)
         await vol.commit.aio()
-        log.info("Committed recordings volume")
+        logger.info("Committed recordings volume")
     except Exception:
-        log.warning("Failed to commit recordings volume", exc_info=True)
+        logger.warning("Failed to commit recordings volume", exc_info=True)
 
 
 async def run_sandbox_session(
@@ -86,14 +86,14 @@ async def run_sandbox_session(
                         start_url=config.start_url,
                         proxy=config.proxy_url,
                     )
-                log.info("Browser launched")
+                logger.info("Browser launched")
 
                 # Initialize recording
                 recording: RecordingManager | None = None
                 if config.recording_config.enabled:
                     recording = RecordingManager(config.recording_config, run_id)
                     await recording.start(browser.context)
-                    log.info("Session recording started")
+                    logger.info("Session recording started")
 
                 with tracer.start_as_current_span(BLINDERS_EXTRACT):
                     scope = await extract_task_scope(config.directive, config.profile)
@@ -106,14 +106,14 @@ async def run_sandbox_session(
                     }
                 )
 
-            log.info(
+            logger.info(
                 "Blinders: goal_type=%s, allowed_actions=%d, domains=%s",
                 scope.goal_type,
                 len(scope.allowed_actions),
                 scope.allowed_domains[:3],
             )
         except Exception as exc:
-            log.error("Setup failed: %s", exc)
+            logger.error("Setup failed: %s", exc)
             run_span.set_status(otel_trace.StatusCode.ERROR, str(exc))
             run_span.record_exception(exc)
             active_sessions().add(-1)
@@ -146,7 +146,7 @@ async def run_sandbox_session(
                 output_schema=config.output_schema,
             )
         except Exception as exc:
-            log.error("Agent loop crashed: %s", exc, exc_info=True)
+            logger.error("Agent loop crashed: %s", exc, exc_info=True)
             run_span.set_status(otel_trace.StatusCode.ERROR, str(exc))
             run_span.record_exception(exc)
             active_sessions().add(-1)
@@ -162,17 +162,17 @@ async def run_sandbox_session(
                     if config.recording_config.upload:
                         await recording.upload(f"/recordings/{run_id}")
                     else:
-                        log.info(
+                        logger.info(
                             "Recordings available at %s",
                             recording.output_dir,
                         )
                 except Exception as rec_exc:
-                    log.warning("Recording finalization failed: %s", rec_exc)
+                    logger.warning("Recording finalization failed: %s", rec_exc)
             await browser.close()
-            log.info("Browser closed")
+            logger.info("Browser closed")
 
         if result.success:
-            log.info("Agent succeeded: %s", (result.summary or "")[:200])
+            logger.info("Agent succeeded: %s", (result.summary or "")[:200])
             await complete_run(
                 summary=result.summary,
                 data=result.data,
@@ -181,7 +181,7 @@ async def run_sandbox_session(
             run_span.set_status(otel_trace.StatusCode.OK)
         else:
             error_text = str(result.error) if result.error is not None else ""
-            log.error("Agent failed: %s", error_text)
+            logger.error("Agent failed: %s", error_text)
             await complete_run(
                 error=result.error,
                 extracted_texts=result.extracted_texts,
@@ -200,7 +200,7 @@ async def run_sandbox_session(
             },
         )
 
-        log.info(
+        logger.info(
             "Stats: %d actions, %dms, %d input tokens, %d output tokens",
             result.action_count,
             result.total_duration_ms,

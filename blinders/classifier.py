@@ -20,7 +20,7 @@ from telemetry.spans import (
     ATTR_GENAI_OUTPUT_TOKENS,
 )
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _VALID_GOAL_TYPES = frozenset({"read", "navigate", "interact", "fill_form"})
 
@@ -96,7 +96,7 @@ async def classify_directive(directive: str) -> str:
         goal_type = result.output.goal_type
 
         if goal_type not in _VALID_GOAL_TYPES:
-            log.warning(
+            logger.warning(
                 "LLM returned unknown goal_type: %s, defaulting to interact",
                 goal_type,
             )
@@ -109,7 +109,7 @@ async def classify_directive(directive: str) -> str:
                 "cua.blinders.needs_login": result.output.needs_login,
             }
         )
-        log.info(
+        logger.info(
             "Classified directive as: %s (needs_login=%s)",
             goal_type,
             result.output.needs_login,

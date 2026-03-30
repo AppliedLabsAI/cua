@@ -8,7 +8,7 @@ import re
 from playbooks.schema import Playbook
 from playbooks.store import PlaybookStore
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class DirectiveParser:
@@ -24,11 +24,11 @@ class DirectiveParser:
         """
         playbook = self._store.match_directive(directive)
         if not playbook:
-            log.info("No playbook matched directive: %s", directive[:80])
+            logger.info("No playbook matched directive: %s", directive[:80])
             return None
 
         params = self._extract_params(directive, playbook)
-        log.info(
+        logger.info(
             "Parsed directive → playbook='%s', params=%s",
             playbook.id,
             params,
@@ -73,7 +73,7 @@ class DirectiveParser:
             if value is not None:
                 params[param.name] = value
             else:
-                log.warning(
+                logger.warning(
                     "Could not extract parameter '%s' from directive",
                     param.name,
                 )

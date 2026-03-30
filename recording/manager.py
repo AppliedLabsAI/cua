@@ -23,7 +23,7 @@ from telemetry.spans import RECORDING_START, RECORDING_STOP, RECORDING_UPLOAD
 if TYPE_CHECKING:
     from patchright.async_api import BrowserContext
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def scan_recording_artifacts(root: Path) -> list[dict]:
@@ -60,7 +60,7 @@ class RecordingManager:
         ):
             if self._config.screenshots:
                 self._screenshots = ScreenshotRecorder(self._config.output_dir)
-                log.info(
+                logger.info(
                     "Screenshot recording enabled: %s", self._screenshots.directory
                 )
 
@@ -74,7 +74,7 @@ class RecordingManager:
             try:
                 await self._screenshots.save(step, action, screenshot_b64)
             except Exception as exc:
-                log.warning("Failed to save screenshot for step %d: %s", step, exc)
+                logger.warning("Failed to save screenshot for step %d: %s", step, exc)
 
     async def stop(self) -> RecordingManifest:
         """Stop all recorders and return the recording manifest."""
@@ -104,7 +104,7 @@ class RecordingManager:
             span.set_attribute("recording.total_bytes", total_bytes)
 
         save_recording_manifest(Path(self._config.output_dir), manifest)
-        log.info(
+        logger.info(
             "Recording stopped: %d artifacts (%d bytes) for run %s",
             len(manifest.artifacts),
             total_bytes,
@@ -118,7 +118,7 @@ class RecordingManager:
         dest = Path(volume_path)
 
         if not src.exists():
-            log.warning("No recording output to upload at %s", src)
+            logger.warning("No recording output to upload at %s", src)
             return
 
         tracer = get_tracer()
@@ -132,10 +132,10 @@ class RecordingManager:
             try:
                 await asyncio.to_thread(self._copy_tree, src, dest)
                 span.set_attribute("recording.upload_success", True)
-                log.info("Recordings persisted to %s", dest)
+                logger.info("Recordings persisted to %s", dest)
             except Exception as exc:
                 span.set_attribute("recording.upload_success", False)
-                log.error("Failed to persist recordings: %s", exc)
+                logger.error("Failed to persist recordings: %s", exc)
 
     @staticmethod
     def _copy_tree(src: Path, dest: Path) -> None:

@@ -22,7 +22,7 @@ from settings import (
     SELECTOR_PROBE_TIMEOUT_MS,
 )
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _SESSION_DIR = Path.home() / ".cua" / "sessions"
 _USERNAME_SELECTORS = [
@@ -111,10 +111,10 @@ class DashboardAuth:
                 )
 
             if await self._is_logged_in(page):
-                log.info("Session restored successfully")
+                logger.info("Session restored successfully")
                 return True
             else:
-                log.info("Restored session expired, logging in fresh")
+                logger.info("Restored session expired, logging in fresh")
 
         # Navigate to login page if needed
         if login_url and login_url not in page.url:
@@ -127,9 +127,9 @@ class DashboardAuth:
 
         if success:
             await self._save_session(self._browser.context, session_path)
-            log.info("Login successful, session saved")
+            logger.info("Login successful, session saved")
         else:
-            log.error("Login failed")
+            logger.error("Login failed")
 
         return success
 
@@ -154,15 +154,15 @@ class DashboardAuth:
         )
 
         if not username or not password:
-            log.error("Missing username/email or password in credentials")
+            logger.error("Missing username/email or password in credentials")
             return False
 
         if not await self._fill_first_visible(page, _USERNAME_SELECTORS, username):
-            log.error("Could not find username/email input field")
+            logger.error("Could not find username/email input field")
             return False
 
         if not await self._fill_first_visible(page, _PASSWORD_SELECTORS, password):
-            log.error("Could not find password input field")
+            logger.error("Could not find password input field")
             return False
 
         if not await self._click_first_visible(page, _SUBMIT_SELECTORS):
@@ -220,9 +220,9 @@ class DashboardAuth:
             )
             with os.fdopen(fd, "w") as f:
                 json.dump(state, f)
-            log.info("Session state saved: %s", session_path)
+            logger.info("Session state saved: %s", session_path)
         except Exception as exc:
-            log.warning("Failed to save session state: %s", exc)
+            logger.warning("Failed to save session state: %s", exc)
 
     async def _restore_session(
         self,
@@ -241,7 +241,7 @@ class DashboardAuth:
             cookies = state.get("cookies", [])
             if cookies:
                 await context.add_cookies(cookies)
-                log.info("Restored %d cookies from saved session", len(cookies))
+                logger.info("Restored %d cookies from saved session", len(cookies))
 
             # Restore per-origin localStorage
             origins = state.get("origins", [])
@@ -266,13 +266,13 @@ class DashboardAuth:
                             }""",
                             ls_entries,
                         )
-                        log.info(
+                        logger.info(
                             "Restored %d localStorage entries for %s",
                             len(ls_entries),
                             origin_url,
                         )
                     except Exception as exc:
-                        log.debug(
+                        logger.debug(
                             "Failed to restore localStorage for %s: %s",
                             origin_url,
                             exc,
@@ -280,7 +280,7 @@ class DashboardAuth:
 
             return bool(cookies or origins)
         except Exception as exc:
-            log.warning("Failed to restore session state: %s", exc)
+            logger.warning("Failed to restore session state: %s", exc)
 
         return False
 

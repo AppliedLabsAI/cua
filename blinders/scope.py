@@ -22,7 +22,7 @@ from telemetry.metrics import safety_degraded_total
 if TYPE_CHECKING:
     from profiles.loader import Profile
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # All available browser_dom actions
 ALL_ACTIONS = frozenset(
@@ -125,7 +125,7 @@ async def _detect_goal_type(directive: str) -> str:
 
         return await classify_directive(directive)
     except Exception as exc:
-        log.warning("LLM classification unavailable, using degraded scope: %s", exc)
+        logger.warning("LLM classification unavailable, using degraded scope: %s", exc)
         safety_degraded_total().add(
             1, {"component": "scope_classifier", "fallback": "keyword_read"}
         )

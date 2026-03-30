@@ -20,7 +20,7 @@ from api.run_service import RunService
 from telemetry import setup_telemetry
 from telemetry.middleware import instrument_fastapi
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # --- API key authentication ---
 _security = HTTPBearer(auto_error=False)
@@ -52,11 +52,11 @@ async def lifespan(app_instance: FastAPI):
     environment, api_key = auth_settings()
     if not api_key:
         if environment == "local":
-            log.warning(
+            logger.warning(
                 "CUA_API_KEY not set — API endpoints are unauthenticated (local mode)"
             )
         else:
-            log.error(
+            logger.error(
                 "CUA_API_KEY not set — API requests will be rejected in production mode"
             )
     yield

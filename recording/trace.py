@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from patchright.async_api import BrowserContext
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class TraceRecorder:
@@ -30,9 +30,9 @@ class TraceRecorder:
             )
             self._context = context
             self._active = True
-            log.info("Playwright tracing started")
+            logger.info("Playwright tracing started")
         except Exception as exc:
-            log.warning("Playwright tracing unavailable: %s", exc)
+            logger.warning("Playwright tracing unavailable: %s", exc)
             self._active = False
 
     async def stop(self) -> str | None:
@@ -43,10 +43,10 @@ class TraceRecorder:
             self._output_path.parent.mkdir(parents=True, exist_ok=True)
             await self._context.tracing.stop(path=str(self._output_path))
             self._active = False
-            log.info("Trace saved: %s", self._output_path)
+            logger.info("Trace saved: %s", self._output_path)
             return str(self._output_path)
         except Exception as exc:
-            log.warning("Failed to stop tracing: %s", exc)
+            logger.warning("Failed to stop tracing: %s", exc)
             self._active = False
             return None
 

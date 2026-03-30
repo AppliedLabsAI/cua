@@ -16,7 +16,7 @@ from starlette.responses import Response
 from api.run_registry import RunHandle
 from recording.manager import scan_recording_artifacts
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class RecordingService:
@@ -47,7 +47,7 @@ class RecordingService:
         try:
             await self._volume.reload.aio()
         except Exception:
-            log.debug("Volume reload failed", exc_info=True)
+            logger.debug("Volume reload failed", exc_info=True)
 
     async def _trace_path(self, run_id: str) -> Path:
         await self._reload_volume()
@@ -63,7 +63,7 @@ class RecordingService:
                 resp.raise_for_status()
                 return resp.json()
             except httpx.HTTPError:
-                log.debug("Manifest proxy failed for run %s", run_id, exc_info=True)
+                logger.debug("Manifest proxy failed for run %s", run_id, exc_info=True)
 
         await self._reload_volume()
         run_dir = Path(self._volume_mount) / run_id
@@ -91,7 +91,7 @@ class RecordingService:
                         async for chunk in upstream.aiter_bytes():
                             yield chunk
                     except httpx.HTTPError as exc:
-                        log.warning(
+                        logger.warning(
                             "Trace stream failed for run %s: %s",
                             run_id,
                             exc,
@@ -116,7 +116,7 @@ class RecordingService:
                     headers={"Content-Disposition": 'attachment; filename="trace.zip"'},
                 )
             except httpx.HTTPError as exc:
-                log.warning(
+                logger.warning(
                     "Trace proxy failed for run %s: %s",
                     run_id,
                     exc,

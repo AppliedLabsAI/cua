@@ -33,7 +33,7 @@ from telemetry.spans import (
     SESSION,
 )
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class RunService:
@@ -81,14 +81,14 @@ class RunService:
         try:
             await self._volume.reload.aio()
         except Exception:
-            log.debug("Volume reload failed", exc_info=True)
+            logger.debug("Volume reload failed", exc_info=True)
         status_path = Path(self._volume_mount) / run_id / "status.json"
         if not status_path.exists():
             return None
         try:
             return RunStatus.model_validate_json(status_path.read_text())
         except Exception:
-            log.warning("Failed to read persisted status for run %s", run_id)
+            logger.warning("Failed to read persisted status for run %s", run_id)
             return None
 
     async def get_handle(self, run_id: str) -> RunHandle | None:
@@ -105,10 +105,10 @@ class RunService:
             url = tunnels[PORT_STATUS].url
             handle = RunHandle(run_id=run_id, sandbox=sandbox, status_base_url=url)
             self._registry.add(handle)
-            log.info("Reconstructed handle for run %s from Modal", run_id)
+            logger.info("Reconstructed handle for run %s from Modal", run_id)
             return handle
         except Exception:
-            log.warning(
+            logger.warning(
                 "Could not reconstruct handle for run %s", run_id, exc_info=True
             )
             return None
@@ -122,13 +122,13 @@ class RunService:
         try:
             exit_code = await handle.sandbox.poll.aio()
         except Exception:
-            log.exception("Failed to poll sandbox for run %s", run_id)
+            logger.exception("Failed to poll sandbox for run %s", run_id)
             return False
 
         if exit_code is None:
             return False
 
-        log.info(
+        logger.info(
             "Cleaning up finished sandbox for run %s (exit code %s)", run_id, exit_code
         )
         self.remove_handle(run_id)
@@ -172,7 +172,7 @@ class RunService:
                 tunnels = await sandbox.tunnels.aio()
                 status_base = tunnels[PORT_STATUS].url
             except Exception as exc:
-                log.exception(
+                logger.exception(
                     "Failed to create sandbox for run %s", run_id or "unknown"
                 )
                 active_sessions().add(-1)
@@ -196,7 +196,7 @@ class RunService:
                 RunHandle(run_id=run_id, sandbox=sandbox, status_base_url=status_base)
             )
             self._mark_run_active(run_id)
-            log.info("Created run %s", run_id)
+            logger.info("Created run %s", run_id)
 
             return RunResponse(
                 run_id=run_id,
@@ -228,7 +228,7 @@ class RunService:
         except (ValidationError, ValueError, TypeError) as exc:
             self.remove_handle(run_id)
             self._mark_run_inactive(run_id)
-            log.warning(
+            logger.warning(
                 "Invalid status payload for run %s: %s",
                 run_id,
                 exc,
@@ -241,7 +241,7 @@ class RunService:
         except httpx.HTTPError as exc:
             self.remove_handle(run_id)
             self._mark_run_inactive(run_id)
-            log.warning("Status request failed for run %s: %s", run_id, exc)
+            logger.warning("Status request failed for run %s: %s", run_id, exc)
             return await self._terminated_status(
                 run_id,
                 "Sandbox is no longer reachable",
@@ -257,11 +257,11 @@ class RunService:
         try:
             await handle.sandbox.terminate.aio()
         except Exception as exc:
-            log.warning("Terminate call failed for run %s: %s", run_id, exc)
+            logger.warning("Terminate call failed for run %s: %s", run_id, exc)
 
         self.remove_handle(run_id)
         self._mark_run_inactive(run_id)
-        log.info("Terminated run %s", run_id)
+        logger.info("Terminated run %s", run_id)
         return {"status": RunStatusValue.TERMINATED, "run_id": run_id}
 
     async def build_persisted_event_stream(

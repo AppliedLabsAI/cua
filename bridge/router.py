@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from blinders.filters import DOMBlinders
     from recording.manager import RecordingManager
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # Actions that may materially change page/frame state.
 _CAPTCHA_CHECK_ACTIONS = {"goto", "click"}
@@ -141,7 +141,7 @@ class ActionRouter:
                 )
             )
 
-        log.info(
+        logger.info(
             "Step %d: %s.%s (%dms) %s",
             request.step,
             request.tool_name,
@@ -225,7 +225,7 @@ class ActionRouter:
         if verdict.severity is StuckSeverity.NONE:
             return result
 
-        log.warning("Stuck detected (%s): %s", verdict.severity.value, input_summary)
+        logger.warning("Stuck detected (%s): %s", verdict.severity.value, input_summary)
         stuck_detections_total().add(1, {"severity": verdict.severity.value})
         from opentelemetry import trace as otel_trace
 
@@ -398,5 +398,5 @@ class ActionRouter:
                         error=result.error,
                     )
         except Exception as e:
-            log.warning("CAPTCHA handling failed: %s", e)
+            logger.warning("CAPTCHA handling failed: %s", e)
         return result

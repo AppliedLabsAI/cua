@@ -10,7 +10,7 @@ from pathlib import Path
 from actionlog.actions import _sanitize_filename
 from recording.models import RecordingArtifact
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class ScreenshotRecorder:
@@ -33,7 +33,7 @@ class ScreenshotRecorder:
                 size_bytes=size,
             )
         )
-        log.debug("Saved screenshot: %s (%d bytes)", path.name, size)
+        logger.debug("Saved screenshot: %s (%d bytes)", path.name, size)
         return path
 
     @staticmethod
