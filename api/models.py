@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from settings import PRIMARY_MODEL
 
-RunStatusValue = Literal[
-    "starting", "running", "completed", "failed", "timeout", "terminated"
-]
+
+class RunStatusValue(StrEnum):
+    """Lifecycle status of a CUA run."""
+
+    STARTING = "starting"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    TERMINATED = "terminated"
+
 
 CredentialsMap = dict[str, str]
 
@@ -72,6 +81,7 @@ class RunResponse(BaseModel):
     """POST /runs response."""
 
     run_id: str
+    status: RunStatusValue = RunStatusValue.RUNNING
     status_url: str
     stream_url: str
 
