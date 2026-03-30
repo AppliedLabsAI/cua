@@ -158,7 +158,11 @@ async def _run_playbook_case(
         if playbook.auth_required:
             from credentials import resolve_credentials
 
-            auth = DashboardAuth(browser, resolve_credentials(case.credentials) or {})
+            resolved = resolve_credentials(case.credentials) or {}
+            # DashboardAuth expects a flat {username, password} dict;
+            # pick the first service's credentials from the nested map.
+            flat_creds = next(iter(resolved.values()), {})
+            auth = DashboardAuth(browser, flat_creds)
             login_url = playbook.start_url or case.start_url or ""
             await auth.ensure_authenticated(login_url)
 

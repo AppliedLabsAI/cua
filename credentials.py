@@ -131,6 +131,12 @@ def decrypt_credentials(
     parsed = json.loads(plaintext)
     if not isinstance(parsed, dict):
         raise ConfigError("Decrypted credentials must be a JSON object")
+    for key, val in parsed.items():
+        if not isinstance(key, str) or not isinstance(val, dict):
+            raise ConfigError(f"Decrypted credentials: invalid entry for '{key}'")
+        for inner_key, inner_val in val.items():
+            if not isinstance(inner_key, str) or not isinstance(inner_val, str):
+                raise ConfigError(f"Decrypted credentials: non-string value in '{key}'")
     return parsed
 
 

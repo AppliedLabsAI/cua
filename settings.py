@@ -10,6 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
 # ---------------------------------------------------------------------------
@@ -68,7 +69,7 @@ class Settings(BaseSettings):
     # Infrastructure
     modal_sandbox_id: str = "local"
     cua_api_key: str = ""
-    cua_private_key_pem: str = ""
+    cua_private_key_pem: SecretStr = SecretStr("")
 
     # OpenTelemetry (standard env var names)
     otel_sdk_disabled: bool = True

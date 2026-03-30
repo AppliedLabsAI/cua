@@ -61,7 +61,6 @@ class RunConfig(BaseModel):
     display_height: int = 720
     profile: str = "default"
     start_url: str | None = None
-    credentials: CredentialsMap | None = None
     encrypted_credentials: str | None = None
     proxy: str | None = None
     guardrails: GuardrailSettings | None = None

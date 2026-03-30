@@ -83,6 +83,7 @@ PORT_STATUS = 8090
 async def create_cua_sandbox(
     config: RunConfig,
     app: modal.App,
+    credentials: dict[str, dict[str, str]] | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> modal.Sandbox:
     """Create a Modal sandbox configured for a CUA run.
@@ -90,6 +91,7 @@ async def create_cua_sandbox(
     Returns the sandbox immediately — startup is asynchronous.
     Use sandbox.tunnels() to get the status API URL.
 
+    ``credentials`` is the decrypted credentials dict (already validated).
     ``extra_env`` is merged into the sandbox environment — used to propagate
     OTel trace context (TRACEPARENT, TRACESTATE) and OTel config vars.
     """
@@ -107,8 +109,8 @@ async def create_cua_sandbox(
         "PROXY_URL": config.proxy or "",
     }
 
-    if config.credentials:
-        env["CREDENTIALS_JSON"] = json.dumps(config.credentials)
+    if credentials:
+        env["CREDENTIALS_JSON"] = json.dumps(credentials)
 
     if config.guardrails:
         env["GUARDRAILS_JSON"] = json.dumps(

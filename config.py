@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -14,9 +14,6 @@ from guardrails import GuardrailConfig
 from profiles.loader import Profile, apply_guardrail_overrides, load_profile
 from recording import RecordingConfig
 from settings import PRIMARY_MODEL, get_settings
-
-if TYPE_CHECKING:
-    from api.models import RunConfig
 
 
 class CUAConfig(BaseModel):
@@ -103,38 +100,5 @@ class CUAConfig(BaseModel):
             guardrail_config=guardrail_config,
             recording_config=recording_config,
             output_schema=output_schema,
-            profile=profile,
-        )
-
-    @classmethod
-    def from_run_config(cls, rc: RunConfig) -> CUAConfig:
-        """Build config from an API RunConfig (used by the outer API)."""
-        guardrail_config = None
-        if rc.guardrails:
-            guardrail_config = GuardrailConfig.model_validate(
-                rc.guardrails.model_dump(exclude_none=True)
-            )
-
-        recording_config = RecordingConfig()
-        if rc.recording:
-            recording_config = RecordingConfig.model_validate(rc.recording.model_dump())
-
-        profile = load_profile(rc.profile)
-        guardrail_config = apply_guardrail_overrides(profile, guardrail_config)
-
-        return cls(
-            directive=rc.directive,
-            model=rc.model,
-            max_steps=rc.max_steps,
-            thinking=rc.thinking,
-            width=rc.display_width,
-            height=rc.display_height,
-            start_url=rc.start_url,
-            proxy_url=rc.proxy,
-            profile_name=rc.profile,
-            credentials=resolve_credentials(rc.credentials),
-            guardrail_config=guardrail_config,
-            recording_config=recording_config,
-            output_schema=rc.output_schema,
             profile=profile,
         )

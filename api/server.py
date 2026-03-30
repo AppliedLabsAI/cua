@@ -167,12 +167,12 @@ async def public_key() -> Response:
     from credentials import get_public_key_pem
 
     settings = get_settings()
-    if not settings.cua_private_key_pem:
+    if not settings.cua_private_key_pem.get_secret_value():
         raise HTTPException(
             status_code=503,
             detail="Credential encryption is not configured (CUA_PRIVATE_KEY_PEM not set)",
         )
-    pem = get_public_key_pem(settings.cua_private_key_pem.encode())
+    pem = get_public_key_pem(settings.cua_private_key_pem.get_secret_value().encode())
     return Response(content=pem, media_type="application/x-pem-file")
 
 
@@ -182,19 +182,21 @@ async def create_run(config: RunConfig) -> RunResponse:
     from sandbox.image import PORT_STATUS, create_cua_sandbox
 
     # Decrypt encrypted credentials if provided
+    decrypted_credentials = None
     if config.encrypted_credentials:
         from credentials import decrypt_credentials
 
         settings = get_settings()
-        if not settings.cua_private_key_pem:
+        private_key_pem = settings.cua_private_key_pem.get_secret_value()
+        if not private_key_pem:
             raise HTTPException(
                 status_code=400,
                 detail="encrypted_credentials sent but CUA_PRIVATE_KEY_PEM not configured",
             )
         try:
-            config.credentials = decrypt_credentials(
+            decrypted_credentials = decrypt_credentials(
                 config.encrypted_credentials,
-                settings.cua_private_key_pem.encode(),
+                private_key_pem.encode(),
             )
         except (ValueError, ConfigError) as exc:
             log.warning("Credential decryption failed: %s", exc)
@@ -225,7 +227,10 @@ async def create_run(config: RunConfig) -> RunResponse:
                 # Inject trace context into sandbox env vars
                 trace_ctx = inject_trace_context()
                 sandbox = await create_cua_sandbox(
-                    config, modal_app, extra_env=trace_ctx
+                    config,
+                    modal_app,
+                    credentials=decrypted_credentials,
+                    extra_env=trace_ctx,
                 )
                 run_id = sandbox.object_id
 
