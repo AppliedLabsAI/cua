@@ -32,7 +32,6 @@ window.__startObserving = () => {
     added: [],
     removed: [],
     attrChanges: 0,
-    textChanges: 0,
   };
   const observer = new MutationObserver((mutations) => {
     if (!__mutationState) return;
@@ -58,8 +57,6 @@ window.__startObserving = () => {
         }
       } else if (m.type === 'attributes') {
         __mutationState.attrChanges++;
-      } else if (m.type === 'characterData') {
-        __mutationState.textChanges++;
       }
     }
   });
