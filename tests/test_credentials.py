@@ -118,18 +118,16 @@ class TestEncryption:
         )
 
         token = encrypt_credentials({"a": "b"}, public_pem)
-        with pytest.raises(ValueError, match="decryption|padding|Decryption"):
+        with pytest.raises(ConfigError, match="Failed to decrypt"):
             decrypt_credentials(token, wrong_pem)
 
     def test_tampered_token_fails(self, rsa_keys):
-        from cryptography.exceptions import InvalidTag
-
         private_pem, public_pem = rsa_keys
         token = encrypt_credentials({"a": "b"}, public_pem)
 
         key_part, data_part = token.split(".")
         tampered = key_part + "." + data_part[:-4] + "XXXX"
-        with pytest.raises(InvalidTag):
+        with pytest.raises(ConfigError, match="Failed to decrypt"):
             decrypt_credentials(tampered, private_pem)
 
     def test_invalid_format_raises(self, rsa_keys):

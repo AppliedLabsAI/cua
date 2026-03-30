@@ -109,6 +109,8 @@ def decrypt_credentials(
     private_key_pem: bytes,
 ) -> dict[str, str]:
     """Decrypt a token produced by :func:`encrypt_credentials`."""
+    import binascii
+
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     try:
@@ -116,14 +118,22 @@ def decrypt_credentials(
     except ValueError as exc:
         raise ConfigError("Invalid encrypted credentials format") from exc
 
-    private_key = _load_private_key(private_key_pem)
-    aes_key = private_key.decrypt(base64.b64decode(key_b64), _oaep_padding())
+    try:
+        private_key = _load_private_key(private_key_pem)
+        aes_key = private_key.decrypt(base64.b64decode(key_b64), _oaep_padding())
 
-    payload = base64.b64decode(data_b64)
-    nonce, ciphertext = payload[:12], payload[12:]
-    plaintext = AESGCM(aes_key).decrypt(nonce, ciphertext, None)
+        payload = base64.b64decode(data_b64)
+        nonce, ciphertext = payload[:12], payload[12:]
+        plaintext = AESGCM(aes_key).decrypt(nonce, ciphertext, None)
+    except (binascii.Error, ValueError, Exception) as exc:
+        if isinstance(exc, ConfigError):
+            raise
+        raise ConfigError("Failed to decrypt credentials") from exc
 
-    parsed = json.loads(plaintext)
+    try:
+        parsed = json.loads(plaintext)
+    except json.JSONDecodeError as exc:
+        raise ConfigError("Decrypted payload is not valid JSON") from exc
     if not isinstance(parsed, dict):
         raise ConfigError("Decrypted credentials must be a JSON object")
     for key, val in parsed.items():
