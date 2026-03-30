@@ -133,7 +133,7 @@ python scripts/run_local.py \
 pip install modal && modal setup
 
 # Create secrets
-modal secret create llm-secret \
+modal secret create cua-secret \
   GOOGLE_API_KEY=... \
   CUA_API_KEY=your-secret-api-key \
   ENVIRONMENT=production

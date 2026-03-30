@@ -41,7 +41,7 @@ modal_app = modal.App(
     )
     .env({"PYTHONPATH": "/opt/cua"})
     .uv_sync(str(PROJECT_ROOT), extra_options="--no-dev"),
-    secrets=[modal.Secret.from_name("llm-secret")],
+    secrets=[modal.Secret.from_name("cua-secret")],
 )
 
 recording_volume = modal.Volume.from_name(

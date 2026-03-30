@@ -95,7 +95,7 @@ async def create_cua_sandbox(
     ``extra_env`` is merged into the sandbox environment — used to propagate
     OTel trace context (TRACEPARENT, TRACESTATE) and OTel config vars.
     """
-    secrets: list[modal.Secret] = [modal.Secret.from_name("llm-secret")]
+    secrets: list[modal.Secret] = [modal.Secret.from_name("cua-secret")]
 
     env: dict[str, str | None] = {
         "DIRECTIVE": config.directive,
