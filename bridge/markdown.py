@@ -62,7 +62,7 @@ def html_to_markdown(html: str, base_url: str = "") -> str:
     return md.strip()
 
 
-def truncate_markdown(text: str, max_chars: int = 2000) -> str:
+def truncate_markdown(text: str, max_chars: int = 4000) -> str:
     """Truncate markdown at paragraph boundaries.
 
     Finds the last double-newline before *max_chars* and cuts there,

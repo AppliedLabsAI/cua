@@ -25,9 +25,9 @@ from bridge.js_helpers import (
 )
 from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS
 
-_DOM_MAX_CHARS = 3500
+_DOM_MAX_CHARS = 4000
 # Compact DOM auto-attached to goto/click responses
-_AUTO_DOM_MAX_CHARS = 2500  # Leave room for nav text + content summary
+_AUTO_DOM_MAX_CHARS = 3000  # Leave room for nav text + content summary
 
 
 class BrowserManager:
