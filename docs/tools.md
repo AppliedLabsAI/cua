@@ -9,7 +9,7 @@ CUA exposes a single `browser_dom` tool with 9 actions. The agent chooses which 
 | `goto(url)` | Navigate to a URL | Page map (metadata + landmarks + elements) |
 | `click(selector)` | Click an element (CSS, `text=`, `role=` selectors) | Mutation delta + page map |
 | `screenshot` | Capture the viewport | Screenshot + DOM snapshot |
-| `key_press(text, key)` | Type text and/or press a key (Enter, Tab, etc.) | Confirmation |
+| `key_press(text, credential_ref, key)` | Type plain text or a runtime credential ref, and/or press a key (Enter, Tab, etc.) | Confirmation |
 | `scroll(direction, amount)` | Scroll the page | Page map |
 | `extract(selector, mode)` | Extract content as markdown (default), text, HTML, or form values | Content string + page map |
 | `get_dom(selector?)` | Get a compact DOM snapshot (optionally scoped) | DOM string |
@@ -24,16 +24,16 @@ Each tool call has ~3-5s of overhead (API round-trip + thinking). Without batchi
 {
   "action": "execute_sequence",
   "steps": [
-    {"action": "click", "selector": "#email"},
-    {"action": "key_press", "text": "user@example.com"},
-    {"action": "click", "selector": "#password"},
-    {"action": "key_press", "text": "secretpass"},
+    {"action": "key_press", "selector": "#email", "credential_ref": "email"},
+    {"action": "key_press", "selector": "#password", "credential_ref": "password"},
     {"action": "click", "selector": "button[type=submit]"}
   ]
 }
 ```
 
 Intermediate steps skip screenshots for speed. Only the final step captures the DOM, so the agent sees the result of the entire sequence in one response.
+
+When `credential_ref` is used, the LLM sees only the reference name. The runtime resolves the real secret immediately before filling the field, and logs keep only the ref name rather than the secret value.
 
 ## Design Choices
 

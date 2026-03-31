@@ -6,7 +6,12 @@ import json
 
 import pytest
 
-from credentials import SecretValue, credentials_for_prompt, resolve_credentials
+from credentials import (
+    SecretValue,
+    credential_refs_for_prompt,
+    resolve_credential_ref,
+    resolve_credentials,
+)
 
 
 class TestSecretValue:
@@ -50,11 +55,24 @@ class TestResolveCredentials:
         assert resolved["token"].get_secret_value() == "tok"
 
 
-class TestCredentialsForPrompt:
-    def test_unwraps(self):
+class TestCredentialRefsForPrompt:
+    def test_returns_refs(self):
         secure = {"username": SecretValue("admin"), "password": SecretValue("pw")}
-        plain = credentials_for_prompt(secure)
-        assert plain == {"username": "admin", "password": "pw"}
+        refs = credential_refs_for_prompt(secure)
+        assert refs == ["username", "password"]
 
     def test_empty(self):
-        assert credentials_for_prompt({}) == {}
+        assert credential_refs_for_prompt({}) == []
+
+
+class TestResolveCredentialRef:
+    def test_unwraps_secret_value(self):
+        secure = {"username": SecretValue("admin"), "password": SecretValue("pw")}
+        assert resolve_credential_ref(secure, "password") == "pw"
+
+    def test_supports_plain_string_values(self):
+        assert resolve_credential_ref({"token": "abc123"}, "token") == "abc123"
+
+    def test_missing_ref_raises(self):
+        with pytest.raises(KeyError):
+            resolve_credential_ref({"username": SecretValue("admin")}, "password")

@@ -123,9 +123,13 @@ python scripts/run_local.py \
 
 # LLM agent (for unknown flows)
 python scripts/run_local.py \
-  --directive "Go to the dashboard and find the latest order" \
+  --directive "Go to the dashboard, log in with the provided credentials, and find the latest order" \
   --credentials '{"username": "admin", "password": "secret"}'
 ```
+
+Credentials are resolved at fill time — secrets never appear in the LLM prompt or action logs. See [Authentication](docs/authentication.md) for details.
+
+For deterministic workflows without LLM calls, see [Playbooks](docs/playbooks.md).
 
 ### Deploy to Modal
 
@@ -150,19 +154,9 @@ curl -X POST https://<workspace>--cua-serve.modal.run/runs \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-secret-api-key" \
   -d '{"directive": "Go to example.com and tell me the page title"}'
-
-# Check status (works during and after the run)
-curl https://<workspace>--cua-serve.modal.run/runs/{run_id} \
-  -H "Authorization: Bearer your-secret-api-key"
-
-# Stream events (SSE) — replays past events, then streams live
-curl -N https://<workspace>--cua-serve.modal.run/runs/{run_id}/stream \
-  -H "Authorization: Bearer your-secret-api-key"
-
-# Stop a run
-curl -X POST https://<workspace>--cua-serve.modal.run/runs/{run_id}/stop \
-  -H "Authorization: Bearer your-secret-api-key"
 ```
+
+See [API Reference](docs/api.md) for status polling, SSE streaming, and stop endpoints.
 
 ## Tests
 
@@ -199,10 +193,11 @@ cua/
 
 | Topic | Description |
 |---|---|
+| [Architecture](docs/architecture.md) | Full sequence diagram and component overview |
 | [API Reference](docs/api.md) | Endpoints, SSE streaming, replay, multi-container support |
 | [Browser Tools](docs/tools.md) | 9 browser actions, `execute_sequence` batching, design choices |
 | [Playbooks](docs/playbooks.md) | Deterministic workflows, selector fallbacks, LLM handoff |
-| [Authentication](docs/authentication.md) | Session persistence, credential security, `SecretValue` |
+| [Authentication](docs/authentication.md) | Session persistence, credential refs, `SecretValue`, and security caveats |
 | [Guardrails](docs/guardrails.md) | Cognitive Blinders, runtime safety, domain/action controls |
 | [Recording](docs/recording.md) | Playwright tracing, session replay |
 | [Evaluation](docs/evaluation.md) | Benchmark suites, trial scoring, pass/fail expectations |

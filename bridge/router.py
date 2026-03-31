@@ -45,6 +45,7 @@ from telemetry.spans import (
 
 if TYPE_CHECKING:
     from blinders.filters import DOMBlinders
+    from credentials import SecretValue
     from recording.manager import RecordingManager
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,11 @@ class ActionRouter:
         await self._background.drain()
 
     async def execute(
-        self, tool_name: str, tool_input: dict, reasoning: str | None = None
+        self,
+        tool_name: str,
+        tool_input: dict,
+        reasoning: str | None = None,
+        credentials: dict[str, SecretValue] | None = None,
     ) -> dict:
         """Route a tool call from Claude to the appropriate executor.
 
@@ -116,7 +121,7 @@ class ActionRouter:
         request = self._build_request(tool_name, tool_input)
         start = time.monotonic()
 
-        result = await self._dispatch_phase(request)
+        result = await self._dispatch_phase(request, credentials=credentials)
         result = self._postprocess_phase(request, result)
 
         duration_ms = int((time.monotonic() - start) * 1000)
@@ -186,12 +191,18 @@ class ActionRouter:
             guard_span.set_attributes(guard_attrs)
         return guardrail_block
 
-    async def _dispatch_phase(self, request: ActionRequest) -> ActionResult:
+    async def _dispatch_phase(
+        self,
+        request: ActionRequest,
+        *,
+        credentials: dict[str, SecretValue] | None = None,
+    ) -> ActionResult:
         try:
             return await self._dispatch(
                 request.tool_name,
                 request.action,
                 request.tool_input,
+                credentials=credentials,
             )
         except Exception as exc:
             return ActionResult(
@@ -302,7 +313,12 @@ class ActionRouter:
         return None
 
     async def _dispatch(
-        self, tool_name: str, action: str, tool_input: dict
+        self,
+        tool_name: str,
+        action: str,
+        tool_input: dict,
+        *,
+        credentials: dict[str, SecretValue] | None = None,
     ) -> ActionResult:
         """Route to the correct executor."""
         if tool_name == "browser_dom":
@@ -323,6 +339,7 @@ class ActionRouter:
                     self.browser,
                     include_page_context=True,
                     filter_config=self._filter_config,
+                    credentials=credentials,
                 )
 
                 if action in _CAPTCHA_CHECK_ACTIONS:
