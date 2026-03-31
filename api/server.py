@@ -15,10 +15,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from api.auth import auth_settings, verify_api_key
 from api.errors import ApiErrorCode, coerce_http_error_response, error_response
 from api.modal_app import VOLUME_MOUNT, modal_app, recording_volume, run_registry_dict
-from api.models import RunConfig, RunResponse, RunStatus
+from api.models import DryRunResponse, RunConfig, RunResponse, RunStatus
 from api.recording_service import RecordingService
 from api.run_registry import InMemoryRunRegistry, ModalDictRunRegistry
-from api.run_service import RunService
+from api.run_service import RunService, validate_run_config
 from telemetry import setup_telemetry
 from telemetry.middleware import instrument_fastapi
 
@@ -136,6 +136,11 @@ async def _validation_exception_handler(
 def serve():
     """Serve the CUA FastAPI app as a Modal web endpoint."""
     return web_app
+
+
+@web_app.post("/runs/dry-run", response_model=DryRunResponse)
+def dry_run(config: RunConfig) -> DryRunResponse:
+    return validate_run_config(config)
 
 
 @web_app.post("/runs", response_model=RunResponse)

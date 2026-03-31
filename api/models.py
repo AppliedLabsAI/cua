@@ -102,6 +102,23 @@ class RunConfig(BaseModel):
         return v
 
 
+class DryRunCheck(BaseModel):
+    """A single validation check result."""
+
+    name: str
+    passed: bool
+    message: str = ""
+
+
+class DryRunResponse(BaseModel):
+    """POST /runs/dry-run response."""
+
+    valid: bool
+    checks: list[DryRunCheck] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    config_summary: dict[str, Any] = Field(default_factory=dict)
+
+
 class RunResponse(BaseModel):
     """POST /runs response."""
 

@@ -20,7 +20,14 @@ from api.errors import (
     classify_runtime_error,
     raise_api_error,
 )
-from api.models import RunConfig, RunResponse, RunStatus, RunStatusValue
+from api.models import (
+    DryRunCheck,
+    DryRunResponse,
+    RunConfig,
+    RunResponse,
+    RunStatus,
+    RunStatusValue,
+)
 from api.run_registry import RunHandle, RunPhase, RunRegistry
 from settings import get_settings
 from telemetry import get_tracer
@@ -40,6 +47,168 @@ from telemetry.spans import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def validate_run_config(config: RunConfig) -> DryRunResponse:
+    """Validate a RunConfig without spawning a sandbox.
+
+    Checks profile existence, credential format, guardrail config,
+    and returns a summary with warnings.
+    """
+    checks: list[DryRunCheck] = []
+    warnings: list[str] = []
+
+    # Profile
+    try:
+        from profiles.loader import load_profile
+
+        profile = load_profile(config.profile)
+        checks.append(
+            DryRunCheck(
+                name="profile",
+                passed=True,
+                message=f"Profile '{config.profile}' loaded",
+            )
+        )
+        if profile.prompt_extension:
+            checks.append(
+                DryRunCheck(
+                    name="profile_prompt",
+                    passed=True,
+                    message=f"Prompt extension: {len(profile.prompt_extension)} chars",
+                )
+            )
+    except ValueError as exc:
+        checks.append(DryRunCheck(name="profile", passed=False, message=str(exc)))
+
+    # Credentials
+    if config.credentials:
+        empty_keys = [k for k, v in config.credentials.items() if not v]
+        if empty_keys:
+            checks.append(
+                DryRunCheck(
+                    name="credentials",
+                    passed=False,
+                    message=f"Empty values for: {', '.join(empty_keys)}",
+                )
+            )
+        else:
+            checks.append(
+                DryRunCheck(
+                    name="credentials",
+                    passed=True,
+                    message=f"{len(config.credentials)} credential(s) provided",
+                )
+            )
+    else:
+        checks.append(
+            DryRunCheck(
+                name="credentials",
+                passed=True,
+                message="No credentials (anonymous run)",
+            )
+        )
+
+    # Guardrails (already validated by GuardrailSettings Pydantic model)
+    if config.guardrails:
+        checks.append(
+            DryRunCheck(
+                name="guardrails", passed=True, message="Guardrail config valid"
+            )
+        )
+    else:
+        checks.append(
+            DryRunCheck(name="guardrails", passed=True, message="Default guardrails")
+        )
+
+    # Model
+    model = config.model
+    known_prefixes = ("anthropic:", "google-gla:", "openai:", "google-vertex:")
+    if any(model.startswith(p) for p in known_prefixes) or ":" not in model:
+        checks.append(DryRunCheck(name="model", passed=True, message=f"Model: {model}"))
+    else:
+        warnings.append(f"Model '{model}' uses an uncommon provider prefix")
+        checks.append(
+            DryRunCheck(
+                name="model",
+                passed=True,
+                message=f"Model: {model} (unverified provider)",
+            )
+        )
+
+    # Start URL
+    if config.start_url:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(config.start_url)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            checks.append(
+                DryRunCheck(
+                    name="start_url",
+                    passed=True,
+                    message=f"Start URL: {config.start_url[:80]}",
+                )
+            )
+        else:
+            checks.append(
+                DryRunCheck(
+                    name="start_url",
+                    passed=False,
+                    message="Start URL must be a valid http:// or https:// URL",
+                )
+            )
+
+    # Output schema
+    if config.output_schema:
+        if isinstance(config.output_schema, dict) and "type" in config.output_schema:
+            checks.append(
+                DryRunCheck(
+                    name="output_schema", passed=True, message="Output schema provided"
+                )
+            )
+        else:
+            warnings.append(
+                "output_schema should be a JSON Schema object with a 'type' field"
+            )
+            checks.append(
+                DryRunCheck(
+                    name="output_schema",
+                    passed=True,
+                    message="Output schema provided (no 'type' field)",
+                )
+            )
+
+    # Common pitfalls
+    if config.max_steps > 100:
+        warnings.append(
+            f"max_steps={config.max_steps} is high"
+            " — typical runs complete in 5-20 steps"
+        )
+    if config.timeout_seconds > 1800:
+        warnings.append(
+            f"timeout_seconds={config.timeout_seconds}"
+            " — runs rarely need more than 10 minutes"
+        )
+
+    all_passed = all(c.passed for c in checks)
+
+    return DryRunResponse(
+        valid=all_passed,
+        checks=checks,
+        warnings=warnings,
+        config_summary={
+            "model": config.model,
+            "max_steps": config.max_steps,
+            "timeout_seconds": config.timeout_seconds,
+            "thinking": config.thinking,
+            "display": f"{config.display_width}x{config.display_height}",
+            "profile": config.profile,
+            "has_credentials": config.credentials is not None,
+            "has_guardrails": config.guardrails is not None,
+            "has_start_url": config.start_url is not None,
+            "has_output_schema": config.output_schema is not None,
+        },
+    )
 
 
 class RunService:

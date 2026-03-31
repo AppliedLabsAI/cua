@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from profiles.loader import clear_profile_cache
 from settings import get_settings
 
 
@@ -17,6 +18,14 @@ def _clear_settings_cache():
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _clear_profile_cache():
+    """Clear the profile LRU cache between tests for isolation."""
+    clear_profile_cache()
+    yield
+    clear_profile_cache()
 
 
 @pytest.fixture(autouse=True)
