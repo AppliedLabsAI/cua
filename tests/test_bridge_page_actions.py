@@ -7,7 +7,10 @@ import json
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from bridge.page_actions import PageActionConfig, _extract_markdown, execute_page_action
+from credentials import SecretValue
 
 
 class _FakeKeyboard:
@@ -99,6 +102,56 @@ def test_key_press_with_selector_uses_fill():
 
     assert page.filled == [("#email", "user@example.com", 3000)]
     assert outcome.text == "Typed 'user@example.com'"
+
+
+def test_key_press_with_credential_ref_uses_fill_without_exposing_value():
+    page = _FakePage()
+    outcome = asyncio.run(
+        execute_page_action(
+            page,
+            "key_press",
+            {"selector": "#password", "credential_ref": "password"},
+            config=_config(),
+            credentials={"password": SecretValue("s3cr3t")},
+        )
+    )
+
+    assert page.filled == [("#password", "s3cr3t", 3000)]
+    assert outcome.text == "Typed credential 'password'"
+
+
+def test_key_press_with_unknown_credential_ref_fails():
+    page = _FakePage()
+
+    with pytest.raises(KeyError):
+        asyncio.run(
+            execute_page_action(
+                page,
+                "key_press",
+                {"selector": "#password", "credential_ref": "password"},
+                config=_config(),
+                credentials={"username": SecretValue("alice")},
+            )
+        )
+
+
+def test_key_press_rejects_text_and_credential_ref_together():
+    page = _FakePage()
+
+    with pytest.raises(ValueError, match="either.*credential_ref"):
+        asyncio.run(
+            execute_page_action(
+                page,
+                "key_press",
+                {
+                    "selector": "#password",
+                    "text": "plain",
+                    "credential_ref": "password",
+                },
+                config=_config(),
+                credentials={"password": SecretValue("s3cr3t")},
+            )
+        )
 
 
 def test_select_action_uses_select_option():

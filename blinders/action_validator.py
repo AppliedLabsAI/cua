@@ -254,9 +254,17 @@ def _describe_action(action: str, tool_input: dict) -> str:
         return f"Click element: {selector}"
     elif action == "key_press":
         text = tool_input.get("text", "")
+        credential_ref = tool_input.get("credential_ref", "")
         key = tool_input.get("key", "")
         parts = []
-        if text:
+        if credential_ref:
+            ref_preview = (
+                credential_ref[:50] + "..."
+                if len(credential_ref) > 50
+                else credential_ref
+            )
+            parts.append(f"type credential '{ref_preview}'")
+        elif text:
             preview = text[:20] + "..." if len(text) > 20 else text
             parts.append(f"type '{preview}'")
         if key:

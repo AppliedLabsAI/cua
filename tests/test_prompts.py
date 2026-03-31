@@ -27,8 +27,11 @@ class TestBuildSystemPrompt:
         }
         prompt = build_system_prompt(directive="test", credentials=creds)
         assert "<robot_credentials>" in prompt
-        assert "username: testuser" in prompt
-        assert "password: testpass" in prompt
+        assert "  username" in prompt
+        assert "  password" in prompt
+        assert "testuser" not in prompt
+        assert "testpass" not in prompt
+        assert "credential_ref" in prompt
 
     def test_no_credentials(self):
         prompt = build_system_prompt(directive="test")
@@ -51,12 +54,13 @@ class TestBuildSystemPrompt:
         assert "## Task" in prompt
 
     def test_credentials_and_profile(self):
-        creds = {"key": SecretValue("val")}
+        creds = {"key": SecretValue("secret-value-123")}
         prompt = build_system_prompt(
             directive="test",
             credentials=creds,
             profile_prompt="## Custom\nDo stuff.",
         )
         assert "<robot_credentials>" in prompt
+        assert "secret-value-123" not in prompt
         assert "## Custom" in prompt
         assert "## Task" in prompt

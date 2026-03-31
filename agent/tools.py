@@ -42,6 +42,7 @@ _TOOL_PARAMS = (
     "action",
     "selector",
     "text",
+    "credential_ref",
     "key",
     "url",
     "direction",
@@ -59,6 +60,7 @@ async def browser_dom(
     reasoning: str,
     selector: str | None = None,
     text: str | None = None,
+    credential_ref: str | None = None,
     key: str | None = None,
     url: str | None = None,
     direction: Literal["up", "down", "left", "right"] | None = None,
@@ -78,6 +80,7 @@ async def browser_dom(
         reasoning: Brief explanation of why this action advances the task goal.
         selector: CSS, text=, or role= selector for the target element.
         text: Text to type (key_press action).
+        credential_ref: Name of a runtime credential to type (key_press action).
         key: Key to press, e.g. Enter, Tab (key_press action).
         url: URL to navigate to (goto action).
         direction: Scroll direction (scroll action).
@@ -112,7 +115,10 @@ async def browser_dom(
         )
 
     tool_result = await deps.bridge.execute(
-        "browser_dom", tool_input, reasoning=reasoning or None
+        "browser_dom",
+        tool_input,
+        reasoning=reasoning or None,
+        credentials=deps.credentials,
     )
     deps.step += 1
 

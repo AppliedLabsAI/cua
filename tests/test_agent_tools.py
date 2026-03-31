@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agent.tools import _NESTED_ACTIONS, get_action_enum
+from agent.tools import _NESTED_ACTIONS, _TOOL_PARAMS, get_action_enum
 from blinders.scope import ALL_ACTIONS
 
 
@@ -22,3 +22,7 @@ def test_execute_sequence_nested_actions_are_limited_to_safe_subset():
     assert "select" not in _NESTED_ACTIONS
     assert "evaluate" not in _NESTED_ACTIONS
     assert "execute_sequence" not in _NESTED_ACTIONS
+
+
+def test_key_press_supports_credential_ref_param():
+    assert "credential_ref" in _TOOL_PARAMS

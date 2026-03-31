@@ -27,6 +27,7 @@ from telemetry.logging import C_DIM, C_RESET, fmt_status, fmt_timing
 
 if TYPE_CHECKING:
     from bridge.browser import BrowserManager
+    from credentials import SecretValue
 
 logger = logging.getLogger(__name__)
 _seq_log = logging.getLogger("bridge.sequence")
@@ -58,6 +59,7 @@ class ExecutionContext:
     browser: BrowserManager
     filter_config: dict | None
     policy: ExecutionPolicy
+    credentials: dict[str, SecretValue] | None = None
 
     @property
     def page(self) -> Page:
@@ -81,10 +83,12 @@ def _context_for(
     *,
     include_page_context: bool,
     filter_config: dict | None,
+    credentials: dict[str, SecretValue] | None,
 ) -> ExecutionContext:
     return ExecutionContext(
         browser=browser,
         filter_config=filter_config,
+        credentials=credentials,
         policy=ExecutionPolicy(
             include_page_context=include_page_context,
             dom_only=bool(params.get("dom_only", False)),
@@ -212,6 +216,7 @@ async def _handle_key_press(
         "key_press",
         params,
         config=_TOOL_ACTION_CONFIG,
+        credentials=ctx.credentials,
     )
     return ActionResult(text=outcome.text or "Done")
 
@@ -269,6 +274,7 @@ async def execute_dom_action(
     *,
     include_page_context: bool = True,
     filter_config: dict | None = None,
+    credentials: dict[str, SecretValue] | None = None,
 ) -> ActionResult:
     """Execute a browser_dom tool action via Patchright."""
     normalized_action = _normalize_action(action)
@@ -277,11 +283,17 @@ async def execute_dom_action(
         params,
         include_page_context=include_page_context,
         filter_config=filter_config,
+        credentials=credentials,
     )
 
     try:
         if normalized_action == "execute_sequence":
-            return await _execute_sequence(params, browser, filter_config=filter_config)
+            return await _execute_sequence(
+                params,
+                browser,
+                filter_config=filter_config,
+                credentials=credentials,
+            )
 
         handler = _ACTION_HANDLERS.get(normalized_action)
         if handler is None:
@@ -313,6 +325,7 @@ async def _execute_sequence(
     params: dict,
     browser: BrowserManager,
     filter_config: dict | None = None,
+    credentials: dict[str, SecretValue] | None = None,
 ) -> ActionResult:
     """Execute a sequence of browser actions in one tool call."""
     from actionlog.actions import summarize_action
@@ -373,6 +386,7 @@ async def _execute_sequence(
                 browser,
                 include_page_context=is_last,
                 filter_config=filter_config,
+                credentials=credentials,
             )
             step_ms = int((time.monotonic() - step_start) * 1000)
             summary = summarize_action("browser_dom", action, step)

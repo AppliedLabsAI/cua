@@ -57,6 +57,7 @@ async def execute_page_action(
     params: dict[str, Any],
     *,
     config: PageActionConfig,
+    credentials: dict | None = None,
 ) -> PageActionOutcome:
     """Execute a primitive page action with shared semantics."""
     if action in ("type", "text"):
@@ -83,9 +84,20 @@ async def execute_page_action(
 
     if action == "key_press":
         text = params.get("text")
+        credential_ref = params.get("credential_ref")
         key = params.get("key")
+        if text and credential_ref:
+            raise ValueError(
+                "key_press accepts either 'text' or 'credential_ref', not both"
+            )
+        if credential_ref:
+            from credentials import resolve_credential_ref
+
+            text = resolve_credential_ref(credentials, credential_ref)
         if not text and not key:
-            raise ValueError("key_press requires 'text' and/or 'key'")
+            raise ValueError(
+                "key_press requires at least one of 'text', 'credential_ref', or 'key'"
+            )
         parts: list[str] = []
         if text:
             selector = params.get("selector")
@@ -93,8 +105,11 @@ async def execute_page_action(
                 await page.fill(selector, text, timeout=config.action_timeout_ms)
             else:
                 await page.keyboard.type(text, delay=config.type_delay_ms)
-            preview = text[:30] + "..." if len(text) > 30 else text
-            parts.append(f"Typed '{preview}'")
+            if credential_ref:
+                parts.append(f"Typed credential '{credential_ref}'")
+            else:
+                preview = text[:30] + "..." if len(text) > 30 else text
+                parts.append(f"Typed '{preview}'")
         if key:
             await page.keyboard.press(key)
             parts.append(f"Pressed {key}")

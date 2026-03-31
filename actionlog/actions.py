@@ -108,7 +108,17 @@ def summarize_action(tool: str, action: str, params: dict) -> str:
                 return f"click '{selector_short}'"
             case "key_press":
                 text = params.get("text", "")
+                credential_ref = params.get("credential_ref", "")
                 key = params.get("key", "")
+                if credential_ref:
+                    ref_preview = (
+                        credential_ref[:30] + "..."
+                        if len(credential_ref) > 30
+                        else credential_ref
+                    )
+                    if key:
+                        return f"type credential '{ref_preview}' + press {key}"
+                    return f"type credential '{ref_preview}'"
                 if text and key:
                     preview = text[:20] + "..." if len(text) > 20 else text
                     return f"type '{preview}' + press {key}"
