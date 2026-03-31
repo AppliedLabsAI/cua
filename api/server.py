@@ -46,8 +46,9 @@ def _create_registry() -> InMemoryRunRegistry | ModalDictRunRegistry:
         try:
             return ModalDictRunRegistry(run_registry_dict)
         except Exception:
-            logger.warning(
-                "Failed to init ModalDictRunRegistry, falling back to in-memory"
+            logger.error(
+                "Failed to init ModalDictRunRegistry, falling back to in-memory",
+                exc_info=True,
             )
     return InMemoryRunRegistry()
 

@@ -38,12 +38,7 @@ class RunHandle(BaseModel):
     error: ApiError | None = None
 
 
-class _RunEntry(BaseModel):
-    """Serializable subset of RunHandle stored in modal.Dict."""
-
-    run_id: str
-    status_base_url: str
-    phase: RunPhase = RunPhase.RUNNING
+_SERIALIZABLE_FIELDS = {"run_id", "status_base_url", "phase"}
 
 
 class RunRegistry:
@@ -56,6 +51,9 @@ class RunRegistry:
         raise NotImplementedError
 
     def remove(self, run_id: str) -> RunHandle | None:
+        raise NotImplementedError
+
+    def contains(self, run_id: str) -> bool:
         raise NotImplementedError
 
 
@@ -74,6 +72,9 @@ class InMemoryRunRegistry(RunRegistry):
     def remove(self, run_id: str) -> RunHandle | None:
         return self._runs.pop(run_id, None)
 
+    def contains(self, run_id: str) -> bool:
+        return run_id in self._runs
+
 
 class ModalDictRunRegistry(RunRegistry):
     """Cross-container run registry backed by modal.Dict.
@@ -90,33 +91,20 @@ class ModalDictRunRegistry(RunRegistry):
 
     def add(self, handle: RunHandle) -> None:
         self._local[handle.run_id] = handle
-        entry = _RunEntry(
-            run_id=handle.run_id,
-            status_base_url=handle.status_base_url,
-            phase=handle.phase,
-        )
         try:
-            self._dict.put(handle.run_id, entry.model_dump())
+            self._dict.put(
+                handle.run_id,
+                handle.model_dump(include=_SERIALIZABLE_FIELDS),
+            )
         except Exception:
             logger.warning(
                 "Failed to persist run %s to modal.Dict", handle.run_id, exc_info=True
             )
 
     def get(self, run_id: str) -> RunHandle | None:
-        local = self._local.get(run_id)
-        if local is not None:
-            return local
-        # Check shared dict — caller (RunService.get_handle) will
-        # reconstruct the full RunHandle with the sandbox object.
-        try:
-            data = self._dict.get(run_id)
-        except Exception:
-            return None
-        if data is None:
-            return None
-        # Return None to signal "known run but no local handle" —
-        # RunService.get_handle will reconstruct from Modal.
-        return None
+        # Local cache only — on miss, RunService.get_handle reconstructs
+        # via modal.Sandbox.from_id() and re-adds to the registry.
+        return self._local.get(run_id)
 
     def remove(self, run_id: str) -> RunHandle | None:
         handle = self._local.pop(run_id, None)
