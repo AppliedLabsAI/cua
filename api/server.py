@@ -17,12 +17,8 @@ from api.errors import ApiErrorCode, coerce_http_error_response, error_response
 from api.modal_app import VOLUME_MOUNT, modal_app, recording_volume, run_registry_dict
 from api.models import DryRunResponse, RunConfig, RunResponse, RunStatus
 from api.recording_service import RecordingService
-from api.runs import (
-    InMemoryRunRegistry,
-    ModalDictRunRegistry,
-    RunService,
-    validate_run_config,
-)
+from api.runs.registry import InMemoryRunRegistry, ModalDictRunRegistry
+from api.runs.service import RunService, validate_run_config
 from telemetry import setup_telemetry
 from telemetry.middleware import instrument_fastapi
 
