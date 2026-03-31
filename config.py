@@ -21,12 +21,12 @@ class CUAConfig(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    directive: str
+    directive: str = Field(max_length=10_000)
     model: str = PRIMARY_MODEL
-    max_steps: int = 50
+    max_steps: int = Field(default=50, ge=1, le=200)
     thinking: Literal["minimal", "low", "medium", "high", "xhigh"] = "high"
-    width: int = 1920
-    height: int = 1080
+    width: int = Field(default=1920, ge=800, le=3840)
+    height: int = Field(default=1080, ge=600, le=2160)
     start_url: str | None = None
     proxy_url: str | None = None
     profile_name: str = "default"

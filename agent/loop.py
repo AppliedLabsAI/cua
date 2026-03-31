@@ -11,22 +11,49 @@ if TYPE_CHECKING:
     from credentials import SecretValue
 
 from pydantic_ai import ModelSettings
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.usage import UsageLimits
 
 from actionlog.actions import ActionLog
+from agent.circuit_breaker import CircuitBreaker, CircuitOpenError
 from agent.cua_agent import cua_agent
 from agent.deps import AgentDeps
 from agent.output import (
     collect_extracted_texts,
     extract_structured_output,
 )
-from agent.result import AgentResult
+from agent.result import AgentResult, make_error_result
 from bridge.execution import attach_page_context
 from bridge.router import ActionRouter
 from settings import PRIMARY_MODEL
 from telemetry.logging import C_BLUE_BOLD, C_DIM, C_RESET
 
 logger = logging.getLogger(__name__)
+
+
+def _error(
+    msg: str,
+    *,
+    deps: AgentDeps,
+    bridge: ActionRouter,
+    run_start: float,
+) -> AgentResult:
+    """Build an AgentResult for an error exit (thin wrapper over make_error_result)."""
+    return make_error_result(
+        msg,
+        step=deps.step,
+        run_start=run_start,
+        bridge=bridge,
+        total_input_tokens=deps.total_input_tokens,
+        total_output_tokens=deps.total_output_tokens,
+    )
+
+
+# Module-level circuit breaker shared across runs in the same process.
+# In Modal each sandbox is a separate process (one run), but in local dev
+# mode multiple sequential runs share this breaker — preventing repeated
+# attempts when the LLM provider is down.
+_llm_circuit = CircuitBreaker(failure_threshold=3, recovery_timeout_s=30.0)
 
 
 async def run_agent(
@@ -69,6 +96,8 @@ async def run_agent(
         initial_msg = directive
 
     try:
+        _llm_circuit.check()
+
         result = await cua_agent.run(
             initial_msg,
             deps=deps,
@@ -77,25 +106,32 @@ async def run_agent(
             usage_limits=UsageLimits(request_limit=max_steps),
         )
 
+        _llm_circuit.record_success()
         usage = result.usage()
         deps.total_input_tokens = usage.input_tokens or 0
         deps.total_output_tokens = usage.output_tokens or 0
 
         summary = result.output or ""
 
-    except Exception as e:
-        logger.error("Agent error: %s", e, exc_info=True)
-        return AgentResult(
-            success=False,
-            summary="",
-            action_count=deps.step,
-            action_log=bridge.action_log,
-            total_duration_ms=int((time.monotonic() - run_start) * 1000),
-            total_input_tokens=deps.total_input_tokens,
-            total_output_tokens=deps.total_output_tokens,
-            error=str(e),
-            extracted_texts=collect_extracted_texts(bridge.action_log),
+    except CircuitOpenError as e:
+        logger.error("LLM circuit breaker open: %s", e)
+        return _error(str(e), deps=deps, bridge=bridge, run_start=run_start)
+
+    except UsageLimitExceeded:
+        # Step limit reached — not a provider error, don't trip the breaker.
+        _llm_circuit.record_success()
+        logger.warning("Agent reached step limit (%d steps)", max_steps)
+        return _error(
+            f"Reached maximum step limit ({max_steps} steps)",
+            deps=deps,
+            bridge=bridge,
+            run_start=run_start,
         )
+
+    except Exception as e:
+        _llm_circuit.record_failure()
+        logger.error("Agent error: %s", e, exc_info=True)
+        return _error(str(e), deps=deps, bridge=bridge, run_start=run_start)
 
     # Post-loop structured extraction (only when caller provides a schema)
     extracted_texts = collect_extracted_texts(bridge.action_log)

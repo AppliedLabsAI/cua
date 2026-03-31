@@ -87,8 +87,13 @@ class RunService:
             return None
         try:
             return RunStatus.model_validate_json(status_path.read_text())
-        except Exception:
-            logger.warning("Failed to read persisted status for run %s", run_id)
+        except (ValidationError, ValueError, OSError) as exc:
+            logger.warning(
+                "Failed to read persisted status for run %s: %s",
+                run_id,
+                exc,
+                exc_info=True,
+            )
             return None
 
     async def get_handle(self, run_id: str) -> RunHandle | None:
@@ -107,6 +112,9 @@ class RunService:
             self._registry.add(handle)
             logger.info("Reconstructed handle for run %s from Modal", run_id)
             return handle
+        except (modal.exception.NotFoundError, KeyError) as exc:
+            logger.debug("Could not reconstruct handle for run %s: %s", run_id, exc)
+            return None
         except Exception:
             logger.warning(
                 "Could not reconstruct handle for run %s", run_id, exc_info=True
@@ -256,8 +264,12 @@ class RunService:
         handle.phase = RunPhase.TERMINATED
         try:
             await handle.sandbox.terminate.aio()
+        except modal.exception.NotFoundError:
+            logger.debug("Sandbox already gone for run %s", run_id)
         except Exception as exc:
-            logger.warning("Terminate call failed for run %s: %s", run_id, exc)
+            logger.warning(
+                "Terminate call failed for run %s: %s", run_id, exc, exc_info=True
+            )
 
         self.remove_handle(run_id)
         self._mark_run_inactive(run_id)

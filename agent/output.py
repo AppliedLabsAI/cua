@@ -112,8 +112,11 @@ async def extract_structured_output(
 
         return data, ext_input_tokens, ext_output_tokens
 
+    except (ValueError, TypeError, KeyError) as e:
+        logger.warning("Structured extraction parse error: %s", e)
+        return None, 0, 0
     except Exception as e:
-        logger.warning("Structured extraction failed: %s", e)
+        logger.warning("Structured extraction failed: %s", e, exc_info=True)
         return None, 0, 0
 
 
