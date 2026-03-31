@@ -35,6 +35,9 @@ recording_volume = modal.Volume.from_name(
     "cua-recordings", create_if_missing=True, version=2
 )
 
+MODAL_SANDBOX_CPU = 1.0
+MODAL_SANDBOX_MEMORY_MB = 1024
+
 sandbox_image = (
     modal.Image.from_registry("ubuntu:24.04")
     .env({"DEBIAN_FRONTEND": "noninteractive"})
@@ -151,4 +154,6 @@ async def create_cua_sandbox(
         timeout=config.timeout_seconds,
         env=env,
         volumes={"/recordings": recording_volume},
+        cpu=MODAL_SANDBOX_CPU,
+        memory=MODAL_SANDBOX_MEMORY_MB,
     )
