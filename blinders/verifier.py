@@ -85,12 +85,7 @@ class ScopeVerifier:
             if domain_block:
                 return domain_block
 
-            # Existing SSRF protection (kept — orthogonal defense)
-            ssrf = self.guardrails.check_url(url)
-            if not ssrf.allowed:
-                return ssrf.reason
-
-            # Existing navigation limit (kept — operational safeguard)
+            # Existing navigation limit path also performs URL/SSRF checks.
             nav = self.guardrails.check_navigation(url)
             if not nav.allowed:
                 return nav.reason

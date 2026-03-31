@@ -83,7 +83,9 @@ def _remove_old_screenshots(
     seen_parts: dict[int, ToolReturnPart] = {id(p): p for p, _ in to_remove}
     for pid, indices in parts_to_update.items():
         part = seen_parts[pid]
-        content = list(part.content)  # type: ignore[arg-type]
+        if not isinstance(part.content, list):
+            continue
+        content = list(part.content)
         for idx in indices:
             content[idx] = "[screenshot removed]"
         part.content = content

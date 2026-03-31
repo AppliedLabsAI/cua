@@ -39,15 +39,24 @@ class _CuaMarkdownConverter(MarkdownConverter):
 
     def convert_a(self, el: object, text: str, **kwargs: object) -> str:
         """Resolve relative URLs and produce inline markdown links."""
-        href = el.get("href", "") if hasattr(el, "get") else ""  # type: ignore[union-attr]
+        href = _element_attr(el, "href")
         if not href or href.startswith(("#", "javascript:", "mailto:")):
             return text
         if self._base_url and not href.startswith(("http://", "https://", "//")):
             href = urljoin(self._base_url, href)
-        title = el.get("title", "") if hasattr(el, "get") else ""  # type: ignore[union-attr]
+        title = _element_attr(el, "title")
         if title:
             return f'[{text}]({href} "{title}")'
         return f"[{text}]({href})"
+
+
+def _element_attr(el: object, name: str) -> str:
+    """Best-effort attribute getter for markdownify element objects."""
+    getter = getattr(el, "get", None)
+    if getter is None or not callable(getter):
+        return ""
+    value = getter(name, "")
+    return value if isinstance(value, str) else ""
 
 
 def html_to_markdown(html: str, base_url: str = "") -> str:
