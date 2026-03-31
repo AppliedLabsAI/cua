@@ -47,9 +47,8 @@ cua_agent: Agent[AgentDeps, str] = Agent(
     history_processors=[prune_context],
     capabilities=[build_hooks()],
     instructions=(
-        "You are a browser automation agent. You MUST use the browser_dom tool "
-        "to interact with web pages. NEVER answer from memory — always navigate "
-        "to the page and read the actual content."
+        "Use the browser_dom tool to interact with web pages. "
+        "Navigate to pages and read actual content rather than answering from memory."
     ),
     model_settings=ModelSettings(max_tokens=16384),
 )
