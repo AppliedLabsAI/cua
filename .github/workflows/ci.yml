@@ -30,7 +30,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Type check
-        run: uv run ty check
+        run: uvx ty@0.0.24 check
 
       - name: Offline tests with coverage
         env:
