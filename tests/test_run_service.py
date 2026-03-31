@@ -86,7 +86,7 @@ def _make_service(tmp_path) -> RunService:
         modal_app=MagicMock(),
         volume_mount=str(tmp_path),
         volume=volume,
-        get_http_client=lambda: MagicMock(),
+        get_http_client=MagicMock,
     )
 
 

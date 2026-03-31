@@ -14,6 +14,12 @@ from api.models import RunStatusValue
 
 
 class _AgentResult(SimpleNamespace):
+    """Minimal stub matching AgentResult fields used by RunOutcome.from_agent_result.
+
+    Expected fields: success, summary, data, extracted_texts, error,
+    action_count, total_duration_ms, total_input_tokens, total_output_tokens.
+    """
+
     success: bool
 
 

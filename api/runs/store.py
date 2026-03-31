@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
@@ -17,16 +18,17 @@ logger = logging.getLogger(__name__)
 class PersistedRunStore:
     """Read persisted run status and reconstruct replay streams."""
 
-    def __init__(self, *, volume_mount: str, volume) -> None:
+    def __init__(self, *, volume_mount: str, volume: Any | None = None) -> None:
         self._volume_mount = volume_mount
         self._volume = volume
 
     async def load_status(self, run_id: str) -> RunStatus | None:
         """Try to load persisted status from the recordings volume."""
-        try:
-            await self._volume.reload.aio()
-        except Exception:
-            logger.debug("Volume reload failed", exc_info=True)
+        if self._volume is not None:
+            try:
+                await self._volume.reload.aio()
+            except Exception:
+                logger.debug("Volume reload failed", exc_info=True)
 
         status_path = Path(self._volume_mount) / run_id / "status.json"
         if not status_path.exists():
@@ -59,9 +61,7 @@ class PersistedRunStore:
                 if action.step > start_after:
                     payload = action.model_dump()
                     yield f"id: {action.step}\ndata: {json.dumps(payload)}\n\n"
-            yield (
-                f"event: complete\ndata: {json.dumps({'status': persisted.status})}\n\n"
-            )
+            yield (f"event: complete\ndata: {persisted.model_dump_json()}\n\n")
 
         return StreamingResponse(
             replay(),

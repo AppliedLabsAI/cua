@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agent.result import AgentResult
 
 import modal
 from opentelemetry import trace as otel_trace
@@ -101,7 +104,7 @@ class RunOutcome:
     @classmethod
     def from_agent_result(
         cls,
-        result,
+        result: AgentResult,
     ) -> RunOutcome:
         if result.success:
             return cls(

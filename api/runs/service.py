@@ -482,6 +482,7 @@ class RunService:
             f"Run {run_id} not found",
             details={"run_id": run_id},
         )
+        raise RuntimeError("unreachable: raise_api_error did not raise")
 
     async def stream_run(self, run_id: str, request: Request) -> StreamingResponse:
         """Proxy SSE events from the sandbox status API with persisted fallback."""
