@@ -37,6 +37,10 @@ class _State(StrEnum):
 class CircuitBreaker:
     """Process-local circuit breaker for LLM provider calls.
 
+    Designed for single-threaded asyncio use (one event loop per process).
+    Not safe for concurrent multi-threaded access — if needed, wrap calls
+    to check/record_success/record_failure with a ``threading.Lock``.
+
     Usage::
 
         breaker = CircuitBreaker()

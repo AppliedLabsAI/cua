@@ -118,8 +118,8 @@ async def run_agent(
         return _error(str(e), deps=deps, bridge=bridge, run_start=run_start)
 
     except UsageLimitExceeded:
-        # Step limit reached — not a provider error, don't trip the breaker.
-        _llm_circuit.record_success()
+        # Step limit reached — orthogonal to provider health.
+        # Don't interact with the breaker (preserve any existing failure count).
         logger.warning("Agent reached step limit (%d steps)", max_steps)
         return _error(
             f"Reached maximum step limit ({max_steps} steps)",
