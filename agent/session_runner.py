@@ -167,7 +167,9 @@ async def run_sandbox_session(
                             recording.output_dir,
                         )
                 except Exception as rec_exc:
-                    logger.warning("Recording finalization failed: %s", rec_exc)
+                    logger.warning(
+                        "Recording finalization failed: %s", rec_exc, exc_info=True
+                    )
             await browser.close()
             logger.info("Browser closed")
 

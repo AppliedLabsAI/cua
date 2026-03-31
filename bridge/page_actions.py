@@ -199,8 +199,13 @@ async def _extract_markdown(page: Any) -> str:
 
             md = html_to_markdown(data["html"], base_url=data.get("url", ""))
             return truncate_markdown(md)
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            logger.warning("Markdown extraction parse error: %s", exc)
         except Exception:
-            logger.warning("Markdown extraction failed, falling back to innerText")
+            logger.warning(
+                "Markdown extraction failed, falling back to innerText",
+                exc_info=True,
+            )
     # Fallback to plain innerText
     return await page.inner_text("body")
 

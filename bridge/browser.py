@@ -163,7 +163,7 @@ class BrowserManager:
             if self._browser:
                 await self._browser.close()
         except Exception:
-            pass  # Browser process may already be dead
+            logger.debug("Browser close failed (process may be dead)", exc_info=True)
         finally:
             self._browser = None
             self._context = None
@@ -172,6 +172,8 @@ class BrowserManager:
                 if self._playwright:
                     await self._playwright.stop()
             except Exception:
-                pass  # Connection may be closed
+                logger.debug(
+                    "Playwright stop failed (connection may be closed)", exc_info=True
+                )
             finally:
                 self._playwright = None

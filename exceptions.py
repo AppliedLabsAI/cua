@@ -25,3 +25,11 @@ class ConfigError(CUAError):
 
 class SandboxError(CUAError):
     """Error creating or managing the sandbox environment."""
+
+
+class LLMError(CUAError):
+    """Error communicating with the LLM provider (rate limit, timeout, etc.)."""
+
+
+class RecordingError(CUAError):
+    """Error during session recording or trace upload."""

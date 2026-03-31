@@ -28,6 +28,7 @@ from telemetry.logging import C_DIM, C_RESET, fmt_status, fmt_timing
 if TYPE_CHECKING:
     from bridge.browser import BrowserManager
 
+logger = logging.getLogger(__name__)
 _seq_log = logging.getLogger("bridge.sequence")
 
 _TOOL_ACTION_CONFIG = PageActionConfig(
@@ -297,7 +298,14 @@ async def execute_dom_action(
         return ActionResult(
             error=f"{normalized_action} timed out after {timeout_used // 1000}s"
         )
+    except (ValueError, KeyError) as exc:
+        return ActionResult(
+            error=f"browser_dom.{normalized_action} invalid input: {exc}"
+        )
     except Exception as exc:
+        logger.debug(
+            "browser_dom.%s unexpected error", normalized_action, exc_info=True
+        )
         return ActionResult(error=f"browser_dom.{normalized_action} failed: {exc}")
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from settings import PRIMARY_MODEL
 
@@ -34,10 +34,10 @@ class RecordingSettings(BaseModel):
 class GuardrailSettings(BaseModel):
     """API-facing representation of guardrail configuration."""
 
-    allowed_domains: list[str] | None = None
-    blocked_domains: list[str] | None = None
-    max_urls_visited: int = 50
-    max_consecutive_errors: int = 5
+    allowed_domains: list[str] | None = Field(default=None, max_length=100)
+    blocked_domains: list[str] | None = Field(default=None, max_length=100)
+    max_urls_visited: int = Field(default=50, ge=1, le=500)
+    max_consecutive_errors: int = Field(default=5, ge=1, le=50)
     allow_private_networks: bool = False
     enable_llm_action_check: bool = True
 
@@ -65,15 +65,22 @@ class RunConfig(BaseModel):
     max_steps: int = Field(default=50, ge=1, le=200)
     timeout_seconds: int = Field(default=600, ge=30, le=3600)
     thinking: Literal["minimal", "low", "medium", "high", "xhigh"] = "high"
-    display_width: int = 1280
-    display_height: int = 720
-    profile: str = "default"
-    start_url: str | None = None
+    display_width: int = Field(default=1280, ge=800, le=3840)
+    display_height: int = Field(default=720, ge=600, le=2160)
+    profile: str = Field(default="default", max_length=100)
+    start_url: str | None = Field(default=None, max_length=2048)
     credentials: CredentialsMap | None = None
-    proxy: str | None = None
+    proxy: str | None = Field(default=None, max_length=2048)
     guardrails: GuardrailSettings | None = None
     recording: RecordingSettings | None = None
     output_schema: dict[str, Any] | None = None
+
+    @field_validator("credentials")
+    @classmethod
+    def cap_credential_count(cls, v: CredentialsMap | None) -> CredentialsMap | None:
+        if v is not None and len(v) > 20:
+            raise ValueError("Maximum 20 credentials allowed per run")
+        return v
 
 
 class RunResponse(BaseModel):

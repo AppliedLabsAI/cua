@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
+import logging
 from typing import TYPE_CHECKING
 
 from patchright.async_api import Page
@@ -12,6 +13,8 @@ from patchright.async_api import Page
 from bridge import DOM_MARKER
 from bridge.browser import _AUTO_DOM_MAX_CHARS
 from bridge.js_helpers import PAGE_CONTEXT_INIT_JS
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from bridge.browser import BrowserManager
@@ -52,7 +55,11 @@ async def quick_dom_snapshot(
             return ""
         data = json.loads(raw)
         return f"[{data['title']}] {data['url']}\n{data['dom']}"
-    except Exception:
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        logger.debug("DOM snapshot parse failed: %s", exc)
+        return ""
+    except Exception as exc:
+        logger.debug("DOM snapshot failed: %s: %s", type(exc).__name__, exc)
         return ""
 
 
@@ -95,7 +102,10 @@ async def quick_axtree_snapshot(
         if len(snapshot) > max_chars:
             snapshot = snapshot[:max_chars] + "\n[...truncated]"
         return header + snapshot
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "Accessibility tree snapshot failed: %s: %s", type(exc).__name__, exc
+        )
         return ""
 
 
@@ -114,7 +124,11 @@ async def quick_page_map(
             return ""
         data = json.loads(raw)
         return data["map"]
-    except Exception:
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        logger.debug("Page map parse failed: %s", exc)
+        return ""
+    except Exception as exc:
+        logger.debug("Page map failed: %s: %s", type(exc).__name__, exc)
         return ""
 
 
@@ -145,7 +159,8 @@ async def stop_mutation_observer(page: Page) -> str:
     try:
         summary = await page.evaluate(_STOP_OBSERVING_JS, [PAGE_CONTEXT_INIT_JS])
         return f"[{summary}]" if summary else ""
-    except Exception:
+    except Exception as exc:
+        logger.debug("Mutation observer stop failed: %s: %s", type(exc).__name__, exc)
         return ""
 
 
