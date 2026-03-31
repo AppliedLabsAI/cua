@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from patchright.async_api import Page
 
 from bridge import DOM_MARKER, ActionResult
-from bridge.browser import _DOM_MAX_CHARS
+from bridge.browser import DOM_MAX_CHARS
 from bridge.observation import (
     attach_page_context,
     get_dom_snapshot,
@@ -245,7 +245,7 @@ async def _handle_get_dom(
     dom = await get_dom_snapshot(
         ctx.page,
         selector=params.get("selector"),
-        max_chars=_DOM_MAX_CHARS,
+        max_chars=DOM_MAX_CHARS,
         filter_config=ctx.filter_config,
     )
     if dom is None:
@@ -265,6 +265,159 @@ _ACTION_HANDLERS = {
     "select": _handle_select,
     "wait_for": _handle_wait_for,
 }
+
+
+@dataclass(frozen=True)
+class SequenceExecutor:
+    """Execute `execute_sequence` calls with isolated step helpers."""
+
+    browser: BrowserManager
+    filter_config: dict | None = None
+    credentials: dict[str, SecretValue] | None = None
+
+    async def run(self, params: dict) -> ActionResult:
+        """Execute a sequence of browser actions in one tool call."""
+        from actionlog.actions import summarize_action
+        from telemetry import get_tracer
+        from telemetry.spans import (
+            ATTR_TOOL_ACTION,
+            ATTR_TOOL_ERROR,
+            ATTR_TOOL_SELECTOR,
+            ATTR_TOOL_SUCCESS,
+            ATTR_TOOL_URL,
+        )
+
+        steps = params.get("steps")
+        if not steps or not isinstance(steps, list):
+            return ActionResult(error="execute_sequence requires a 'steps' array")
+
+        tracer = get_tracer()
+        results: list[str] = []
+        final_result = ActionResult(text="")
+
+        for index, raw_step in enumerate(steps):
+            step = self._validate_step(raw_step, index=index, results=results)
+            if isinstance(step, ActionResult):
+                return step
+
+            action = step["action"]
+            is_last = index == len(steps) - 1
+            step_start = time.monotonic()
+
+            with tracer.start_as_current_span(
+                "cua.sequence.step",
+                attributes={
+                    "cua.sequence.index": index + 1,
+                    "cua.sequence.total": len(steps),
+                    ATTR_TOOL_ACTION: action,
+                    ATTR_TOOL_SELECTOR: step.get("selector", ""),
+                    ATTR_TOOL_URL: step.get("url", ""),
+                },
+            ) as step_span:
+                result = await execute_dom_action(
+                    action,
+                    step,
+                    self.browser,
+                    include_page_context=is_last,
+                    filter_config=self.filter_config,
+                    credentials=self.credentials,
+                )
+                step_ms = int((time.monotonic() - step_start) * 1000)
+                summary = summarize_action("browser_dom", action, step)
+
+                if result.error:
+                    step_span.set_attributes(
+                        {
+                            ATTR_TOOL_SUCCESS: False,
+                            ATTR_TOOL_ERROR: result.error[:500],
+                        }
+                    )
+                    _seq_log.info(
+                        "  %s[%d/%d]%s %s %s %s",
+                        C_DIM,
+                        index + 1,
+                        len(steps),
+                        C_RESET,
+                        summary,
+                        fmt_timing(step_ms),
+                        fmt_status(result.error),
+                    )
+                    return await self._step_error_result(
+                        index=index,
+                        action=action,
+                        error=result.error,
+                        results=results,
+                    )
+
+                step_span.set_attributes({ATTR_TOOL_SUCCESS: True})
+                _seq_log.info(
+                    "  %s[%d/%d]%s %s %s %s",
+                    C_DIM,
+                    index + 1,
+                    len(steps),
+                    C_RESET,
+                    summary,
+                    fmt_timing(step_ms),
+                    fmt_status(None),
+                )
+
+            final_result = result
+            results.append(
+                f"Step {index + 1} ({action}) [{step_ms}ms]: {result.text or 'OK'}"
+            )
+
+        combined_text = "\n".join(results)
+        if DOM_MARKER not in (final_result.text or ""):
+            combined_text += await attach_page_context(self.browser, self.filter_config)
+        return ActionResult(
+            screenshot_b64=final_result.screenshot_b64,
+            text=combined_text,
+        )
+
+    def _validate_step(
+        self,
+        raw_step: Any,
+        *,
+        index: int,
+        results: list[str],
+    ) -> dict[str, Any] | ActionResult:
+        if not isinstance(raw_step, dict):
+            return ActionResult(
+                error=f"Step {index + 1}: invalid step format (expected object)",
+                text="\n".join(results) if results else None,
+            )
+
+        step = cast(dict[str, Any], raw_step)
+        action = step.get("action")
+        if not isinstance(action, str) or not action.strip():
+            return ActionResult(
+                error=f"Step {index + 1}: missing 'action'",
+                text="\n".join(results) if results else None,
+            )
+        if action == "execute_sequence":
+            return ActionResult(
+                error=f"Step {index + 1}: nested execute_sequence not allowed",
+                text="\n".join(results) if results else None,
+            )
+        return step
+
+    async def _step_error_result(
+        self,
+        *,
+        index: int,
+        action: str,
+        error: str,
+        results: list[str],
+    ) -> ActionResult:
+        try:
+            b64 = await page_screenshot(self.browser.page)
+        except Exception:
+            b64 = None
+        return ActionResult(
+            screenshot_b64=b64,
+            text="\n".join(results) if results else None,
+            error=f"Step {index + 1} ({action}): {error}",
+        )
 
 
 async def execute_dom_action(
@@ -288,12 +441,11 @@ async def execute_dom_action(
 
     try:
         if normalized_action == "execute_sequence":
-            return await _execute_sequence(
-                params,
-                browser,
+            return await SequenceExecutor(
+                browser=browser,
                 filter_config=filter_config,
                 credentials=credentials,
-            )
+            ).run(params)
 
         handler = _ACTION_HANDLERS.get(normalized_action)
         if handler is None:
@@ -319,124 +471,3 @@ async def execute_dom_action(
             "browser_dom.%s unexpected error", normalized_action, exc_info=True
         )
         return ActionResult(error=f"browser_dom.{normalized_action} failed: {exc}")
-
-
-async def _execute_sequence(
-    params: dict,
-    browser: BrowserManager,
-    filter_config: dict | None = None,
-    credentials: dict[str, SecretValue] | None = None,
-) -> ActionResult:
-    """Execute a sequence of browser actions in one tool call."""
-    from actionlog.actions import summarize_action
-    from telemetry import get_tracer
-    from telemetry.spans import (
-        ATTR_TOOL_ACTION,
-        ATTR_TOOL_ERROR,
-        ATTR_TOOL_SELECTOR,
-        ATTR_TOOL_SUCCESS,
-        ATTR_TOOL_URL,
-    )
-
-    steps = params.get("steps")
-    if not steps or not isinstance(steps, list):
-        return ActionResult(error="execute_sequence requires a 'steps' array")
-
-    tracer = get_tracer()
-    results: list[str] = []
-    last_step = len(steps) - 1
-    final_result = ActionResult(text="")
-
-    for i, raw_step in enumerate(steps):
-        if not isinstance(raw_step, dict):
-            return ActionResult(
-                error=f"Step {i + 1}: invalid step format (expected object)",
-                text="\n".join(results) if results else None,
-            )
-
-        step = cast(dict[str, Any], raw_step)
-        action = step.get("action")
-        if not isinstance(action, str) or not action.strip():
-            return ActionResult(
-                error=f"Step {i + 1}: missing 'action'",
-                text="\n".join(results) if results else None,
-            )
-        if action == "execute_sequence":
-            return ActionResult(
-                error=f"Step {i + 1}: nested execute_sequence not allowed",
-                text="\n".join(results) if results else None,
-            )
-
-        is_last = i == last_step
-        step_start = time.monotonic()
-
-        with tracer.start_as_current_span(
-            "cua.sequence.step",
-            attributes={
-                "cua.sequence.index": i + 1,
-                "cua.sequence.total": len(steps),
-                ATTR_TOOL_ACTION: action,
-                ATTR_TOOL_SELECTOR: step.get("selector", ""),
-                ATTR_TOOL_URL: step.get("url", ""),
-            },
-        ) as step_span:
-            result = await execute_dom_action(
-                action,
-                step,
-                browser,
-                include_page_context=is_last,
-                filter_config=filter_config,
-                credentials=credentials,
-            )
-            step_ms = int((time.monotonic() - step_start) * 1000)
-            summary = summarize_action("browser_dom", action, step)
-
-            if result.error:
-                step_span.set_attributes(
-                    {
-                        ATTR_TOOL_SUCCESS: False,
-                        ATTR_TOOL_ERROR: result.error[:500],
-                    }
-                )
-                _seq_log.info(
-                    "  %s[%d/%d]%s %s %s %s",
-                    C_DIM,
-                    i + 1,
-                    len(steps),
-                    C_RESET,
-                    summary,
-                    fmt_timing(step_ms),
-                    fmt_status(result.error),
-                )
-                try:
-                    b64 = await page_screenshot(browser.page)
-                except Exception:
-                    b64 = None
-                return ActionResult(
-                    screenshot_b64=b64,
-                    text="\n".join(results) if results else None,
-                    error=f"Step {i + 1} ({action}): {result.error}",
-                )
-
-            step_span.set_attributes({ATTR_TOOL_SUCCESS: True})
-            _seq_log.info(
-                "  %s[%d/%d]%s %s %s %s",
-                C_DIM,
-                i + 1,
-                len(steps),
-                C_RESET,
-                summary,
-                fmt_timing(step_ms),
-                fmt_status(None),
-            )
-
-        final_result = result
-        results.append(f"Step {i + 1} ({action}) [{step_ms}ms]: {result.text or 'OK'}")
-
-    combined_text = "\n".join(results)
-    if DOM_MARKER not in (final_result.text or ""):
-        combined_text += await attach_page_context(browser, filter_config)
-    return ActionResult(
-        screenshot_b64=final_result.screenshot_b64,
-        text=combined_text,
-    )

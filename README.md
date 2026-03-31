@@ -172,10 +172,12 @@ cua/
 ├── playbooks/       Playbook system (schema, store, runner, parser, auth)
 │   └── definitions/ YAML playbook files
 ├── agent/           LLM agent loop (fallback path)
+│   └── session/     Sandbox session runner + finalization
 ├── actionlog/       Action logging and persistence
 ├── blinders/        Cognitive Blinders (scope, DOM filters, verifier)
 ├── bridge/          Browser lifecycle, DOM execution, CAPTCHA handling, router
-├── api/             FastAPI server, API models, SSE streaming, run registry
+├── api/             FastAPI server, API models, recording, sandbox streaming
+│   └── runs/        Run service, registry, and persisted status store
 ├── evaluation/      Local evaluation suites, scoring, and benchmark runner
 ├── guardrails/      Domain/action/SSRF safety engine
 ├── recording/       Session recording (Playwright tracing)

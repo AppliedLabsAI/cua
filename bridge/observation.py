@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from patchright.async_api import Page
 
 from bridge import DOM_MARKER
-from bridge.browser import _AUTO_DOM_MAX_CHARS
+from bridge.browser import AUTO_DOM_MAX_CHARS
 from bridge.js_helpers import PAGE_CONTEXT_INIT_JS
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ _STOP_OBSERVING_JS = """([initJS]) => {
 
 async def quick_dom_snapshot(
     page: Page,
-    max_chars: int = _AUTO_DOM_MAX_CHARS,
+    max_chars: int = AUTO_DOM_MAX_CHARS,
     filter_config: dict | None = None,
 ) -> str:
     """Fast DOM snapshot via a self-healing page helper."""
@@ -88,9 +88,7 @@ async def get_dom_snapshot(
         return None
 
 
-async def quick_axtree_snapshot(
-    page: Page, max_chars: int = _AUTO_DOM_MAX_CHARS
-) -> str:
+async def quick_axtree_snapshot(page: Page, max_chars: int = AUTO_DOM_MAX_CHARS) -> str:
     """Accessibility tree snapshot fallback."""
     try:
         snapshot = await page.locator("body").aria_snapshot()

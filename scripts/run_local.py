@@ -170,7 +170,6 @@ async def _run_agent(
         guardrail_config=guardrail_config,
         blinders=blinders,
         directive=directive,
-        recording=recording,
     )
 
     try:

@@ -11,7 +11,7 @@ from actionlog.actions import ActionLog, format_sse_event
 from api import streaming
 from api.errors import ApiErrorCode
 from api.models import RunStatus
-from api.run_registry import InMemoryRunRegistry, RunHandle, RunPhase
+from api.runs.registry import InMemoryRunRegistry, RunHandle, RunPhase
 
 # ---------------------------------------------------------------------------
 # Helpers

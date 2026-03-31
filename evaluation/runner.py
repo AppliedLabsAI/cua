@@ -146,7 +146,6 @@ async def _run_agent_case(
             guardrail_config=guardrail_config,
             blinders=blinders,
             directive=case.directive,
-            recording=runtime.recording,
         )
 
         from credentials import resolve_credentials
