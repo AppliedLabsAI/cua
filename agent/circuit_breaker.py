@@ -106,5 +106,5 @@ class CircuitBreaker:
                     self._consecutive_failures,
                     self._recovery_timeout_s,
                 )
+                self._opened_at = time.monotonic()
             self._state = _State.OPEN
-            self._opened_at = time.monotonic()
