@@ -68,12 +68,6 @@ async def run_sandbox_session(
         active_sessions().add(1)
 
         browser = BrowserManager()
-        finalizer = RunFinalizer(
-            run_id=run_id,
-            browser=browser,
-            recording=recording,
-            recording_upload=config.recording_config.upload,
-        )
         try:
             with tracer.start_as_current_span(AGENT_SETUP) as setup_span:
                 with tracer.start_as_current_span(BROWSER_LAUNCH):
@@ -110,9 +104,16 @@ async def run_sandbox_session(
         except Exception as exc:
             logger.error("Setup failed: %s", exc)
             run_span.record_exception(exc)
+            # recording may have started before the failure — use it if set
+            setup_finalizer = RunFinalizer(
+                run_id=run_id,
+                browser=browser,
+                recording=recording,
+                recording_upload=config.recording_config.upload,
+            )
             outcome = RunOutcome.setup_failed(run_id, exc)
             run_span.set_status(outcome.trace_status, outcome.trace_message or "")
-            return await finalizer.finalize(outcome)
+            return await setup_finalizer.finalize(outcome)
 
         finalizer = RunFinalizer(
             run_id=run_id,

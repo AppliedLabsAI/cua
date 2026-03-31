@@ -350,12 +350,13 @@ class ActionRouter:
                 filter_config=self._filter_config,
                 credentials=credentials,
             )
-            result = await self._post_navigation_phase(
-                action,
-                page_url_before,
-                result,
-                browser_span=browser_span,
-            )
+            if action in _CAPTCHA_CHECK_ACTIONS:
+                result = await self._post_navigation_phase(
+                    action,
+                    page_url_before,
+                    result,
+                    browser_span=browser_span,
+                )
             result = self._apply_dom_blinders(result)
             if result.text:
                 browser_span.set_attribute(ATTR_BROWSER_DOM_CHARS, len(result.text))
@@ -369,8 +370,6 @@ class ActionRouter:
         *,
         browser_span,
     ) -> ActionResult:
-        if action not in _CAPTCHA_CHECK_ACTIONS:
-            return result
         if not self._skip_captcha:
             result = await self._handle_captcha(result)
 

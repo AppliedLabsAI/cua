@@ -76,7 +76,7 @@ async def test_run_finalizer_persists_cleans_up_and_records_metrics():
             "agent.session.finalizer.persist_status", new=AsyncMock()
         ) as persist_status,
         patch(
-            "agent.session.finalizer.commit_recording_volume",
+            "agent.session.finalizer._commit_recording_volume",
             new=AsyncMock(),
         ) as commit_recording_volume,
         patch("agent.session.finalizer.active_sessions", return_value=active_sessions),

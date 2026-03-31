@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _RECORDING_VOLUME_NAME = "cua-recordings"
 
 
-async def commit_recording_volume() -> None:
+async def _commit_recording_volume() -> None:
     """Commit the recordings volume so the outer API can read persisted data."""
     try:
         vol = modal.Volume.from_name(_RECORDING_VOLUME_NAME)
@@ -160,7 +160,7 @@ class RunFinalizer:
                 status=outcome.status,
             )
             await persist_status(f"/recordings/{self._run_id}")
-            await commit_recording_volume()
+            await _commit_recording_volume()
         except Exception:
             logger.warning("Failed to persist run state", exc_info=True)
 
