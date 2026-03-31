@@ -14,10 +14,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.auth import auth_settings, verify_api_key
 from api.errors import ApiErrorCode, coerce_http_error_response, error_response
-from api.modal_app import VOLUME_MOUNT, modal_app, recording_volume
+from api.modal_app import VOLUME_MOUNT, modal_app, recording_volume, run_registry_dict
 from api.models import RunConfig, RunResponse, RunStatus
 from api.recording_service import RecordingService
-from api.run_registry import InMemoryRunRegistry
+from api.run_registry import InMemoryRunRegistry, ModalDictRunRegistry
 from api.run_service import RunService
 from telemetry import setup_telemetry
 from telemetry.middleware import instrument_fastapi
@@ -38,7 +38,22 @@ async def _verify_api_key(
     await verify_api_key(credentials)
 
 
-_run_registry = InMemoryRunRegistry()
+def _create_registry() -> InMemoryRunRegistry | ModalDictRunRegistry:
+    """Use ModalDictRunRegistry in production, InMemoryRunRegistry locally."""
+    from settings import get_settings
+
+    if get_settings().environment != "local":
+        try:
+            return ModalDictRunRegistry(run_registry_dict)
+        except Exception:
+            logger.error(
+                "Failed to init ModalDictRunRegistry, falling back to in-memory",
+                exc_info=True,
+            )
+    return InMemoryRunRegistry()
+
+
+_run_registry = _create_registry()
 
 _http_client: httpx.AsyncClient | None = None
 
