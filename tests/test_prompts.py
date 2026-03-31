@@ -10,8 +10,8 @@ class TestBuildSystemPrompt:
     def test_basic_prompt(self):
         prompt = build_system_prompt(directive="Go to example.com")
         assert "Go to example.com" in prompt
-        assert "## Task" in prompt
-        assert "## Rules" in prompt
+        assert "<task>" in prompt
+        assert "<rules>" in prompt
 
     def test_includes_actions(self):
         prompt = build_system_prompt(directive="test")
@@ -44,14 +44,14 @@ class TestBuildSystemPrompt:
         )
         assert "## Research Mode" in prompt
         assert "Read thoroughly." in prompt
-        # Profile section should appear before ## Task
-        task_idx = prompt.index("## Task")
+        # Profile section should appear before <task>
+        task_idx = prompt.index("<task>")
         profile_idx = prompt.index("## Research Mode")
         assert profile_idx < task_idx
 
     def test_no_profile(self):
         prompt = build_system_prompt(directive="test", profile_prompt=None)
-        assert "## Task" in prompt
+        assert "<task>" in prompt
 
     def test_credentials_and_profile(self):
         creds = {"key": SecretValue("secret-value-123")}
@@ -63,4 +63,4 @@ class TestBuildSystemPrompt:
         assert "<robot_credentials>" in prompt
         assert "secret-value-123" not in prompt
         assert "## Custom" in prompt
-        assert "## Task" in prompt
+        assert "<task>" in prompt
