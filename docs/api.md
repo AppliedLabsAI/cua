@@ -6,6 +6,7 @@ CUA deploys to [Modal](https://modal.com) as a managed API. Each run spawns an i
 
 | Endpoint | Method | Description |
 |---|---|---|
+| `/runs/dry-run` | POST | Validate a run config without executing. Returns checks, warnings, and config summary |
 | `/runs` | POST | Create a run. Returns `{run_id, status, status_url, stream_url}` |
 | `/runs/{run_id}` | GET | Poll run status. Works during execution and after completion |
 | `/runs/{run_id}/stream` | GET | SSE event stream with replay and `Last-Event-ID` support |
@@ -28,6 +29,44 @@ CUA deploys to [Modal](https://modal.com) as a managed API. Each run spawns an i
 | `guardrails` | object | null | Domain/action safety config |
 | `recording` | object | null | `{"enabled": true, "trace": true}` |
 | `output_schema` | object | null | JSON schema for structured output extraction |
+
+## Dry Run (`POST /runs/dry-run`)
+
+Validates a run configuration without spawning a sandbox or making LLM calls. Accepts the same request body as `POST /runs` and returns validation results:
+
+```bash
+curl -X POST https://<workspace>--cua-serve.modal.run/runs/dry-run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{"directive": "Go to example.com", "profile": "default"}'
+```
+
+```json
+{
+  "valid": true,
+  "checks": [
+    {"name": "profile", "passed": true, "message": "Profile 'default' loaded"},
+    {"name": "credentials", "passed": true, "message": "No credentials (anonymous run)"},
+    {"name": "guardrails", "passed": true, "message": "Default guardrails"},
+    {"name": "model", "passed": true, "message": "Model: google-gla:gemini-3-flash-preview"}
+  ],
+  "warnings": [],
+  "config_summary": {
+    "model": "google-gla:gemini-3-flash-preview",
+    "max_steps": 50,
+    "timeout_seconds": 600,
+    "thinking": "high",
+    "display": "1280x720",
+    "profile": "default",
+    "has_credentials": false,
+    "has_guardrails": false,
+    "has_start_url": false,
+    "has_output_schema": false
+  }
+}
+```
+
+Use this to validate configs in CI pipelines or before submitting runs.
 
 ### Error Shape
 

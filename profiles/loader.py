@@ -6,6 +6,7 @@ the agent for different use cases without changing the tools or agent loop.
 
 from __future__ import annotations
 
+import functools
 import re
 from pathlib import Path
 
@@ -29,6 +30,7 @@ class Profile(BaseModel):
 _PROFILE_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
+@functools.lru_cache(maxsize=32)
 def load_profile(name: str) -> Profile:
     """Load a profile by name from the profiles/ directory.
 
