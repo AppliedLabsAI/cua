@@ -22,6 +22,10 @@ from telemetry.middleware import instrument_fastapi
 
 logger = logging.getLogger(__name__)
 
+MODAL_API_CONCURRENCY = 50
+MODAL_API_BUFFER_CONTAINERS = 1
+MODAL_API_SCALEDOWN_WINDOW_SECONDS = 120
+
 # --- API key authentication ---
 _security = HTTPBearer(auto_error=False)
 
@@ -87,7 +91,10 @@ _recording_service = RecordingService(
 @modal_app.function(
     timeout=3600,
     volumes={VOLUME_MOUNT: recording_volume},
+    buffer_containers=MODAL_API_BUFFER_CONTAINERS,
+    scaledown_window=MODAL_API_SCALEDOWN_WINDOW_SECONDS,
 )
+@modal.concurrent(max_inputs=MODAL_API_CONCURRENCY)
 @modal.asgi_app()
 def serve():
     """Serve the CUA FastAPI app as a Modal web endpoint."""

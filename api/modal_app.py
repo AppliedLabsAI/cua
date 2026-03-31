@@ -36,7 +36,6 @@ modal_app = modal.App(
     .add_local_dir(
         str(PROJECT_ROOT),
         remote_path="/opt/cua",
-        copy=True,
         ignore=_ignore,
     )
     .env({"PYTHONPATH": "/opt/cua"})
