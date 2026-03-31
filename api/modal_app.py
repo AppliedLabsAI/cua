@@ -47,3 +47,5 @@ modal_app = modal.App(
 recording_volume = modal.Volume.from_name(
     "cua-recordings", create_if_missing=True, version=2
 )
+
+run_registry_dict = modal.Dict.from_name("cua-run-registry", create_if_missing=True)
