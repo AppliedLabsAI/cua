@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from api.errors import ApiError
+
 
 class RunPhase(StrEnum):
     """Lifecycle phase of a sandbox as tracked by the outer API."""
@@ -25,7 +27,7 @@ class RunHandle(BaseModel):
     sandbox: Any
     status_base_url: str
     phase: RunPhase = RunPhase.RUNNING
-    error: str | None = None
+    error: ApiError | None = None
 
 
 class RunRegistry:

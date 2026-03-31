@@ -5,8 +5,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from api.errors import ApiError
 from settings import PRIMARY_MODEL
 
 
@@ -40,6 +41,24 @@ class GuardrailSettings(BaseModel):
     max_consecutive_errors: int = Field(default=5, ge=1, le=50)
     allow_private_networks: bool = False
     enable_llm_action_check: bool = True
+    stuck_window_size: int = Field(default=8, ge=2, le=50)
+    stuck_repeat_hint: int = Field(default=3, ge=2, le=20)
+    stuck_repeat_warn: int = Field(default=5, ge=2, le=30)
+    stuck_repeat_stop: int = Field(default=7, ge=2, le=40)
+    stuck_cycle_max_length: int = Field(default=3, ge=2, le=10)
+    stuck_cycle_repeats: int = Field(default=3, ge=2, le=20)
+
+    @model_validator(mode="after")
+    def check_stuck_threshold_ordering(self) -> GuardrailSettings:
+        if not (
+            self.stuck_repeat_hint < self.stuck_repeat_warn < self.stuck_repeat_stop
+        ):
+            raise ValueError(
+                "stuck thresholds must satisfy: "
+                "stuck_repeat_hint < stuck_repeat_warn < stuck_repeat_stop "
+                f"(got {self.stuck_repeat_hint}, {self.stuck_repeat_warn}, {self.stuck_repeat_stop})"
+            )
+        return self
 
 
 class ActionEvent(BaseModel):
@@ -100,7 +119,7 @@ class RunStatus(BaseModel):
     action_count: int = 0
     actions: list[ActionEvent] = Field(default_factory=list)
     result: str | None = None
-    error: str | None = None
+    error: ApiError | None = None
     duration_ms: int | None = None
     data: dict[str, Any] | None = None
     extracted_texts: list[str] = Field(default_factory=list)

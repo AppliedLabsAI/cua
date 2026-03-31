@@ -29,6 +29,32 @@ CUA deploys to [Modal](https://modal.com) as a managed API. Each run spawns an i
 | `recording` | object | null | `{"enabled": true, "trace": true}` |
 | `output_schema` | object | null | JSON schema for structured output extraction |
 
+### Error Shape
+
+All API error responses use a structured payload:
+
+```json
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Run abc123 not found",
+    "details": {
+      "run_id": "abc123"
+    }
+  }
+}
+```
+
+Long-running run failures exposed by `GET /runs/{run_id}` use the same `error` object shape inside `RunStatus`.
+
+Common runtime error codes include:
+
+- `GUARDRAIL_BLOCKED`
+- `TIMEOUT`
+- `LLM_ERROR`
+- `CAPTCHA_FAILED`
+- `RUN_TERMINATED`
+
 ## SSE Event Streaming
 
 The `/runs/{run_id}/stream` endpoint provides real-time Server-Sent Events (SSE) for monitoring run progress.
@@ -68,6 +94,8 @@ Browsers handle this automatically via the `EventSource` API.
 ### Post-Completion Replay
 
 After a run completes and the sandbox terminates, events are still available. The run status and action log are persisted to a Modal Volume, so both `/runs/{run_id}` and `/runs/{run_id}/stream` continue to work.
+
+If a sandbox receives a shutdown signal mid-run, CUA writes the last known structured status before browser/recording cleanup so clients can still retrieve a terminal state after the sandbox exits.
 
 ## Multi-Container Support
 

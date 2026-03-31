@@ -324,6 +324,18 @@ class GuardrailEngine:
         """Reset error counter on success."""
         self.consecutive_errors = 0
 
-    def record_action(self, input_summary: str, *, success: bool) -> StuckVerdict:
+    def record_action(
+        self,
+        action: str,
+        tool_input: dict,
+        input_summary: str,
+        *,
+        success: bool,
+    ) -> StuckVerdict:
         """Track action for stuck pattern detection."""
-        return self._stuck.record(input_summary, success=success)
+        return self._stuck.record(
+            action,
+            tool_input,
+            input_summary=input_summary,
+            success=success,
+        )

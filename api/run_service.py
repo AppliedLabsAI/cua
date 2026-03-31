@@ -9,11 +9,17 @@ from pathlib import Path
 
 import httpx
 import modal
-from fastapi import HTTPException, Request
+from fastapi import Request
 from fastapi.responses import StreamingResponse
 from opentelemetry import trace as otel_trace
 from pydantic import ValidationError
 
+from api.errors import (
+    ApiError,
+    ApiErrorCode,
+    classify_runtime_error,
+    raise_api_error,
+)
 from api.models import RunConfig, RunResponse, RunStatus, RunStatusValue
 from api.run_registry import RunHandle, RunPhase, RunRegistry
 from settings import get_settings
@@ -66,14 +72,14 @@ class RunService:
             self._active_run_ids.remove(run_id)
             active_sessions().add(-1)
 
-    async def _terminated_status(self, run_id: str, error: str) -> RunStatus:
+    async def _terminated_status(self, run_id: str, error: str | ApiError) -> RunStatus:
         persisted = await self.load_persisted_status(run_id)
         if persisted:
             return persisted
         return RunStatus(
             run_id=run_id,
             status=RunStatusValue.TERMINATED,
-            error=error,
+            error=classify_runtime_error(error) if isinstance(error, str) else error,
         )
 
     async def load_persisted_status(self, run_id: str) -> RunStatus | None:
@@ -188,18 +194,17 @@ class RunService:
                 session_span.set_status(otel_trace.StatusCode.ERROR, str(exc))
                 session_span.record_exception(exc)
                 error_msg = str(exc)
-                raise HTTPException(
-                    status_code=502,
-                    detail={
-                        "error": "Failed to create sandbox",
-                        "run_id": run_id,
-                        "message": error_msg
-                        if get_settings().environment == "local"
-                        else "Internal error — check server logs",
-                    },
-                ) from exc
+                raise_api_error(
+                    502,
+                    ApiErrorCode.SANDBOX_CREATE_FAILED,
+                    error_msg
+                    if get_settings().environment == "local"
+                    else "Internal error — check server logs",
+                    details={"run_id": run_id},
+                )
 
             assert sandbox is not None
+            assert run_id is not None
             self._registry.add(
                 RunHandle(run_id=run_id, sandbox=sandbox, status_base_url=status_base)
             )
@@ -223,7 +228,13 @@ class RunService:
             persisted = await self.load_persisted_status(run_id)
             if persisted:
                 return persisted
-            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+            raise_api_error(
+                404,
+                ApiErrorCode.NOT_FOUND,
+                f"Run {run_id} not found",
+                details={"run_id": run_id},
+            )
+        assert handle is not None
 
         if handle.phase == RunPhase.TERMINATED:
             return RunStatus(run_id=run_id, status=RunStatusValue.TERMINATED)
@@ -244,7 +255,11 @@ class RunService:
             )
             return await self._terminated_status(
                 run_id,
-                "Sandbox returned an invalid status payload",
+                ApiError(
+                    code=ApiErrorCode.INVALID_STATUS_PAYLOAD,
+                    message="Sandbox returned an invalid status payload",
+                    details={"run_id": run_id},
+                ),
             )
         except httpx.HTTPError as exc:
             self.remove_handle(run_id)
@@ -252,14 +267,24 @@ class RunService:
             logger.warning("Status request failed for run %s: %s", run_id, exc)
             return await self._terminated_status(
                 run_id,
-                "Sandbox is no longer reachable",
+                ApiError(
+                    code=ApiErrorCode.SANDBOX_UNREACHABLE,
+                    message="Sandbox is no longer reachable",
+                    details={"run_id": run_id},
+                ),
             )
 
     async def stop_run(self, run_id: str) -> dict[str, str | RunStatusValue]:
         """Terminate a CUA run early."""
         handle = await self.get_handle(run_id)
         if not handle:
-            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+            raise_api_error(
+                404,
+                ApiErrorCode.NOT_FOUND,
+                f"Run {run_id} not found",
+                details={"run_id": run_id},
+            )
+        assert handle is not None
 
         handle.phase = RunPhase.TERMINATED
         try:
@@ -311,14 +336,25 @@ class RunService:
             resp = await self.build_persisted_event_stream(run_id, start_after)
             if resp:
                 return resp
-            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+            raise_api_error(
+                404,
+                ApiErrorCode.NOT_FOUND,
+                f"Run {run_id} not found",
+                details={"run_id": run_id},
+            )
 
         handle = await self.get_handle(run_id)
         if not handle:
             resp = await self.build_persisted_event_stream(run_id, start_after)
             if resp:
                 return resp
-            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+            raise_api_error(
+                404,
+                ApiErrorCode.NOT_FOUND,
+                f"Run {run_id} not found",
+                details={"run_id": run_id},
+            )
+        assert handle is not None
 
         client = self._get_http_client()
 

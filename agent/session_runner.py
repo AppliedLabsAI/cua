@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from typing import Any
 
 import modal
 from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 
 from agent.loop import run_agent
+from agent.output import collect_extracted_texts
+from api.errors import ApiError, ApiErrorCode, classify_runtime_error, make_api_error
+from api.models import RunStatusValue
 from api.streaming import complete_run, persist_status, push_action
 from blinders.filters import DOMBlinders
 from blinders.scope import extract_task_scope
@@ -56,9 +61,51 @@ async def run_sandbox_session(
     run_id: str,
     config: CUAConfig,
     parent_ctx: otel_context.Context | None = None,
+    shutdown_event: asyncio.Event | None = None,
 ) -> int:
     """Run a single configured CUA sandbox session."""
     tracer = get_tracer()
+    recording: RecordingManager | None = None
+    bridge: ActionRouter | None = None
+
+    async def _persist_run_state(
+        *,
+        summary: str | None = None,
+        error: ApiError | str | None = None,
+        data: dict[str, Any] | None = None,
+        extracted_texts: list[str] | None = None,
+        status: RunStatusValue | None = None,
+    ) -> None:
+        try:
+            await complete_run(
+                summary=summary,
+                error=error,
+                data=data,
+                extracted_texts=extracted_texts,
+                status=status,
+            )
+            await persist_status(f"/recordings/{run_id}")
+            await _commit_volume()
+        except Exception:
+            logger.warning("Failed to persist run state", exc_info=True)
+
+    async def _cleanup_resources() -> None:
+        if recording:
+            try:
+                await recording.stop()
+                if config.recording_config.upload:
+                    await recording.upload(f"/recordings/{run_id}")
+                else:
+                    logger.info("Recordings available at %s", recording.output_dir)
+            except Exception as rec_exc:
+                logger.warning(
+                    "Recording finalization failed: %s", rec_exc, exc_info=True
+                )
+        try:
+            await browser.close()
+            logger.info("Browser closed")
+        except Exception:
+            logger.warning("Browser close failed during cleanup", exc_info=True)
 
     with tracer.start_as_current_span(
         AGENT_RUN,
@@ -88,8 +135,6 @@ async def run_sandbox_session(
                     )
                 logger.info("Browser launched")
 
-                # Initialize recording
-                recording: RecordingManager | None = None
                 if config.recording_config.enabled:
                     recording = RecordingManager(config.recording_config, run_id)
                     await recording.start(browser.context)
@@ -116,12 +161,17 @@ async def run_sandbox_session(
             logger.error("Setup failed: %s", exc)
             run_span.set_status(otel_trace.StatusCode.ERROR, str(exc))
             run_span.record_exception(exc)
+            await _persist_run_state(
+                error=make_api_error(
+                    ApiErrorCode.SETUP_FAILED,
+                    f"Setup failed: {exc}",
+                    details={"run_id": run_id},
+                ),
+                status=RunStatusValue.FAILED,
+            )
+            await _cleanup_resources()
             active_sessions().add(-1)
             sessions_total().add(1, {"status": "failed"})
-            await complete_run(error=f"Setup failed: {exc}")
-            await persist_status(f"/recordings/{run_id}")
-            await _commit_volume()
-            await browser.close()
             return 1
 
         try:
@@ -145,50 +195,71 @@ async def run_sandbox_session(
                 allowed_actions=scope.allowed_actions,
                 output_schema=config.output_schema,
             )
+        except asyncio.CancelledError:
+            message = "Run terminated before completion"
+            if shutdown_event and shutdown_event.is_set():
+                message = "Run terminated by shutdown signal"
+            logger.warning(message)
+            await _persist_run_state(
+                error=make_api_error(
+                    ApiErrorCode.RUN_TERMINATED,
+                    message,
+                    details={"run_id": run_id},
+                ),
+                extracted_texts=(
+                    collect_extracted_texts(bridge.action_log) if bridge else []
+                ),
+                status=RunStatusValue.TERMINATED,
+            )
+            await _cleanup_resources()
+            active_sessions().add(-1)
+            sessions_total().add(1, {"status": "terminated"})
+            return 1
         except Exception as exc:
             logger.error("Agent loop crashed: %s", exc, exc_info=True)
             run_span.set_status(otel_trace.StatusCode.ERROR, str(exc))
             run_span.record_exception(exc)
+            await _persist_run_state(
+                error=classify_runtime_error(str(exc)),
+                extracted_texts=(
+                    collect_extracted_texts(bridge.action_log) if bridge else []
+                ),
+                status=RunStatusValue.FAILED,
+            )
+            await _cleanup_resources()
             active_sessions().add(-1)
             sessions_total().add(1, {"status": "failed"})
-            await complete_run(error=str(exc))
-            await persist_status(f"/recordings/{run_id}")
-            await _commit_volume()
             return 1
-        finally:
-            if recording:
-                try:
-                    await recording.stop()
-                    if config.recording_config.upload:
-                        await recording.upload(f"/recordings/{run_id}")
-                    else:
-                        logger.info(
-                            "Recordings available at %s",
-                            recording.output_dir,
-                        )
-                except Exception as rec_exc:
-                    logger.warning(
-                        "Recording finalization failed: %s", rec_exc, exc_info=True
-                    )
-            await browser.close()
-            logger.info("Browser closed")
 
         if result.success:
             logger.info("Agent succeeded: %s", (result.summary or "")[:200])
-            await complete_run(
+            await _persist_run_state(
                 summary=result.summary,
                 data=result.data,
                 extracted_texts=result.extracted_texts,
             )
             run_span.set_status(otel_trace.StatusCode.OK)
         else:
-            error_text = str(result.error) if result.error is not None else ""
-            logger.error("Agent failed: %s", error_text)
-            await complete_run(
-                error=result.error,
-                extracted_texts=result.extracted_texts,
-            )
+            runtime_error = classify_runtime_error(result.error)
+            if runtime_error is not None:
+                error_text = runtime_error.message
+                logger.error("Agent failed: %s", error_text)
+                await _persist_run_state(
+                    error=runtime_error,
+                    extracted_texts=result.extracted_texts,
+                    status=RunStatusValue.FAILED,
+                )
+            else:
+                error_text = str(result.error) if result.error else "Unknown error"
+                logger.error("Agent failed: %s", error_text)
+                await _persist_run_state(
+                    error=error_text,
+                    extracted_texts=result.extracted_texts,
+                    status=RunStatusValue.FAILED,
+                )
             run_span.set_status(otel_trace.StatusCode.ERROR, error_text)
+
+        await _cleanup_resources()
 
         run_span.add_event(
             EVENT_AGENT_COMPLETED,
@@ -209,9 +280,6 @@ async def run_sandbox_session(
             result.total_input_tokens,
             result.total_output_tokens,
         )
-
-        await persist_status(f"/recordings/{run_id}")
-        await _commit_volume()
 
         status = "success" if result.success else "failed"
         active_sessions().add(-1)

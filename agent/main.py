@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import signal
 import sys
 
 from telemetry.logging import setup_logging
@@ -95,11 +96,52 @@ async def main() -> int:
 
     # Initialize status API state
     init_status(run_id)
-    result = await run_sandbox_session(
-        run_id=run_id,
-        config=config,
-        parent_ctx=parent_ctx,
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _request_shutdown(sig: int) -> None:
+        if shutdown_event.is_set():
+            return
+        shutdown_event.set()
+        try:
+            sig_name = signal.Signals(sig).name
+        except ValueError:
+            sig_name = str(sig)
+        logger.warning("Received %s, starting graceful shutdown", sig_name)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, _request_shutdown, sig)
+
+    session_task = asyncio.create_task(
+        run_sandbox_session(
+            run_id=run_id,
+            config=config,
+            parent_ctx=parent_ctx,
+            shutdown_event=shutdown_event,
+        )
     )
+    shutdown_task = asyncio.create_task(shutdown_event.wait())
+    done, pending = await asyncio.wait(
+        {session_task, shutdown_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if shutdown_task in done and shutdown_event.is_set():
+        session_task.cancel()
+    for task in pending:
+        task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await shutdown_task
+    try:
+        result = await asyncio.wait_for(session_task, timeout=30)
+    except TimeoutError:
+        logger.error("Session task did not finish within 30s shutdown grace period")
+        session_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await session_task
+        result = 1
+    except asyncio.CancelledError:
+        result = 1
 
     # Cancel the status API after a grace period for final SSE delivery
     await asyncio.sleep(1)

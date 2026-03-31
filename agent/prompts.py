@@ -7,6 +7,7 @@ function should be called once per run and the result reused across calls.
 
 from __future__ import annotations
 
+import logging
 import re
 from string import Template
 from typing import TYPE_CHECKING
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from credentials import SecretValue
 
+logger = logging.getLogger(__name__)
 _SAFE_REF = re.compile(r"^[\w.\-]+$")
 
 _SYSTEM_PROMPT = Template("""\
@@ -66,6 +68,10 @@ def build_system_prompt(
         for ref in credential_refs:
             if _SAFE_REF.match(ref):
                 lines.append(f"  {ref}")
+            else:
+                logger.warning(
+                    "Skipping credential ref %r: contains invalid characters", ref
+                )
         lines.append("</robot_credentials>")
         lines.append(
             "When filling sensitive fields, pass the matching credential_ref "

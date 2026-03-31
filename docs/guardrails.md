@@ -80,7 +80,7 @@ Two detection strategies on a sliding window of recent action signatures:
 
 | Strategy | What it catches | Example |
 |---|---|---|
-| **Repetition** | Same action repeated N times in window | `click '#submit'` 5 times |
+| **Repetition** | Same action+target repeated consecutively | `click '#submit'` 5 times in a row |
 | **Cycle** | Short pattern repeated N times | `click '#next'` → `click '#prev'` → `click '#next'` → ... |
 
 Escalation is three-tiered:
@@ -91,11 +91,13 @@ Escalation is three-tiered:
 | `WARNING` | 5 same in window | 2nd detection | Strong warning prepended |
 | `STOP` | 7 same in window | 3rd detection | Agent stopped with error |
 
+Action signatures are normalized from the browser action plus its target, for example selector, URL, or execute-sequence contents. This reduces false positives from broad action-type matching alone. Repetition escalation only considers the consecutive tail of identical signatures, which is more tolerant of legitimate retries separated by other actions.
+
 Hints are prepended to the tool result text (the only way to communicate with the agent mid-loop in Pydantic AI). Each detection emits a `stuck.detected` telemetry event with severity and action summary.
 
 ## Configuration
 
-Set per-playbook in the YAML `guardrails` section:
+Set per-playbook or per-profile in the YAML `guardrails` section:
 
 ```yaml
 guardrails:
@@ -111,7 +113,7 @@ guardrails:
   stuck_repeat_warn: 5                  # Same action N times → warning
   stuck_repeat_stop: 7                  # Same action N times → hard stop
   stuck_cycle_max_length: 3             # Max cycle pattern length (e.g. A-B-C)
-  stuck_cycle_repeats: 3               # Cycle must repeat N times to trigger
+  stuck_cycle_repeats: 3                 # Cycle must repeat N times to trigger
 ```
 
 When omitted, safe defaults apply (private networks blocked, LLM checks enabled, standard limits).

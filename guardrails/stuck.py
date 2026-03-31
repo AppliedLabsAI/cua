@@ -37,6 +37,14 @@ class StuckVerdict:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class ActionSignature:
+    """Compact identity for stuck detection."""
+
+    key: str
+    summary: str
+
+
 _HINT_MSG = (
     "[System] You appear to be repeating the same action. "
     "Try a different approach: use a different selector, "
@@ -90,19 +98,31 @@ class StuckDetector:
         self._cycle_max_length = cycle_max_length
         # How many times a cycle must repeat to trigger detection
         self._cycle_repeats = cycle_repeats
-        # Sliding window of action signatures (from summarize_action())
-        self._history: list[str] = []
+        # Sliding window of normalized action signatures.
+        self._history: list[ActionSignature] = []
         # Cumulative detection count — drives cycle escalation and
         # decays by 1 on each non-stuck action
         self._stuck_count: int = 0
 
-    def record(self, input_summary: str, *, success: bool) -> StuckVerdict:
+    def record(
+        self,
+        action: str,
+        tool_input: dict,
+        *,
+        input_summary: str,
+        success: bool,
+    ) -> StuckVerdict:
         """Record an action and check for stuck patterns.
 
         Returns a verdict with severity and message. The caller decides
         how to act on it (prepend hint, replace result, etc.).
         """
-        self._history.append(input_summary)
+        self._history.append(
+            ActionSignature(
+                key=build_action_signature(action, tool_input),
+                summary=input_summary,
+            )
+        )
         if len(self._history) > self._window_size:
             self._history = self._history[-self._window_size :]
 
@@ -144,8 +164,12 @@ class StuckDetector:
         if not self._history:
             return StuckVerdict()
 
-        latest = self._history[-1]
-        count = sum(1 for sig in self._history if sig == latest)
+        latest = self._history[-1].key
+        count = 0
+        for sig in reversed(self._history):
+            if sig.key != latest:
+                break
+            count += 1
 
         if count >= self._repeat_stop:
             return StuckVerdict(StuckSeverity.STOP, _STOP_MSG)
@@ -158,7 +182,7 @@ class StuckDetector:
 
     def _check_cycle(self) -> StuckVerdict:
         """Check if the tail of history repeats a short cycle pattern."""
-        history = self._history
+        history = [entry.key for entry in self._history]
         n = len(history)
 
         for cycle_len in range(2, self._cycle_max_length + 1):
@@ -186,3 +210,35 @@ class StuckDetector:
                 return StuckVerdict(StuckSeverity.HINT, _CYCLE_HINT_MSG)
 
         return StuckVerdict()
+
+
+def build_action_signature(action: str, tool_input: dict) -> str:
+    """Build a normalized action identity for stuck detection."""
+    normalized_action = action.strip().lower()
+    if normalized_action == "goto":
+        return f"goto|{tool_input.get('url', '').strip().lower()}"
+    if normalized_action in {"click", "extract", "wait_for", "select"}:
+        selector = str(tool_input.get("selector", "")).strip().lower()
+        return f"{normalized_action}|{selector}"
+    if normalized_action == "key_press":
+        selector = str(tool_input.get("selector", "")).strip().lower()
+        key = str(tool_input.get("key", "")).strip().lower()
+        credential_ref = str(tool_input.get("credential_ref", "")).strip().lower()
+        text_present = "text" if bool(tool_input.get("text")) else ""
+        return (
+            f"key_press|selector={selector}|key={key}|"
+            f"credential_ref={credential_ref}|payload={text_present}"
+        )
+    if normalized_action == "scroll":
+        direction = str(tool_input.get("direction", "down")).strip().lower()
+        amount = str(tool_input.get("amount", ""))
+        return f"scroll|{direction}|{amount}"
+    if normalized_action == "execute_sequence":
+        steps = tool_input.get("steps", [])
+        parts = []
+        for step in steps:
+            if isinstance(step, dict):
+                step_action = str(step.get("action", "")).strip().lower()
+                parts.append(build_action_signature(step_action, step))
+        return "execute_sequence|" + "->".join(parts)
+    return normalized_action
