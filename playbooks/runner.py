@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 from playbooks.executor import PlaybookStepExecutor
 from playbooks.output import extract_structured_data
-from playbooks.params import bind_step_params, materialize_step
+from playbooks.params import materialize_step
 from playbooks.recovery import RETRY_DELAY_S, StepRecoveryPolicy
-from playbooks.schema import Playbook, PlaybookResult, PlaybookStep, StepResult
+from playbooks.schema import Playbook, PlaybookResult, StepResult
 
 if TYPE_CHECKING:
     from patchright.async_api import Page
@@ -36,7 +36,12 @@ class PlaybookRunner:
         self._recording = recording
         self._executor = step_executor or PlaybookStepExecutor()
         self._output_schema = output_schema
-        self._recovery = self._create_recovery_policy()
+        self._recovery = StepRecoveryPolicy(
+            browser=self._browser,
+            recording=self._recording,
+            executor=self._executor,
+            retry_delay_s=RETRY_DELAY_S,
+        )
 
     async def execute(
         self,
@@ -72,7 +77,7 @@ class PlaybookRunner:
                 materialize_step(playbook, step_index, runtime_params)
                 for step_index in range(index, len(playbook.steps))
             ]
-            result = await self._run_with_policy(
+            result = await self._recovery.run(
                 playbook=playbook,
                 step=step,
                 remaining_steps=remaining_steps,
@@ -131,7 +136,7 @@ class PlaybookRunner:
         data = await extract_structured_data(
             step_results,
             playbook_name=playbook.name,
-            output_schema=getattr(self, "_output_schema", None),
+            output_schema=self._output_schema,
         )
 
         return PlaybookResult(
@@ -143,65 +148,9 @@ class PlaybookRunner:
             data=data,
         )
 
-    async def _run_with_policy(
-        self,
-        playbook: Playbook,
-        step: PlaybookStep,
-        remaining_steps: list[PlaybookStep],
-        page: Page,
-        runtime_params: dict[str, Any] | None = None,
-    ) -> StepResult:
-        """Run a step according to its declared failure mode."""
-        return await self._get_recovery_policy().run(
-            playbook=playbook,
-            step=step,
-            remaining_steps=remaining_steps,
-            page=page,
-            runtime_params=runtime_params,
-        )
-
-    def _create_recovery_policy(self) -> StepRecoveryPolicy:
-        return StepRecoveryPolicy(
-            browser=self._browser,
-            recording=self._recording,
-            executor=self._executor,
-            retry_delay_s=RETRY_DELAY_S,
-            handoff_runner=self._llm_complete_remaining,
-        )
-
-    def _get_recovery_policy(self) -> StepRecoveryPolicy:
-        recovery = getattr(self, "_recovery", None)
-        if recovery is None:
-            recovery = self._create_recovery_policy()
-            self._recovery = recovery
-        return recovery
-
-    async def _llm_complete_remaining(
-        self,
-        playbook: Playbook,
-        remaining_steps: list[PlaybookStep],
-        error: str,
-        page: Page,
-        runtime_params: dict[str, Any] | None = None,
-    ) -> StepResult:
-        """Compatibility wrapper used by existing unit tests."""
-        return await self._get_recovery_policy().complete_remaining_with_llm(
-            playbook=playbook,
-            remaining_steps=remaining_steps,
-            error=error,
-            page=page,
-            runtime_params=runtime_params,
-        )
-
     async def _capture_failure_screenshot(self, page: Page) -> str | None:
         try:
             raw = await page.screenshot(type="jpeg", quality=55)
             return base64.b64encode(raw).decode("ascii")
         except Exception:
             return None
-
-    def _inject_params(
-        self, step: PlaybookStep, params: dict[str, Any]
-    ) -> PlaybookStep:
-        """Compatibility wrapper used by existing unit tests."""
-        return bind_step_params(step, params)

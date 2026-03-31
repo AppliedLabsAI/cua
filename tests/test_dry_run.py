@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from api.models import RunConfig
-from api.run_service import validate_run_config
+from api.runs.service import validate_run_config
 
 
 class TestValidateRunConfig:

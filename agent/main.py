@@ -53,7 +53,7 @@ async def _start_status_api() -> asyncio.Task:
 
 async def main() -> int:
     # Import here to avoid import errors when checking syntax outside sandbox
-    from agent.session_runner import run_sandbox_session
+    from agent.session.runner import run_sandbox_session
     from api.streaming import init_status
     from config import CUAConfig
     from telemetry import setup_telemetry

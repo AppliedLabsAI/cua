@@ -1,10 +1,10 @@
-"""Tests for ModalDictRunRegistry in api.run_registry."""
+"""Tests for ModalDictRunRegistry in api.runs.registry."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from api.run_registry import (
+from api.runs.registry import (
     _SERIALIZABLE_FIELDS,
     ModalDictRunRegistry,
     RunHandle,

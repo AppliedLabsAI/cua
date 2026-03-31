@@ -133,6 +133,17 @@ class ScopeVerifier:
 
         return None
 
+    def check_post_navigation(self, url: str) -> str | None:
+        """Validate the landing URL after a navigation-like action."""
+        domain_block = self._check_domain(url)
+        if domain_block:
+            return domain_block
+
+        url_check = self.guardrails.check_url(url)
+        if not url_check.allowed:
+            return url_check.reason
+        return None
+
     def _check_domain(self, url: str) -> str | None:
         """Check if URL's domain is within the task scope.
 

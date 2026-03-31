@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from pathlib import Path
 
 import httpx
 import modal
@@ -28,7 +27,8 @@ from api.models import (
     RunStatus,
     RunStatusValue,
 )
-from api.run_registry import RunHandle, RunPhase, RunRegistry
+from api.runs.registry import RunHandle, RunPhase, RunRegistry
+from api.runs.store import PersistedRunStore
 from settings import get_settings
 from telemetry import get_tracer
 from telemetry.metrics import active_sessions, sessions_total
@@ -229,6 +229,10 @@ class RunService:
         self._volume = volume
         self._get_http_client = get_http_client
         self._active_run_ids: set[str] = set()
+        self._persisted_runs = PersistedRunStore(
+            volume_mount=volume_mount,
+            volume=volume,
+        )
 
     def remove_handle(self, run_id: str) -> None:
         self._registry.remove(run_id)
@@ -253,23 +257,7 @@ class RunService:
 
     async def load_persisted_status(self, run_id: str) -> RunStatus | None:
         """Try to load persisted status from the recordings volume."""
-        try:
-            await self._volume.reload.aio()
-        except Exception:
-            logger.debug("Volume reload failed", exc_info=True)
-        status_path = Path(self._volume_mount) / run_id / "status.json"
-        if not status_path.exists():
-            return None
-        try:
-            return RunStatus.model_validate_json(status_path.read_text())
-        except (ValidationError, ValueError, OSError) as exc:
-            logger.warning(
-                "Failed to read persisted status for run %s: %s",
-                run_id,
-                exc,
-                exc_info=True,
-            )
-            return None
+        return await self._persisted_runs.load_status(run_id)
 
     async def get_handle(self, run_id: str) -> RunHandle | None:
         """Look up a run handle, reconstructing from Modal if needed."""
@@ -474,23 +462,25 @@ class RunService:
         self, run_id: str, start_after: int = 0
     ) -> StreamingResponse | None:
         """Build an SSE response from persisted status on the volume."""
-        persisted = await self.load_persisted_status(run_id)
-        if not persisted:
-            return None
+        return await self._persisted_runs.build_event_stream(
+            run_id,
+            start_after=start_after,
+        )
 
-        async def replay():
-            for action in persisted.actions:
-                if action.step > start_after:
-                    payload = action.model_dump()
-                    yield f"id: {action.step}\ndata: {json.dumps(payload)}\n\n"
-            yield (
-                f"event: complete\ndata: {json.dumps({'status': persisted.status})}\n\n"
-            )
-
-        return StreamingResponse(
-            replay(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    async def _build_persisted_stream_or_404(
+        self,
+        run_id: str,
+        *,
+        start_after: int,
+    ) -> StreamingResponse:
+        response = await self.build_persisted_event_stream(run_id, start_after)
+        if response:
+            return response
+        raise_api_error(
+            404,
+            ApiErrorCode.NOT_FOUND,
+            f"Run {run_id} not found",
+            details={"run_id": run_id},
         )
 
     async def stream_run(self, run_id: str, request: Request) -> StreamingResponse:
@@ -502,26 +492,16 @@ class RunService:
             start_after = 0
 
         if await self.cleanup_finished_sandbox(run_id):
-            resp = await self.build_persisted_event_stream(run_id, start_after)
-            if resp:
-                return resp
-            raise_api_error(
-                404,
-                ApiErrorCode.NOT_FOUND,
-                f"Run {run_id} not found",
-                details={"run_id": run_id},
+            return await self._build_persisted_stream_or_404(
+                run_id,
+                start_after=start_after,
             )
 
         handle = await self.get_handle(run_id)
         if not handle:
-            resp = await self.build_persisted_event_stream(run_id, start_after)
-            if resp:
-                return resp
-            raise_api_error(
-                404,
-                ApiErrorCode.NOT_FOUND,
-                f"Run {run_id} not found",
-                details={"run_id": run_id},
+            return await self._build_persisted_stream_or_404(
+                run_id,
+                start_after=start_after,
             )
         assert handle is not None
 

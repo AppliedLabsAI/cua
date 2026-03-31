@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from starlette.responses import Response
 
 from api.errors import ApiErrorCode, raise_api_error
-from api.run_registry import RunHandle
+from api.runs.registry import RunHandle
 from recording.manager import scan_recording_artifacts
 
 logger = logging.getLogger(__name__)

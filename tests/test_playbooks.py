@@ -9,8 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from playbooks.params import materialize_playbook
+from playbooks.params import bind_step_params, materialize_playbook
 from playbooks.parser import DirectiveParser
+from playbooks.recovery import StepRecoveryPolicy
 from playbooks.schema import (
     Playbook,
     PlaybookGuardrails,
@@ -323,10 +324,6 @@ class TestDirectiveParser:
 
 class TestRunnerParamInjection:
     def test_inject_params_replaces_placeholders(self):
-        from playbooks.runner import PlaybookRunner
-
-        runner = PlaybookRunner.__new__(PlaybookRunner)
-
         step = PlaybookStep(
             action="key_press",
             params={"text": "{order_id}"},
@@ -335,19 +332,17 @@ class TestRunnerParamInjection:
             description="Type order {order_id}",
         )
 
-        result = runner._inject_params(step, {"order_id": "12345"})
+        result = bind_step_params(step, {"order_id": "12345"})
         assert result.params["text"] == "12345"
+        assert result.selector is not None
         assert result.selector.primary == "input[data-id='12345']"
+        assert result.verify is not None
         assert result.verify.expect_text_on_page == "Order 12345"
         assert result.description == "Type order 12345"
 
     def test_inject_params_no_params_returns_same(self):
-        from playbooks.runner import PlaybookRunner
-
-        runner = PlaybookRunner.__new__(PlaybookRunner)
-
         step = PlaybookStep(action="click", description="Click button")
-        result = runner._inject_params(step, {})
+        result = bind_step_params(step, {})
         assert result.action == "click"
         assert result.description == "Click button"
 
@@ -362,12 +357,7 @@ class _FakeExecutor:
 
 class TestRunnerFailurePolicy:
     def test_abort_does_not_retry(self):
-        from playbooks.runner import PlaybookRunner
-
-        runner = PlaybookRunner.__new__(PlaybookRunner)
-        runner._browser = SimpleNamespace(page=object())
-        runner._recording = None
-        runner._executor = _FakeExecutor(
+        executor = _FakeExecutor(
             [
                 StepResult(
                     step_index=0,
@@ -377,10 +367,16 @@ class TestRunnerFailurePolicy:
                 )
             ]
         )
+        policy = StepRecoveryPolicy(
+            browser=SimpleNamespace(page=object()),
+            recording=None,
+            executor=executor,
+            retry_delay_s=0,
+        )
 
         step = PlaybookStep(action="click", on_failure="abort")
         result = asyncio.run(
-            runner._run_with_policy(
+            policy.run(
                 playbook=Playbook(id="p", name="P"),
                 step=step,
                 remaining_steps=[step],
@@ -391,14 +387,9 @@ class TestRunnerFailurePolicy:
         assert result.recovery_used is False
 
     def test_retry_does_not_use_llm_handoff(self, monkeypatch):
-        from playbooks.runner import PlaybookRunner
+        monkeypatch.setattr("playbooks.recovery.RETRY_DELAY_S", 0)
 
-        monkeypatch.setattr("playbooks.runner.RETRY_DELAY_S", 0)
-
-        runner = PlaybookRunner.__new__(PlaybookRunner)
-        runner._browser = SimpleNamespace(page=object())
-        runner._recording = None
-        runner._executor = _FakeExecutor(
+        executor = _FakeExecutor(
             [
                 StepResult(
                     step_index=0,
@@ -418,11 +409,17 @@ class TestRunnerFailurePolicy:
         async def _should_not_run(**kwargs):
             raise AssertionError("LLM handoff should not run for retry mode")
 
-        runner._llm_complete_remaining = _should_not_run
+        policy = StepRecoveryPolicy(
+            browser=SimpleNamespace(page=object()),
+            recording=None,
+            executor=executor,
+            retry_delay_s=0,
+            handoff_runner=_should_not_run,
+        )
 
         step = PlaybookStep(action="click", on_failure="retry")
         result = asyncio.run(
-            runner._run_with_policy(
+            policy.run(
                 playbook=Playbook(id="p", name="P"),
                 step=step,
                 remaining_steps=[step],
@@ -455,10 +452,10 @@ class TestRunnerStepOutputs:
                     success=True,
                 )
 
-        runner = PlaybookRunner.__new__(PlaybookRunner)
-        runner._browser = SimpleNamespace(page=object())
-        runner._recording = None
-        runner._executor = _OutputExecutor()
+        runner = PlaybookRunner(
+            browser=SimpleNamespace(page=object()),
+            step_executor=_OutputExecutor(),
+        )
 
         playbook = Playbook(
             id="shop-hours",

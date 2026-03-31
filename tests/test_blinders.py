@@ -237,3 +237,13 @@ class TestScopeVerifier:
         # classification to the outer model/policy layer.
         result = await v.check("click", {"selector": "text=delete account"})
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_post_navigation_check_uses_public_verifier_hook(self):
+        scope = await extract_task_scope("Find the price on apple.com")
+        v = ScopeVerifier(scope, GuardrailEngine())
+
+        assert v.check_post_navigation("https://store.apple.com/iphone") is None
+        assert "not in task scope" in (
+            v.check_post_navigation("https://evil.com") or ""
+        )

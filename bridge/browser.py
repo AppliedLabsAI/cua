@@ -33,9 +33,9 @@ from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS
 
 logger = logging.getLogger(__name__)
 
-_DOM_MAX_CHARS = 4000
+DOM_MAX_CHARS = 4000
 # Compact DOM auto-attached to goto/click responses
-_AUTO_DOM_MAX_CHARS = 3000  # Leave room for nav text + content summary
+AUTO_DOM_MAX_CHARS = 3000  # Leave room for nav text + content summary
 
 
 class BrowserManager:

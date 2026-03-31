@@ -49,6 +49,7 @@ def build_handoff_directive(
             + "\n"
         )
 
+    remaining_steps_text = "\n".join(step_lines)
     return (
         "Complete the following task on this dashboard page.\n\n"
         f"Playbook: {playbook.name}\n"
@@ -56,7 +57,7 @@ def build_handoff_directive(
         f"{param_section}\n"
         f"A previous automation step failed with: {error}\n"
         f"You are now on: {page_url}\n\n"
-        f"Remaining steps to complete:\n{'\n'.join(step_lines)}\n\n"
+        f"Remaining steps to complete:\n{remaining_steps_text}\n\n"
         "Complete ALL remaining steps above. Be precise with selectors."
     )
 
@@ -134,7 +135,6 @@ class StepRecoveryPolicy:
             bridge = ActionRouter(
                 browser=self._browser,
                 guardrail_config=playbook.guardrails.to_runtime_config(),
-                recording=self._recording,
             )
             result = await run_agent(
                 directive=directive,

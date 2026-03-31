@@ -46,7 +46,6 @@ from telemetry.spans import (
 if TYPE_CHECKING:
     from blinders.filters import DOMBlinders
     from credentials import SecretValue
-    from recording.manager import RecordingManager
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +72,6 @@ class ActionRouter:
         guardrail_config: GuardrailConfig | None = None,
         blinders: DOMBlinders | None = None,
         directive: str = "",
-        recording: RecordingManager | None = None,
     ) -> None:
         self.browser = browser
         self.guardrails = GuardrailEngine(guardrail_config)
@@ -83,7 +81,6 @@ class ActionRouter:
         self._step = 0
         self._stopped = False
         self._tracer = get_tracer()
-        self._recording = recording
         self._background = BackgroundTasks()
 
         self._verifier = None
@@ -125,35 +122,8 @@ class ActionRouter:
         result = self._postprocess_phase(request, result)
 
         duration_ms = int((time.monotonic() - start) * 1000)
-        tool_result = action_result_to_tool_result(result)
-
-        entry = ActionLog.now(
-            step=request.step,
-            tool=request.tool_name,
-            action=request.action,
-            tool_input=request.tool_input,
-            duration_ms=duration_ms,
-            success=result.error is None,
-            result_text=result.text,
-            has_screenshot=result.screenshot_b64 is not None,
-            error=result.error,
-            thinking=reasoning,
-        )
-        self.action_log.append(entry)
-        self._background.schedule(persist_action_log(entry))
-
-        logger.info(
-            "Step %d: %s%s.%s%s %s %s",
-            request.step,
-            C_CYAN_BOLD,
-            request.tool_name,
-            request.action,
-            C_RESET,
-            fmt_timing(duration_ms),
-            fmt_status(result.error),
-        )
-
-        return tool_result
+        self._record_action(request, result, duration_ms, reasoning=reasoning)
+        return action_result_to_tool_result(result)
 
     def _build_request(self, tool_name: str, tool_input: dict) -> ActionRequest:
         self._step += 1
@@ -208,6 +178,40 @@ class ActionRouter:
             return ActionResult(
                 error=f"{request.tool_name}.{request.action} failed: {exc}"
             )
+
+    def _record_action(
+        self,
+        request: ActionRequest,
+        result: ActionResult,
+        duration_ms: int,
+        *,
+        reasoning: str | None,
+    ) -> None:
+        entry = ActionLog.now(
+            step=request.step,
+            tool=request.tool_name,
+            action=request.action,
+            tool_input=request.tool_input,
+            duration_ms=duration_ms,
+            success=result.error is None,
+            result_text=result.text,
+            has_screenshot=result.screenshot_b64 is not None,
+            error=result.error,
+            thinking=reasoning,
+        )
+        self.action_log.append(entry)
+        self._background.schedule(persist_action_log(entry))
+
+        logger.info(
+            "Step %d: %s%s.%s%s %s %s",
+            request.step,
+            C_CYAN_BOLD,
+            request.tool_name,
+            request.action,
+            C_RESET,
+            fmt_timing(duration_ms),
+            fmt_status(result.error),
+        )
 
     def _postprocess_phase(
         self,
@@ -324,65 +328,83 @@ class ActionRouter:
         credentials: dict[str, SecretValue] | None = None,
     ) -> ActionResult:
         """Route to the correct executor."""
-        if tool_name == "browser_dom":
-            page_url_before = ""
-            with contextlib.suppress(RuntimeError):
-                page_url_before = self.browser.page.url
+        if tool_name != "browser_dom":
+            return ActionResult(error=f"Unknown tool: {tool_name}")
 
-            with self._tracer.start_as_current_span(
-                BROWSER_ACTION,
-                attributes={
-                    ATTR_BROWSER_ACTION: action,
-                    ATTR_BROWSER_PAGE_URL: page_url_before,
-                },
-            ) as browser_span:
-                result = await execute_dom_action(
-                    action,
-                    tool_input,
-                    self.browser,
-                    include_page_context=True,
-                    filter_config=self._filter_config,
-                    credentials=credentials,
-                )
+        page_url_before = ""
+        with contextlib.suppress(RuntimeError):
+            page_url_before = self.browser.page.url
 
-                if action in _CAPTCHA_CHECK_ACTIONS:
-                    if not self._skip_captcha:
-                        result = await self._handle_captcha(result)
-                    final_url = self.browser.page.url
-                    browser_span.set_attribute(
-                        ATTR_BROWSER_PAGE_CHANGED, final_url != page_url_before
-                    )
-                    if self._verifier:
-                        scope_block = self._verifier._check_domain(final_url)
-                        if scope_block:
-                            return ActionResult(
-                                error=f"Guardrail blocked: {scope_block}"
-                            )
-                    url_check = self.guardrails.check_url(final_url)
-                    if not url_check.allowed:
-                        return ActionResult(
-                            error=f"Guardrail blocked: {url_check.reason}"
-                        )
-
-                # Apply Python-side blinders post-filter on DOM content
-                if self.blinders and result.text and DOM_MARKER in result.text:
-                    marker_idx = result.text.index(DOM_MARKER)
-                    prefix = result.text[:marker_idx]
-                    dom_content = result.text[marker_idx + len(DOM_MARKER) + 1 :]
-                    filtered = self.blinders.filter_snapshot(dom_content)
-                    result = ActionResult(
-                        screenshot_b64=result.screenshot_b64,
-                        text=f"{prefix}{DOM_MARKER}\n{filtered}",
-                        error=result.error,
-                    )
-
-                if result.text:
-                    browser_span.set_attribute(ATTR_BROWSER_DOM_CHARS, len(result.text))
-
+        with self._tracer.start_as_current_span(
+            BROWSER_ACTION,
+            attributes={
+                ATTR_BROWSER_ACTION: action,
+                ATTR_BROWSER_PAGE_URL: page_url_before,
+            },
+        ) as browser_span:
+            result = await execute_dom_action(
+                action,
+                tool_input,
+                self.browser,
+                include_page_context=True,
+                filter_config=self._filter_config,
+                credentials=credentials,
+            )
+            result = await self._post_navigation_phase(
+                action,
+                page_url_before,
+                result,
+                browser_span=browser_span,
+            )
+            result = self._apply_dom_blinders(result)
+            if result.text:
+                browser_span.set_attribute(ATTR_BROWSER_DOM_CHARS, len(result.text))
             return result
 
-        else:
-            return ActionResult(error=f"Unknown tool: {tool_name}")
+    async def _post_navigation_phase(
+        self,
+        action: str,
+        page_url_before: str,
+        result: ActionResult,
+        *,
+        browser_span,
+    ) -> ActionResult:
+        if action not in _CAPTCHA_CHECK_ACTIONS:
+            return result
+        if not self._skip_captcha:
+            result = await self._handle_captcha(result)
+
+        final_url = self.browser.page.url
+        browser_span.set_attribute(
+            ATTR_BROWSER_PAGE_CHANGED, final_url != page_url_before
+        )
+        guardrail_block = self._check_post_navigation(final_url)
+        if guardrail_block:
+            return ActionResult(error=f"Guardrail blocked: {guardrail_block}")
+        return result
+
+    def _check_post_navigation(self, final_url: str) -> str | None:
+        if self._verifier:
+            return self._verifier.check_post_navigation(final_url)
+        url_check = self.guardrails.check_url(final_url)
+        if not url_check.allowed:
+            return url_check.reason
+        return None
+
+    def _apply_dom_blinders(self, result: ActionResult) -> ActionResult:
+        """Apply Python-side blinders post-filter on DOM content."""
+        if not (self.blinders and result.text and DOM_MARKER in result.text):
+            return result
+
+        marker_idx = result.text.index(DOM_MARKER)
+        prefix = result.text[:marker_idx]
+        dom_content = result.text[marker_idx + len(DOM_MARKER) + 1 :]
+        filtered = self.blinders.filter_snapshot(dom_content)
+        return ActionResult(
+            screenshot_b64=result.screenshot_b64,
+            text=f"{prefix}{DOM_MARKER}\n{filtered}",
+            error=result.error,
+        )
 
     # -----------------------------------------------------------------------
     # CAPTCHA handling
