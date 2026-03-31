@@ -92,9 +92,12 @@ def coerce_api_error(
     if isinstance(value, ErrorResponse):
         return value.error
     if isinstance(value, dict):
-        if "error" in value and isinstance(value["error"], dict):
-            return ApiError.model_validate(value["error"])
-        return ApiError.model_validate(value)
+        try:
+            if "error" in value and isinstance(value["error"], dict):
+                return ApiError.model_validate(value["error"])
+            return ApiError.model_validate(value)
+        except Exception:
+            return make_api_error(default_code, str(value))
     return make_api_error(default_code, str(value))
 
 

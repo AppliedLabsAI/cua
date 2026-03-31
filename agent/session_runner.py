@@ -76,15 +76,18 @@ async def run_sandbox_session(
         extracted_texts: list[str] | None = None,
         status: RunStatusValue | None = None,
     ) -> None:
-        await complete_run(
-            summary=summary,
-            error=error,
-            data=data,
-            extracted_texts=extracted_texts,
-            status=status,
-        )
-        await persist_status(f"/recordings/{run_id}")
-        await _commit_volume()
+        try:
+            await complete_run(
+                summary=summary,
+                error=error,
+                data=data,
+                extracted_texts=extracted_texts,
+                status=status,
+            )
+            await persist_status(f"/recordings/{run_id}")
+            await _commit_volume()
+        except Exception:
+            logger.warning("Failed to persist run state", exc_info=True)
 
     async def _cleanup_resources() -> None:
         if recording:
@@ -238,13 +241,22 @@ async def run_sandbox_session(
             run_span.set_status(otel_trace.StatusCode.OK)
         else:
             runtime_error = classify_runtime_error(result.error)
-            error_text = runtime_error.message if runtime_error is not None else ""
-            logger.error("Agent failed: %s", error_text)
-            await _persist_run_state(
-                error=runtime_error,
-                extracted_texts=result.extracted_texts,
-                status=RunStatusValue.FAILED,
-            )
+            if runtime_error is not None:
+                error_text = runtime_error.message
+                logger.error("Agent failed: %s", error_text)
+                await _persist_run_state(
+                    error=runtime_error,
+                    extracted_texts=result.extracted_texts,
+                    status=RunStatusValue.FAILED,
+                )
+            else:
+                error_text = str(result.error) if result.error else "Unknown error"
+                logger.error("Agent failed: %s", error_text)
+                await _persist_run_state(
+                    error=error_text,
+                    extracted_texts=result.extracted_texts,
+                    status=RunStatusValue.FAILED,
+                )
             run_span.set_status(otel_trace.StatusCode.ERROR, error_text)
 
         await _cleanup_resources()

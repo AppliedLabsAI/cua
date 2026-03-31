@@ -132,7 +132,16 @@ async def main() -> int:
         task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await shutdown_task
-    result = await session_task
+    try:
+        result = await asyncio.wait_for(session_task, timeout=30)
+    except TimeoutError:
+        logger.error("Session task did not finish within 30s shutdown grace period")
+        session_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await session_task
+        result = 1
+    except asyncio.CancelledError:
+        result = 1
 
     # Cancel the status API after a grace period for final SSE delivery
     await asyncio.sleep(1)

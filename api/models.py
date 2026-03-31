@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.errors import ApiError
 from settings import PRIMARY_MODEL
@@ -47,6 +47,18 @@ class GuardrailSettings(BaseModel):
     stuck_repeat_stop: int = Field(default=7, ge=2, le=40)
     stuck_cycle_max_length: int = Field(default=3, ge=2, le=10)
     stuck_cycle_repeats: int = Field(default=3, ge=2, le=20)
+
+    @model_validator(mode="after")
+    def check_stuck_threshold_ordering(self) -> GuardrailSettings:
+        if not (
+            self.stuck_repeat_hint < self.stuck_repeat_warn < self.stuck_repeat_stop
+        ):
+            raise ValueError(
+                "stuck thresholds must satisfy: "
+                "stuck_repeat_hint < stuck_repeat_warn < stuck_repeat_stop "
+                f"(got {self.stuck_repeat_hint}, {self.stuck_repeat_warn}, {self.stuck_repeat_stop})"
+            )
+        return self
 
 
 class ActionEvent(BaseModel):

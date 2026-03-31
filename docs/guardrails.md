@@ -113,7 +113,7 @@ guardrails:
   stuck_repeat_warn: 5                  # Same action N times → warning
   stuck_repeat_stop: 7                  # Same action N times → hard stop
   stuck_cycle_max_length: 3             # Max cycle pattern length (e.g. A-B-C)
-  stuck_cycle_repeats: 3               # Cycle must repeat N times to trigger
+  stuck_cycle_repeats: 3                 # Cycle must repeat N times to trigger
 ```
 
 When omitted, safe defaults apply (private networks blocked, LLM checks enabled, standard limits).
