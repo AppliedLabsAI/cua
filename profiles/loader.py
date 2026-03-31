@@ -31,7 +31,7 @@ _PROFILE_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 @functools.lru_cache(maxsize=32)
-def load_profile(name: str) -> Profile:
+def load_profile(name: str) -> Profile:  # noqa: B019
     """Load a profile by name from the profiles/ directory.
 
     Args:
@@ -56,6 +56,11 @@ def load_profile(name: str) -> Profile:
     data.setdefault("name", name)
     data.setdefault("guardrail_overrides", {})
     return Profile.model_validate(data)
+
+
+def clear_profile_cache() -> None:
+    """Clear the LRU cache for load_profile (useful in tests)."""
+    load_profile.cache_clear()
 
 
 def list_profiles() -> list[str]:

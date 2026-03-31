@@ -49,6 +49,12 @@ class TestValidateRunConfig:
         url_check = next(c for c in result.checks if c.name == "start_url")
         assert url_check.passed is False
 
+    def test_start_url_scheme_only_fails(self):
+        config = RunConfig(directive="test", start_url="http://")
+        result = validate_run_config(config)
+        url_check = next(c for c in result.checks if c.name == "start_url")
+        assert url_check.passed is False
+
     def test_valid_start_url(self):
         config = RunConfig(directive="test", start_url="https://example.com")
         result = validate_run_config(config)

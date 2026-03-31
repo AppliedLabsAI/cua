@@ -138,7 +138,10 @@ def validate_run_config(config: RunConfig) -> DryRunResponse:
 
     # Start URL
     if config.start_url:
-        if config.start_url.startswith(("http://", "https://")):
+        from urllib.parse import urlparse
+
+        parsed = urlparse(config.start_url)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
             checks.append(
                 DryRunCheck(
                     name="start_url",
@@ -151,7 +154,7 @@ def validate_run_config(config: RunConfig) -> DryRunResponse:
                 DryRunCheck(
                     name="start_url",
                     passed=False,
-                    message="Start URL must begin with http:// or https://",
+                    message="Start URL must be a valid http:// or https:// URL",
                 )
             )
 
