@@ -37,6 +37,7 @@ modal_app = modal.App(
         str(PROJECT_ROOT),
         remote_path="/opt/cua",
         ignore=_ignore,
+        copy=True,
     )
     .env({"PYTHONPATH": "/opt/cua"})
     .uv_sync(str(PROJECT_ROOT), extra_options="--no-dev"),
