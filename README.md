@@ -127,7 +127,7 @@ python scripts/run_local.py \
   --credentials '{"username": "admin", "password": "secret"}'
 ```
 
-Credentials are resolved at fill time — secrets never appear in the LLM prompt or action logs. See [Authentication](docs/authentication.md) for details.
+Credentials are resolved at fill time — secrets should not appear in the LLM prompt or action logs (see [Authentication](docs/authentication.md) for caveats).
 
 For deterministic workflows without LLM calls, see [Playbooks](docs/playbooks.md).
 

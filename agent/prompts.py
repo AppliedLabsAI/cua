@@ -7,11 +7,14 @@ function should be called once per run and the result reused across calls.
 
 from __future__ import annotations
 
+import re
 from string import Template
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from credentials import SecretValue
+
+_SAFE_REF = re.compile(r"^[\w.\-]+$")
 
 _SYSTEM_PROMPT = Template("""\
 You are a fast browser automation agent. Minimize tool calls — each costs 3-5s of latency.
@@ -61,7 +64,8 @@ def build_system_prompt(
         credential_refs = credential_refs_for_prompt(credentials)
         lines = ["", "## Available Credential Refs", "<robot_credentials>"]
         for ref in credential_refs:
-            lines.append(f"  {ref}")
+            if _SAFE_REF.match(ref):
+                lines.append(f"  {ref}")
         lines.append("</robot_credentials>")
         lines.append(
             "When filling sensitive fields, pass the matching credential_ref "

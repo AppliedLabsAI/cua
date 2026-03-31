@@ -138,7 +138,7 @@ def test_key_press_with_unknown_credential_ref_fails():
 def test_key_press_rejects_text_and_credential_ref_together():
     page = _FakePage()
 
-    with pytest.raises(ValueError, match="credential_ref"):
+    with pytest.raises(ValueError, match="either.*credential_ref"):
         asyncio.run(
             execute_page_action(
                 page,

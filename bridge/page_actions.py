@@ -96,7 +96,7 @@ async def execute_page_action(
             text = resolve_credential_ref(credentials, credential_ref)
         if not text and not key:
             raise ValueError(
-                "key_press requires 'text', 'credential_ref', and/or 'key'"
+                "key_press requires at least one of 'text', 'credential_ref', or 'key'"
             )
         parts: list[str] = []
         if text:

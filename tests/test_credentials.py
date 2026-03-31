@@ -76,3 +76,7 @@ class TestResolveCredentialRef:
     def test_missing_ref_raises(self):
         with pytest.raises(KeyError):
             resolve_credential_ref({"username": SecretValue("admin")}, "password")
+
+    def test_empty_ref_raises(self):
+        with pytest.raises(KeyError, match="credential_ref is required"):
+            resolve_credential_ref({"username": SecretValue("admin")}, "")

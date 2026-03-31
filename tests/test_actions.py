@@ -33,11 +33,12 @@ class TestSummarizeAction:
         result = summarize_action(
             "browser_dom",
             "key_press",
-            {"credential_ref": "password", "key": "Enter"},
+            {"credential_ref": "password", "key": "Enter", "text": "raw-secret"},
         )
         assert "credential" in result
         assert "password" in result
         assert "Enter" in result
+        assert "raw-secret" not in result
 
     def test_scroll(self):
         result = summarize_action(
