@@ -33,7 +33,11 @@ die() {
 }
 cleanup() {
 	log "Received termination signal, cleaning up background processes"
-	for pid in "$AGENT_PID" "$TINT2_PID" "$OPENBOX_PID" "$XVFB_PID"; do
+	if [ -n "${AGENT_PID:-}" ]; then
+		kill -TERM "$AGENT_PID" 2>/dev/null || true
+		wait "$AGENT_PID" 2>/dev/null || true
+	fi
+	for pid in "$TINT2_PID" "$OPENBOX_PID" "$XVFB_PID"; do
 		if [ -n "${pid:-}" ]; then
 			kill "$pid" 2>/dev/null || true
 		fi

@@ -7,11 +7,13 @@ from contextlib import asynccontextmanager
 
 import httpx
 import modal
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.auth import auth_settings, verify_api_key
+from api.errors import ApiErrorCode, coerce_http_error_response, error_response
 from api.modal_app import VOLUME_MOUNT, modal_app, recording_volume
 from api.models import RunConfig, RunResponse, RunStatus
 from api.recording_service import RecordingService
@@ -86,6 +88,26 @@ _recording_service = RecordingService(
     get_http_client=_get_http_client,
     get_handle=_run_service.get_handle,
 )
+
+
+@web_app.exception_handler(HTTPException)
+async def _http_exception_handler(
+    _request: Request, exc: HTTPException
+) -> JSONResponse:
+    payload = coerce_http_error_response(exc.detail, status_code=exc.status_code)
+    return JSONResponse(status_code=exc.status_code, content=payload.model_dump())
+
+
+@web_app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(
+    _request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    payload = error_response(
+        ApiErrorCode.INVALID_REQUEST,
+        "Request validation failed",
+        details={"errors": exc.errors()},
+    )
+    return JSONResponse(status_code=422, content=payload.model_dump())
 
 
 @modal_app.function(

@@ -227,7 +227,10 @@ class ActionRouter:
             request.tool_input,
         )
         verdict = self.guardrails.record_action(
-            input_summary, success=result.error is None
+            request.action,
+            request.tool_input,
+            input_summary,
+            success=result.error is None,
         )
         if verdict.severity is StuckSeverity.NONE:
             return result

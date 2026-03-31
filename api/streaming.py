@@ -17,10 +17,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from actionlog.actions import ActionLog, format_sse_event
+from api.errors import ApiError, ApiErrorCode, coerce_api_error, raise_api_error
 from api.models import RunStatus, RunStatusValue
 from recording import DEFAULT_OUTPUT_DIR
 from recording.manager import scan_recording_artifacts
@@ -66,14 +67,18 @@ def push_action(action: ActionLog) -> None:
 
 async def complete_run(
     summary: str | None = None,
-    error: str | None = None,
+    error: str | ApiError | dict[str, Any] | None = None,
     data: dict[str, Any] | None = None,
     extracted_texts: list[str] | None = None,
+    status: RunStatusValue | None = None,
 ) -> None:
     """Mark the run as completed or failed. Called by the agent loop on exit."""
-    _status.status = RunStatusValue.FAILED if error else RunStatusValue.COMPLETED
+    structured_error = coerce_api_error(error, default_code=ApiErrorCode.INTERNAL_ERROR)
+    _status.status = status or (
+        RunStatusValue.FAILED if structured_error else RunStatusValue.COMPLETED
+    )
     _status.result = summary
-    _status.error = error
+    _status.error = structured_error
     _status.data = data
     _status.extracted_texts = extracted_texts or []
     _status.duration_ms = int((time.monotonic() - _run_start) * 1000)
@@ -200,5 +205,5 @@ async def get_recording_trace() -> FileResponse:
     """Download the Playwright trace ZIP."""
     trace_path = _RECORDING_DIR / "trace.zip"
     if not trace_path.exists():
-        raise HTTPException(status_code=404, detail="Trace not available")
+        raise_api_error(404, ApiErrorCode.TRACE_NOT_AVAILABLE, "Trace not available")
     return FileResponse(trace_path, media_type="application/zip", filename="trace.zip")

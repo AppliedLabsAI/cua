@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
+from api.errors import ApiErrorCode, raise_api_error
 from settings import get_settings
 
 
@@ -24,12 +24,17 @@ async def verify_api_key(
     if not api_key:
         if environment == "local":
             return  # No auth configured — local dev mode
-        raise HTTPException(
-            status_code=503,
-            detail="Server misconfigured: CUA_API_KEY is required in production. "
+        raise_api_error(
+            503,
+            ApiErrorCode.SERVER_MISCONFIGURED,
+            "Server misconfigured: CUA_API_KEY is required in production. "
             "Set environment=local to disable auth for local development.",
         )
     if credentials is None or not secrets.compare_digest(
         credentials.credentials, api_key
     ):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        raise_api_error(
+            401,
+            ApiErrorCode.UNAUTHORIZED,
+            "Invalid or missing API key",
+        )

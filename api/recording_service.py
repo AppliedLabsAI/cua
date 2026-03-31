@@ -9,10 +9,10 @@ from pathlib import Path
 
 import httpx
 import modal
-from fastapi import HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.responses import Response
 
+from api.errors import ApiErrorCode, raise_api_error
 from api.run_registry import RunHandle
 from recording.manager import scan_recording_artifacts
 
@@ -40,7 +40,7 @@ class RecordingService:
         base = (Path(self._volume_mount) / run_id).resolve()
         result = base.joinpath(*parts).resolve()
         if not result.is_relative_to(base):
-            raise HTTPException(status_code=400, detail="Invalid path")
+            raise_api_error(400, ApiErrorCode.INVALID_PATH, "Invalid path")
         return result
 
     async def _reload_volume(self) -> None:
@@ -68,7 +68,12 @@ class RecordingService:
         await self._reload_volume()
         run_dir = Path(self._volume_mount) / run_id
         if not run_dir.exists():
-            raise HTTPException(status_code=404, detail="No recordings found")
+            raise_api_error(
+                404,
+                ApiErrorCode.RECORDING_NOT_FOUND,
+                "No recordings found",
+                details={"run_id": run_id},
+            )
         return {"run_id": run_id, "artifacts": scan_recording_artifacts(run_dir)}
 
     async def get_trace(self, run_id: str) -> Response:
@@ -127,5 +132,10 @@ class RecordingService:
 
         path = await self._trace_path(run_id)
         if not path.exists():
-            raise HTTPException(status_code=404, detail="Trace not available")
+            raise_api_error(
+                404,
+                ApiErrorCode.TRACE_NOT_AVAILABLE,
+                "Trace not available",
+                details={"run_id": run_id},
+            )
         return FileResponse(path, media_type="application/zip", filename="trace.zip")

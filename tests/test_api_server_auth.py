@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
 from api.auth import verify_api_key
+from api.errors import ApiErrorCode
 
 
 def _creds(token: str) -> HTTPAuthorizationCredentials:
@@ -30,7 +31,8 @@ class TestVerifyApiKey:
             await verify_api_key(None)
 
         assert exc.value.status_code == 503
-        assert "CUA_API_KEY is required" in str(exc.value.detail)
+        assert exc.value.detail["error"]["code"] == ApiErrorCode.SERVER_MISCONFIGURED
+        assert "CUA_API_KEY is required" in exc.value.detail["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_rejects_missing_credentials_when_api_key_set(self, monkeypatch):
@@ -41,6 +43,7 @@ class TestVerifyApiKey:
             await verify_api_key(None)
 
         assert exc.value.status_code == 401
+        assert exc.value.detail["error"]["code"] == ApiErrorCode.UNAUTHORIZED
 
     @pytest.mark.asyncio
     async def test_rejects_wrong_credentials(self, monkeypatch):
@@ -51,6 +54,7 @@ class TestVerifyApiKey:
             await verify_api_key(_creds("wrong-token"))
 
         assert exc.value.status_code == 401
+        assert exc.value.detail["error"]["code"] == ApiErrorCode.UNAUTHORIZED
 
     @pytest.mark.asyncio
     async def test_allows_matching_credentials(self, monkeypatch):

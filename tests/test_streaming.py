@@ -9,6 +9,7 @@ import pytest
 
 from actionlog.actions import ActionLog, format_sse_event
 from api import streaming
+from api.errors import ApiErrorCode
 from api.models import RunStatus
 from api.run_registry import InMemoryRunRegistry, RunHandle, RunPhase
 
@@ -91,9 +92,10 @@ class TestRunRegistryPhase:
             sandbox=None,
             status_base_url="http://x",
             phase="failed",
-            error="boom",
+            error={"code": "INTERNAL_ERROR", "message": "boom"},
         )
-        assert handle.error == "boom"
+        assert handle.error is not None
+        assert handle.error.message == "boom"
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +165,9 @@ class TestCompleteRun:
         streaming.init_status("test-run")
         await streaming.complete_run(error="Something broke")
         assert streaming._status.status == "failed"
-        assert streaming._status.error == "Something broke"
+        assert streaming._status.error is not None
+        assert streaming._status.error.code == ApiErrorCode.INTERNAL_ERROR
+        assert streaming._status.error.message == "Something broke"
 
     @pytest.mark.asyncio
     async def test_sends_sentinel_to_subscribers(self):
