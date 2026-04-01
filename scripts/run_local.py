@@ -143,6 +143,7 @@ async def _run_agent(
     credentials: dict | None,
     allow_private_networks: bool,
     output_schema: dict[str, Any] | None = None,
+    start_url: str | None = None,
 ) -> int:
     """Run the full LLM agent loop with blinders, guardrails, and scope extraction."""
     from actionlog.actions import save_action_log
@@ -157,7 +158,7 @@ async def _run_agent(
     if allow_private_networks:
         guardrail_config.allow_private_networks = True
 
-    scope = await extract_task_scope(directive, profile)
+    scope = await extract_task_scope(directive, profile, start_url)
     blinders = DOMBlinders(scope)
     logger.info(
         "Blinders: goal_type=%s, actions=%d",
@@ -330,6 +331,7 @@ def main(
             credentials=creds,
             allow_private_networks=allow_private_networks,
             output_schema=parsed_schema,
+            start_url=start_url,
         )
 
     sys.exit(asyncio.run(_main()))

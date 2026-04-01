@@ -71,6 +71,35 @@ class TestExtractDomains:
         # Should have example.com and *.example.com, not duplicates
         assert domains.count("example.com") == 1
 
+    def test_ignores_email_addresses(self):
+        domains = _extract_domains("Find the order for mjw.ntl@gmail.com")
+        assert "gmail.com" not in domains
+        assert "mjw.ntl" not in domains
+        assert domains == []
+
+    def test_ignores_email_but_keeps_real_urls(self):
+        domains = _extract_domains(
+            "Search user@example.com on https://dashboard.company.com"
+        )
+        assert "example.com" not in domains
+        assert "dashboard.company.com" in domains
+
+    def test_start_url_included(self):
+        domains = _extract_domains(
+            "Find the order for user@example.com",
+            start_url="https://admin.company.com",
+        )
+        assert "admin.company.com" in domains
+        assert "*.admin.company.com" in domains
+        assert "example.com" not in domains
+
+    def test_start_url_deduplicates_with_directive(self):
+        domains = _extract_domains(
+            "Go to example.com/page",
+            start_url="https://example.com",
+        )
+        assert domains.count("example.com") == 1
+
 
 class TestExtractTaskScope:
     @pytest.mark.asyncio
