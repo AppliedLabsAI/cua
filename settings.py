@@ -16,12 +16,12 @@ from pydantic_settings import BaseSettings
 # Model constants — change here to switch everywhere
 # ---------------------------------------------------------------------------
 
-PRIMARY_MODEL = "google-gla:gemini-3-flash-preview"
-UTILITY_MODEL = "google-gla:gemini-3.1-flash-lite-preview"
+# PRIMARY_MODEL = "google-gla:gemini-3-flash-preview"
+# UTILITY_MODEL = "google-gla:gemini-3.1-flash-lite-preview"
 # PRIMARY_MODEL = "anthropic:claude-sonnet-4-6"
 # UTILITY_MODEL = "anthropic:claude-haiku-4-5"
-# PRIMARY_MODEL = "openai-responses:gpt-5.4"
-# UTILITY_MODEL = "openai-responses:gpt-5.4-mini"
+PRIMARY_MODEL = "openai-responses:gpt-5.4"
+UTILITY_MODEL = "openai-responses:gpt-5.4-mini"
 
 # ---------------------------------------------------------------------------
 # Timeout constants (milliseconds unless noted) — change here to tune globally

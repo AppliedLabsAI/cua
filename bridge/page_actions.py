@@ -70,6 +70,7 @@ async def execute_page_action(
             wait_until="domcontentloaded",
             timeout=config.navigation_timeout_ms,
         )
+        await wait_for_stable(page, config.settle_timeout_ms)
         return PageActionOutcome(
             page_changed=page.url != url_before,
             navigation_status=response.status if response else "unknown",
@@ -226,6 +227,15 @@ async def _extract_markdown(page: Any) -> str:
 
 
 async def wait_for_stable(page: Any, timeout_ms: int) -> None:
-    """Best-effort post-action stabilization shared by both execution paths."""
+    """Best-effort post-action stabilization shared by both execution paths.
+
+    Waits for domcontentloaded first (HTML parsed), then attempts networkidle
+    (no in-flight requests for 500ms).  The networkidle phase catches SPA data
+    fetches that fire after the initial parse — without it the LLM sees a
+    partially-rendered page.  Both waits are best-effort: if they time out
+    (e.g. long-polling / websocket pages), execution continues.
+    """
     with contextlib.suppress(Exception):
         await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+    with contextlib.suppress(Exception):
+        await page.wait_for_load_state("networkidle", timeout=timeout_ms)

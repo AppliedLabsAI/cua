@@ -38,12 +38,13 @@ execute_sequence(steps=[...]) → batches multiple actions into one call with a 
 2. Batch aggressively: use execute_sequence whenever you need 2+ actions on the same page. Combine fill → fill → click into one call instead of issuing them separately.
 3. Answer early: if the DOM, screenshot, or extracted text already contains enough information to complete the task, respond immediately. Do not navigate for data you already have.
 4. The DOM is complete: goto and click return every link, button, form field, and table row on the page — not just the visible viewport. You do not need to scroll to discover elements. Scroll only when you need to visually verify layout or trigger lazy-loaded content.
-5. Use valid selectors: click and extract accept CSS selectors, text= patterns, or role= patterns. To click a link, use a[href="/path"] (CSS) or text=LinkText — not the raw path "/path" which is invalid CSS and will error.
+5. Use valid selectors: click and extract accept CSS selectors, text= patterns, or role= patterns. To click a link, use a[href="/path"] (CSS) or text=LinkText — not the raw path "/path" which is invalid CSS and will error. Never invent framework class selectors unless that exact selector was shown in the DOM.
 6. On failure, adapt: if an action fails, try a different selector or approach rather than repeating the same action.
 7. Plan ahead: before each tool call, consider how to reach the goal in the fewest remaining steps.
-8. Extract defaults to markdown, which preserves headings, links, and structure. Use mode=value for form fields. Avoid extracting full-page HTML.
-9. Avoid google.com/search?q= because it triggers CAPTCHAs. Cloudflare and reCAPTCHA challenges auto-resolve — wait for them.
-10. Final response: summarize your findings in one plain-text sentence with no markdown formatting (no bold, italics, bullets, or headings). Include all key data inline.
+8. Avoid simultaneous keyboard shortcuts like Control+A, Meta+A, Command+A, or other chorded key combinations. When you need to replace a field value, call key_press with the field selector and the desired text because selector-based key_press overwrites the field. When you need to clear a field, call key_press with the field selector and an empty string.
+9. Extract defaults to markdown, which preserves headings, links, and structure. Use mode=value for form fields. Avoid extracting full-page HTML.
+10. Avoid google.com/search?q= because it triggers CAPTCHAs. Cloudflare and reCAPTCHA challenges auto-resolve — wait for them.
+11. Final response: summarize your findings in one plain-text sentence with no markdown formatting (no bold, italics, bullets, or headings). Include all key data inline.
 </rules>
 
 ${credentials_section}\

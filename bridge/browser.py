@@ -93,12 +93,26 @@ class BrowserManager:
 
         self._page = await self._context.new_page()
 
+        # Auto-follow new tabs / popups so the agent operates on the latest page.
+        # Init scripts are context-level, so JS helpers are already available.
+        self._context.on("page", self._on_new_page)
+
         if start_url:
             await self._page.goto(
                 start_url,
                 wait_until="domcontentloaded",
                 timeout=NAVIGATION_TIMEOUT_MS,
             )
+
+    def _on_new_page(self, page: Page) -> None:
+        """Handle new tab / popup: switch the active page automatically."""
+        prev_url = self._page.url if self._page else "none"
+        self._page = page
+        logger.info(
+            "Switched to new tab: %s (from %s)",
+            page.url[:80] or "about:blank",
+            prev_url[:80],
+        )
 
     @property
     def page(self) -> Page:

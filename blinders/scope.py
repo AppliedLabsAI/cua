@@ -44,6 +44,10 @@ _URL_PATTERN = re.compile(
     r"https?://[^\s,\"'<>]+|(?:www\.)?[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:/[^\s,\"'<>]*)?"
 )
 
+# Strip email addresses before URL extraction to prevent the bare-domain
+# alternative from matching email local parts ("mjw.ntl") or domains ("gmail.com").
+_EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
 # Minimal keyword sets used ONLY as offline fallback when no API key is available.
 # The LLM classifier is the primary classification method.
 _FALLBACK_FILL_FORM_RE = re.compile(
@@ -85,8 +89,8 @@ class TaskScope(BaseModel):
     max_steps_override: int | None = None
 
 
-def _extract_domains(directive: str) -> list[str]:
-    """Extract domain patterns from URLs found in the directive.
+def _extract_domains(directive: str, start_url: str | None = None) -> list[str]:
+    """Extract domain patterns from URLs found in the directive and start_url.
 
     Returns glob patterns like ["*.example.com", "example.com"].
     If no domains found, returns empty list (permissive — any domain allowed).
@@ -94,7 +98,24 @@ def _extract_domains(directive: str) -> list[str]:
     domains: list[str] = []
     seen: set[str] = set()
 
-    for match in _URL_PATTERN.finditer(directive):
+    # Include the start_url domain first — it's the primary working domain.
+    if start_url:
+        url = start_url if start_url.startswith("http") else f"https://{start_url}"
+        try:
+            parsed = urlparse(url)
+            domain = (parsed.hostname or "").lower()
+            if domain and domain not in seen:
+                seen.add(domain)
+                domains.append(domain)
+                if not domain.startswith("*."):
+                    domains.append(f"*.{domain}")
+        except Exception:
+            pass
+
+    # Strip email addresses so the bare-domain regex doesn't match them.
+    cleaned_directive = _EMAIL_PATTERN.sub("", directive)
+
+    for match in _URL_PATTERN.finditer(cleaned_directive):
         url = match.group()
         if not url.startswith("http"):
             url = "https://" + url
@@ -211,13 +232,14 @@ def build_task_scope(
     directive: str,
     goal_type: str,
     profile: Profile | None = None,
+    start_url: str | None = None,
 ) -> TaskScope:
     """Build a TaskScope from a pre-classified goal type (sync).
 
     Use this directly in tests with `_detect_goal_type_fallback`.
     Production code should use `extract_task_scope` which classifies via LLM.
     """
-    allowed_domains = _extract_domains(directive)
+    allowed_domains = _extract_domains(directive, start_url)
     visibility = _default_visibility(goal_type)
     allowed_actions = _default_actions(goal_type)
 
@@ -242,6 +264,7 @@ def build_task_scope(
 async def extract_task_scope(
     directive: str,
     profile: Profile | None = None,
+    start_url: str | None = None,
 ) -> TaskScope:
     """Analyze directive to determine task scope.
 
@@ -249,4 +272,4 @@ async def extract_task_scope(
     Falls back to keyword matching if the LLM call fails.
     """
     goal_type = await _detect_goal_type(directive)
-    return build_task_scope(directive, goal_type, profile)
+    return build_task_scope(directive, goal_type, profile, start_url)

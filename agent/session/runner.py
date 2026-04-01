@@ -85,7 +85,9 @@ async def run_sandbox_session(
                     logger.info("Session recording started")
 
                 with tracer.start_as_current_span(BLINDERS_EXTRACT):
-                    scope = await extract_task_scope(config.directive, config.profile)
+                    scope = await extract_task_scope(
+                        config.directive, config.profile, config.start_url
+                    )
                     blinders = DOMBlinders(scope)
 
                 setup_span.set_attributes(

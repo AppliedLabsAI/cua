@@ -139,7 +139,7 @@ async def _run_agent_case(
         if case.allow_private_networks:
             guardrail_config.allow_private_networks = True
 
-        scope = await extract_task_scope(case.directive, profile)
+        scope = await extract_task_scope(case.directive, profile, case.start_url)
         blinders = DOMBlinders(scope)
         bridge = ActionRouter(
             browser=runtime.browser,

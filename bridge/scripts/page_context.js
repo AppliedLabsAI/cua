@@ -7,7 +7,7 @@
  *     — Returns {dom, title, url}
  *
  *   window.__pageMap(maxChars, filterConfig)
- *     — Full page action map of ALL elements regardless of visibility.
+ *     — Full page action map across the document, excluding hidden elements.
  *     — Returns {map, title, url}
  *
  * Cognitive Blinders support:
@@ -152,6 +152,21 @@ const __NAV_SELECTOR = 'nav, #nav-sidebar, .sidebar, [role=navigation]';
 const __INTERACTIVE_SELECTOR =
   'a, button, input, select, textarea, ' +
   '[role=button], [role=link], [onclick], [tabindex]';
+const __LABELED_FIELD_SELECTOR = 'input, select, textarea, a[href]';
+
+/**
+ * Return true when an element is materially visible to the user.
+ *
+ * We still want the full document, not just the viewport, but hidden tab panels
+ * and collapsed sections should not be surfaced to the model.
+ *
+ * Uses the native checkVisibility() API (Chromium 105+), which is always
+ * available in our Patchright-controlled browser.
+ */
+function __isVisible(el) {
+  if (!el) return false;
+  return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+}
 
 /**
  * Cognitive Blinders: element visibility filter.
@@ -232,6 +247,24 @@ function __parentContext(el) {
 }
 
 /**
+ * Resolve the field associated with a label.
+ */
+function __findLabeledField(root, label, parentSelector) {
+  const forId = label.getAttribute('for');
+  if (forId) {
+    try {
+      return root.querySelector(`#${CSS.escape(forId)}`);
+    } catch {
+      // Fall through to parent lookup.
+    }
+  }
+
+  const parent = label.closest(parentSelector);
+  if (!parent) return null;
+  return parent.querySelector(__LABELED_FIELD_SELECTOR);
+}
+
+/**
  * Compact element renderer for DOM snapshot mode.
  */
 function __renderElement(el) {
@@ -292,21 +325,16 @@ window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
     let fieldCount = 0;
     for (const label of labels) {
       if (len >= MAX) break;
+      if (!__isVisible(label)) continue;
       const labelText = (label.innerText || '').replace(/[:\n]/g, '').trim();
       if (!labelText) continue;
-      let input = null;
-      const forId = label.getAttribute('for');
-      if (forId) {
-        input = root.querySelector(`#${CSS.escape(forId)}`);
-      }
-      if (!input) {
-        const parent = label.closest(
-          '.form-row, .form-group, .field, fieldset, .form-control, div',
-        );
-        if (parent)
-          input = parent.querySelector('input, select, textarea, a[href]');
-      }
+      const input = __findLabeledField(
+        root,
+        label,
+        '.form-row, .form-group, .field, fieldset, .form-control, div',
+      );
       if (!input) continue;
+      if (!__isVisible(input)) continue;
       let val = '';
       const tag = input.tagName.toLowerCase();
       if (tag === 'select') {
@@ -335,6 +363,7 @@ window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
   const tables = root.querySelectorAll('table');
   for (const table of tables) {
     if (len >= MAX) break;
+    if (!__isVisible(table)) continue;
     if (table.closest(__NAV_SELECTOR)) continue;
     const bodyRows = table.querySelectorAll('tbody tr');
     if (bodyRows.length <= 2 && !table.getAttribute('id')) continue;
@@ -397,6 +426,7 @@ window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
       len += 15;
       for (const h of headings) {
         if (len >= MAX) break;
+        if (!__isVisible(h)) continue;
         const t = (h.innerText || '').replace(/\n/g, ' ').trim().slice(0, 80);
         if (!t) continue;
         const line = `${h.tagName.toLowerCase()}: ${t}\n`;
@@ -405,13 +435,15 @@ window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
       }
     }
     // Capture page-level counts/summaries (e.g., "3 results", "Showing 1 to 10 of 50")
-    const countEl = contentArea.querySelector('.paginator, .pagination, .results, .object-tools, p.paginator');
-    if (countEl && len < MAX) {
+    const countEls = contentArea.querySelectorAll('.paginator, .pagination, .results, .object-tools, p.paginator');
+    for (const countEl of countEls) {
+      if (!__isVisible(countEl) || len >= MAX) continue;
       const countText = (countEl.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 100);
       if (countText) {
         const countLine = `page-info: ${countText}\n`;
         parts.push(countLine);
         len += countLine.length;
+        break;
       }
     }
   }
@@ -440,10 +472,7 @@ window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
   // Pass 1: non-nav elements
   for (const el of allEls) {
     if (len >= MAX || elCount >= MAX_ELEMENTS) break;
-    // checkVisibility() — faster than getComputedStyle, no style recalc
-    if (typeof el.checkVisibility === 'function') {
-      if (!el.checkVisibility()) continue;
-    }
+    if (!__isVisible(el)) continue;
     if (navElSet.has(el)) {
       navEls.push(el);
       continue;
@@ -461,7 +490,7 @@ window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
     elCount++;
   }
 
-  // Pass 2: backfill nav elements
+  // Pass 2: backfill nav elements (already visibility-checked in Pass 1)
   for (const el of navEls) {
     if (len >= MAX || elCount >= MAX_ELEMENTS) break;
     // Cognitive Blinders filter
@@ -485,7 +514,7 @@ window.__domSnapshot = (rootSelector, maxChars, filterConfig) => {
 };
 
 // =========================================================================
-// Page Map — full page, all elements regardless of visibility
+// Page Map — full page, excluding hidden elements
 // =========================================================================
 
 window.__pageMap = (maxChars, filterConfig) => {
@@ -518,6 +547,7 @@ window.__pageMap = (maxChars, filterConfig) => {
   const regions = root.querySelectorAll(_regionSel);
   const seenRegions = new Set();
   for (const r of regions) {
+    if (!__isVisible(r)) continue;
     // Skip if any ancestor is already a seen region (walk up the DOM)
     let dominated = false;
     let parent = r.parentElement;
@@ -558,6 +588,7 @@ window.__pageMap = (maxChars, filterConfig) => {
   const headings = contentArea.querySelectorAll('h1, h2, h3');
   for (const h of headings) {
     if (!_fits()) break;
+    if (!__isVisible(h)) continue;
     const t = (h.innerText || '').replace(/\n/g, ' ').trim().slice(0, 100);
     if (t) _add(`${h.tagName.toLowerCase()}: ${t}\n`);
   }
@@ -566,6 +597,7 @@ window.__pageMap = (maxChars, filterConfig) => {
   const countEls = root.querySelectorAll('.paginator, .pagination, .results, p.paginator, .object-tools');
   for (const el of countEls) {
     if (!_fits()) break;
+    if (!__isVisible(el)) continue;
     const t = (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 120);
     if (t) _add(`page-info: ${t}\n`);
   }
@@ -575,18 +607,16 @@ window.__pageMap = (maxChars, filterConfig) => {
   if (labels.length > 0) {
     let fieldLines = [];
     for (const label of labels) {
+      if (!__isVisible(label)) continue;
       const labelText = (label.innerText || '').replace(/[:\n]/g, '').trim();
       if (!labelText) continue;
-      let input = null;
-      const forId = label.getAttribute('for');
-      if (forId) {
-        try { input = root.querySelector(`#${CSS.escape(forId)}`); } catch {}
-      }
-      if (!input) {
-        const parent = label.closest('.form-row, .form-group, .field, fieldset, div');
-        if (parent) input = parent.querySelector('input, select, textarea, a[href]');
-      }
+      const input = __findLabeledField(
+        root,
+        label,
+        '.form-row, .form-group, .field, fieldset, div',
+      );
       if (!input) continue;
+      if (!__isVisible(input)) continue;
       const tag = input.tagName.toLowerCase();
       let val = '', sel = '';
       if (tag === 'select') {
@@ -617,6 +647,7 @@ window.__pageMap = (maxChars, filterConfig) => {
   const tables = root.querySelectorAll('table');
   for (const table of tables) {
     if (!_fits()) break;
+    if (!__isVisible(table)) continue;
     if (table.closest(__NAV_SELECTOR)) continue;
     const thead = table.querySelector('thead');
     const bodyRows = table.querySelectorAll('tbody tr');
@@ -671,8 +702,7 @@ window.__pageMap = (maxChars, filterConfig) => {
   }
 
   // --- ALL links on the page, grouped by region ---
-  // This is the key difference from dom_snapshot: we skip visibility checks
-  // and capture everything, so the LLM never needs to scroll.
+  // We capture the full document, but only elements that are actually visible.
   const navContainers = root.querySelectorAll(__NAV_SELECTOR);
   const navElSet = new Set();
   for (const nav of navContainers) {
@@ -712,6 +742,7 @@ window.__pageMap = (maxChars, filterConfig) => {
   const allActionable = root.querySelectorAll('a[href], button, [role=button], input[type=submit]');
 
   for (const el of allActionable) {
+    if (!__isVisible(el)) continue;
     if (navElSet.has(el)) continue;
     // Cognitive Blinders filter
     if (!__shouldShow(el, filterConfig)) continue;
@@ -741,6 +772,7 @@ window.__pageMap = (maxChars, filterConfig) => {
   // Nav links (sidebar, navigation bars)
   const navActions = [];
   for (const el of navElSet) {
+    if (!__isVisible(el)) continue;
     const href = el.getAttribute('href');
     if (href && seenHrefs.has(href)) continue;
     if (href) seenHrefs.add(href);
@@ -775,6 +807,7 @@ window.__pageMap = (maxChars, filterConfig) => {
 
   const unlabeledInputs = [];
   for (const input of standaloneInputs) {
+    if (!__isVisible(input)) continue;
     if (input.id && labeledIds.has(input.id)) continue;
     const tag = input.tagName.toLowerCase();
     const type = input.getAttribute('type') || '';
