@@ -70,6 +70,7 @@ class RunOutcome:
         message: str,
         *,
         extracted_texts: list[str] | None = None,
+        session_memory: str = "",
     ) -> RunOutcome:
         return cls(
             status=RunStatusValue.TERMINATED,
@@ -81,6 +82,7 @@ class RunOutcome:
                 details={"run_id": run_id},
             ),
             extracted_texts=list(extracted_texts or []),
+            session_memory=session_memory,
             trace_status=otel_trace.StatusCode.ERROR,
             trace_message=message,
         )
@@ -91,6 +93,7 @@ class RunOutcome:
         message: str | None,
         *,
         extracted_texts: list[str] | None = None,
+        session_memory: str = "",
     ) -> RunOutcome:
         return cls(
             status=RunStatusValue.FAILED,
@@ -98,6 +101,7 @@ class RunOutcome:
             exit_code=1,
             error=classify_runtime_error(message),
             extracted_texts=list(extracted_texts or []),
+            session_memory=session_memory,
             trace_status=otel_trace.StatusCode.ERROR,
             trace_message=message or "Unknown error",
         )

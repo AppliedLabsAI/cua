@@ -132,6 +132,7 @@ class StuckDetector:
         *,
         input_summary: str,
         success: bool,
+        visited_urls: list[str] | None = None,
     ) -> StuckVerdict:
         """Record an action and check for stuck patterns.
 
@@ -150,7 +151,7 @@ class StuckDetector:
 
         self._just_added_urls = []
         if success:
-            for url in extract_goto_urls(action, tool_input):
+            for url in visited_urls or extract_goto_urls(action, tool_input):
                 normalized = normalize_url(url)
                 if normalized:
                     self._url_history.setdefault(normalized, []).append(

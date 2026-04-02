@@ -221,7 +221,11 @@ async def _run_agent(
 
     os.makedirs(output_dir, exist_ok=True)
     log_path = os.path.join(output_dir, "action_log.json")
-    await save_action_log(result.action_log, log_path)
+    await save_action_log(
+        result.action_log,
+        log_path,
+        session_memory=result.session_memory,
+    )
     logger.info("Action log saved to %s", log_path)
 
     return 0 if result.success else 1

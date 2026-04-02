@@ -9,12 +9,19 @@ def _detector(**overrides) -> StuckDetector:
     return StuckDetector(**overrides)
 
 
-def _record(det: StuckDetector, summary: str, *, success: bool = True):
+def _record(
+    det: StuckDetector,
+    summary: str,
+    *,
+    success: bool = True,
+    visited_urls: list[str] | None = None,
+):
     return det.record(
         "click",
         {"selector": summary.split("'")[1]},
         input_summary=summary,
         success=success,
+        visited_urls=visited_urls,
     )
 
 
@@ -212,7 +219,7 @@ class TestUrlRevisitDetection:
         self._goto(det, "https://Example.COM/Path/")
         for i in range(4):
             self._click(det, f"#x-{i}")
-        v = self._goto(det, "https://example.com/path")
+        v = self._goto(det, "https://example.com/Path")
         assert v.severity is StuckSeverity.HINT
 
     def test_different_urls_not_detected(self):
@@ -265,6 +272,38 @@ class TestUrlRevisitDetection:
         v = self._click(det, "#next-action")
         assert v.severity is StuckSeverity.NONE
         v = self._click(det, "#another-action")
+        assert v.severity is StuckSeverity.NONE
+
+    def test_click_navigation_revisit_detected_from_actual_visited_url(self):
+        det = _detector(revisit_gap=3, repeat_hint=20)
+        _record(
+            det,
+            "click '#nav-home'",
+            visited_urls=["https://example.com/dashboard"],
+        )
+        for i in range(4):
+            _record(det, f"click '#x-{i}'", success=True)
+        v = _record(
+            det,
+            "click '#nav-home-again'",
+            visited_urls=["https://example.com/dashboard"],
+        )
+        assert v.severity is StuckSeverity.HINT
+
+    def test_query_variants_are_not_treated_as_same_page(self):
+        det = _detector(revisit_gap=3, repeat_hint=20)
+        _record(
+            det,
+            "click '#search-alpha'",
+            visited_urls=["https://example.com/search?q=alpha"],
+        )
+        for i in range(4):
+            _record(det, f"click '#x-{i}'", success=True)
+        v = _record(
+            det,
+            "click '#search-beta'",
+            visited_urls=["https://example.com/search?q=beta"],
+        )
         assert v.severity is StuckSeverity.NONE
 
 

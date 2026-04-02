@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from bridge import DOM_MARKER
-from bridge.url_utils import compact_url, extract_goto_urls
+from bridge.url_utils import compact_url, extract_goto_urls, normalize_url
 
 _MAX_FINDING_LEN = 150
 
@@ -31,6 +31,7 @@ class ActionEntry:
 
     step: int
     summary: str
+    success: bool
     finding: str = ""
 
 
@@ -54,12 +55,17 @@ class SessionMemory:
         input_summary: str,
         result_text: str | None,
         success: bool,
+        visited_urls: list[str] | None = None,
     ) -> None:
         """Record a completed action into session memory."""
         if success:
-            for url in extract_goto_urls(action, tool_input):
+            for url in visited_urls or extract_goto_urls(action, tool_input):
                 self.pages.append(
-                    PageVisit(url=url, step=step, display=compact_url(url))
+                    PageVisit(
+                        url=url,
+                        step=step,
+                        display=compact_url(url),
+                    )
                 )
 
         finding = ""
@@ -67,7 +73,12 @@ class SessionMemory:
             finding = _extract_finding(result_text)
 
         self.actions.append(
-            ActionEntry(step=step, summary=input_summary, finding=finding)
+            ActionEntry(
+                step=step,
+                summary=input_summary,
+                success=success,
+                finding=finding,
+            )
         )
 
     def render(self) -> str:
@@ -78,26 +89,43 @@ class SessionMemory:
         if not self.actions:
             return ""
 
+        completed = [entry for entry in self.actions if entry.success]
+        failed = [entry for entry in self.actions if not entry.success]
+
         parts: list[str] = ["<session_progress>"]
-        parts.append(f"Steps completed: {len(self.actions)}")
+        parts.append(f"Steps completed: {len(completed)}")
 
         if self.pages:
             parts.append("")
             parts.append("Pages visited:")
-            seen: dict[str, list[int]] = {}
+            seen: dict[str, tuple[str, list[int]]] = {}
             for visit in self.pages:
-                seen.setdefault(visit.display, []).append(visit.step)
-            for url_display, steps in seen.items():
+                key = normalize_url(visit.url) or visit.display
+                if key not in seen:
+                    seen[key] = (visit.display, [visit.step])
+                else:
+                    seen[key][1].append(visit.step)
+            for url_display, steps in seen.values():
                 step_str = ", ".join(str(s) for s in steps)
                 parts.append(f"  - {url_display} (step {step_str})")
 
-        parts.append("")
-        parts.append("Actions taken:")
-        for entry in self.actions:
-            line = f"  - Step {entry.step}: {entry.summary}"
-            if entry.finding:
-                line += f" → {entry.finding}"
-            parts.append(line)
+        if completed:
+            parts.append("")
+            parts.append("Actions completed:")
+            for entry in completed:
+                line = f"  - Step {entry.step}: {entry.summary}"
+                if entry.finding:
+                    line += f" → {entry.finding}"
+                parts.append(line)
+
+        if failed:
+            parts.append("")
+            parts.append("Failed attempts:")
+            for entry in failed:
+                line = f"  - Step {entry.step}: {entry.summary}"
+                if entry.finding:
+                    line += f" → {entry.finding}"
+                parts.append(line)
 
         parts.append("</session_progress>")
         return "\n".join(parts)

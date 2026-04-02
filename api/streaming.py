@@ -48,6 +48,9 @@ def init_status(run_id: str) -> None:
     _status.result = None
     _status.error = None
     _status.duration_ms = None
+    _status.data = None
+    _status.extracted_texts = []
+    _status.session_memory = ""
     _action_log.clear()
     _run_start = time.monotonic()
 

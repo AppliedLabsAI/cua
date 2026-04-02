@@ -51,6 +51,7 @@ async def run_sandbox_session(
     tracer = get_tracer()
     recording: RecordingManager | None = None
     bridge: ActionRouter | None = None
+    session_memory = SessionMemory()
 
     with tracer.start_as_current_span(
         AGENT_RUN,
@@ -126,7 +127,6 @@ async def run_sandbox_session(
         )
 
         try:
-            session_memory = SessionMemory()
             bridge = ActionRouter(
                 browser=browser,
                 guardrail_config=config.guardrail_config,
@@ -159,6 +159,7 @@ async def run_sandbox_session(
                 extracted_texts=(
                     collect_extracted_texts(bridge.action_log) if bridge else []
                 ),
+                session_memory=session_memory.render(),
             )
             run_span.set_status(outcome.trace_status, outcome.trace_message or "")
             return await finalizer.finalize(outcome)
@@ -170,6 +171,7 @@ async def run_sandbox_session(
                 extracted_texts=(
                     collect_extracted_texts(bridge.action_log) if bridge else []
                 ),
+                session_memory=session_memory.render(),
             )
             run_span.set_status(outcome.trace_status, outcome.trace_message or "")
             return await finalizer.finalize(outcome)

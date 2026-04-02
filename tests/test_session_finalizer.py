@@ -57,6 +57,29 @@ def test_run_outcome_failure_classifies_agent_error():
     assert outcome.error.code is ApiErrorCode.GUARDRAIL_BLOCKED
 
 
+def test_run_outcome_terminated_preserves_session_memory():
+    outcome = RunOutcome.terminated(
+        "run-123",
+        "Stopped",
+        extracted_texts=["x"],
+        session_memory="<session_progress>partial</session_progress>",
+    )
+
+    assert outcome.status is RunStatusValue.TERMINATED
+    assert outcome.session_memory == "<session_progress>partial</session_progress>"
+
+
+def test_run_outcome_crashed_preserves_session_memory():
+    outcome = RunOutcome.crashed(
+        "boom",
+        extracted_texts=["x"],
+        session_memory="<session_progress>partial</session_progress>",
+    )
+
+    assert outcome.status is RunStatusValue.FAILED
+    assert outcome.session_memory == "<session_progress>partial</session_progress>"
+
+
 @pytest.mark.asyncio
 async def test_run_finalizer_persists_cleans_up_and_records_metrics():
     browser = SimpleNamespace(close=AsyncMock())
@@ -106,12 +129,19 @@ async def test_run_finalizer_persists_cleans_up_and_records_metrics():
             exit_code=0,
             summary="done",
             extracted_texts=["x"],
+            session_memory="<session_progress>done</session_progress>",
         )
 
         exit_code = await finalizer.finalize(outcome, result=result)
 
     assert exit_code == 0
     complete_run.assert_awaited_once()
+    await_args = complete_run.await_args
+    assert await_args is not None
+    assert (
+        await_args.kwargs["session_memory"]
+        == "<session_progress>done</session_progress>"
+    )
     persist_status.assert_awaited_once_with("/recordings/run-123")
     commit_recording_volume.assert_awaited_once()
     recording.stop.assert_awaited_once()

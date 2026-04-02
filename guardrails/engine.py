@@ -333,6 +333,7 @@ class GuardrailEngine:
         input_summary: str,
         *,
         success: bool,
+        visited_urls: list[str] | None = None,
     ) -> StuckVerdict:
         """Track action for stuck pattern detection."""
         return self._stuck.record(
@@ -340,4 +341,5 @@ class GuardrailEngine:
             tool_input,
             input_summary=input_summary,
             success=success,
+            visited_urls=visited_urls,
         )
