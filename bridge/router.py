@@ -20,6 +20,7 @@ from bridge.browser import BrowserManager
 from bridge.captcha import handle_captcha_if_present
 from bridge.execution import execute_dom_action
 from bridge.tool_result import action_result_to_tool_result, error_result
+from bridge.url_utils import extract_visited_urls
 from guardrails import GuardrailConfig, GuardrailEngine, GuardrailResult
 from guardrails.stuck import StuckSeverity
 from telemetry import get_tracer
@@ -44,6 +45,7 @@ from telemetry.spans import (
 )
 
 if TYPE_CHECKING:
+    from agent.memory import SessionMemory
     from blinders.filters import DOMBlinders
     from credentials import SecretValue
 
@@ -72,12 +74,14 @@ class ActionRouter:
         guardrail_config: GuardrailConfig | None = None,
         blinders: DOMBlinders | None = None,
         directive: str = "",
+        session_memory: SessionMemory | None = None,
     ) -> None:
         self.browser = browser
         self.guardrails = GuardrailEngine(guardrail_config)
         self.blinders = blinders
         self._filter_config = blinders.to_js_filter_config() if blinders else None
         self.action_log: list[ActionLog] = []
+        self._session_memory = session_memory
         self._step = 0
         self._stopped = False
         self._tracer = get_tracer()
@@ -115,15 +119,43 @@ class ActionRouter:
                 "Summarize what you accomplished and any remaining steps."
             )
 
+        page_url_before = self._current_page_url()
         request = self._build_request(tool_name, tool_input)
         start = time.monotonic()
 
         result = await self._dispatch_phase(request, credentials=credentials)
-        result = self._postprocess_phase(request, result)
+        page_url_after = self._current_page_url()
+        visited_urls = (
+            extract_visited_urls(
+                request.action,
+                request.tool_input,
+                page_url_before=page_url_before,
+                page_url_after=page_url_after,
+            )
+            if result.error is None
+            else []
+        )
+        result = self._postprocess_phase(
+            request,
+            result,
+            visited_urls=visited_urls,
+        )
 
         duration_ms = int((time.monotonic() - start) * 1000)
-        self._record_action(request, result, duration_ms, reasoning=reasoning)
+        self._record_action(
+            request,
+            result,
+            duration_ms,
+            reasoning=reasoning,
+            visited_urls=visited_urls,
+        )
         return action_result_to_tool_result(result)
+
+    def _current_page_url(self) -> str:
+        """Return the current page URL, or an empty string if unavailable."""
+        with contextlib.suppress(Exception):
+            return self.browser.page.url
+        return ""
 
     def _build_request(self, tool_name: str, tool_input: dict) -> ActionRequest:
         self._step += 1
@@ -186,6 +218,7 @@ class ActionRouter:
         duration_ms: int,
         *,
         reasoning: str | None,
+        visited_urls: list[str],
     ) -> None:
         entry = ActionLog.now(
             step=request.step,
@@ -202,6 +235,18 @@ class ActionRouter:
         self.action_log.append(entry)
         self._background.schedule(persist_action_log(entry))
 
+        # Record to session memory so the LLM retains awareness of this action.
+        if self._session_memory is not None:
+            self._session_memory.record(
+                step=request.step,
+                action=request.action,
+                tool_input=request.tool_input,
+                input_summary=entry.input_summary,
+                result_text=result.text,
+                success=result.error is None,
+                visited_urls=visited_urls,
+            )
+
         logger.info(
             "Step %d: %s%s.%s%s %s %s",
             request.step,
@@ -217,6 +262,8 @@ class ActionRouter:
         self,
         request: ActionRequest,
         result: ActionResult,
+        *,
+        visited_urls: list[str],
     ) -> ActionResult:
         if result.error:
             stop = self.guardrails.record_error()
@@ -235,6 +282,7 @@ class ActionRouter:
             request.tool_input,
             input_summary,
             success=result.error is None,
+            visited_urls=visited_urls,
         )
         if verdict.severity is StuckSeverity.NONE:
             return result

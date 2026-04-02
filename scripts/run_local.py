@@ -166,11 +166,15 @@ async def _run_agent(
         len(scope.allowed_actions),
     )
 
+    from agent.memory import SessionMemory
+
+    session_memory = SessionMemory()
     bridge = ActionRouter(
         browser=browser,
         guardrail_config=guardrail_config,
         blinders=blinders,
         directive=directive,
+        session_memory=session_memory,
     )
 
     try:
@@ -192,6 +196,7 @@ async def _run_agent(
             ),
             allowed_actions=scope.allowed_actions,
             output_schema=output_schema,
+            session_memory=session_memory,
         )
     finally:
         try:
@@ -216,7 +221,11 @@ async def _run_agent(
 
     os.makedirs(output_dir, exist_ok=True)
     log_path = os.path.join(output_dir, "action_log.json")
-    await save_action_log(result.action_log, log_path)
+    await save_action_log(
+        result.action_log,
+        log_path,
+        session_memory=result.session_memory,
+    )
     logger.info("Action log saved to %s", log_path)
 
     return 0 if result.success else 1

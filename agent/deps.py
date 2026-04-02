@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from actionlog.actions import ActionLog
     from bridge.router import ActionRouter
     from credentials import SecretValue
+
+from agent.memory import SessionMemory
 
 
 @dataclass
@@ -25,6 +27,9 @@ class AgentDeps:
     output_schema: dict[str, Any] | None = None
     on_action: Callable[[ActionLog], None] | None = None
     allowed_actions: frozenset[str] | None = None
+
+    # Session memory — accumulated action history injected into system prompt.
+    session_memory: SessionMemory = field(default_factory=SessionMemory)
 
     # Mutable counters — used by loop.py error path and post-extraction accumulation.
     step: int = 0

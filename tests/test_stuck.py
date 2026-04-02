@@ -9,12 +9,19 @@ def _detector(**overrides) -> StuckDetector:
     return StuckDetector(**overrides)
 
 
-def _record(det: StuckDetector, summary: str, *, success: bool = True):
+def _record(
+    det: StuckDetector,
+    summary: str,
+    *,
+    success: bool = True,
+    visited_urls: list[str] | None = None,
+):
     return det.record(
         "click",
         {"selector": summary.split("'")[1]},
         input_summary=summary,
         success=success,
+        visited_urls=visited_urls,
     )
 
 
@@ -134,6 +141,170 @@ class TestCycleDetection:
             _record(det, "click '#x'", success=True)
             _record(det, "click '#y'", success=True)
         assert det.stuck_count >= 2
+
+
+class TestUrlRevisitDetection:
+    def _goto(self, det: StuckDetector, url: str, *, success: bool = True):
+        return det.record(
+            "goto",
+            {"url": url},
+            input_summary=f"navigate to {url}",
+            success=success,
+        )
+
+    def _click(self, det: StuckDetector, selector: str):
+        return det.record(
+            "click",
+            {"selector": selector},
+            input_summary=f"click '{selector}'",
+            success=True,
+        )
+
+    def test_no_detection_on_first_visit(self):
+        det = _detector(revisit_gap=3)
+        v = self._goto(det, "https://example.com")
+        assert v.severity is StuckSeverity.NONE
+
+    def test_revisit_within_gap_not_detected(self):
+        det = _detector(revisit_gap=5)
+        self._goto(det, "https://example.com")
+        self._click(det, "#a")
+        self._click(det, "#b")
+        # Only 3 intervening actions — below gap of 5
+        v = self._goto(det, "https://example.com")
+        assert v.severity is StuckSeverity.NONE
+
+    def test_revisit_beyond_gap_detected(self):
+        det = _detector(revisit_gap=5)
+        self._goto(det, "https://example.com/dashboard")
+        for i in range(5):
+            self._click(det, f"#btn-{i}")
+        v = self._goto(det, "https://example.com/dashboard")
+        assert v.severity is StuckSeverity.HINT
+        assert "already visited" in v.message.lower()
+
+    def test_revisit_escalation_when_rapid(self):
+        """Rapid revisits (no decay gap) escalate to WARNING."""
+        det = _detector(revisit_gap=3, repeat_hint=20)
+        self._goto(det, "https://example.com")
+        for i in range(4):
+            self._click(det, f"#a-{i}")
+        # First revisit → HINT (stuck_count becomes 1)
+        v = self._goto(det, "https://example.com")
+        assert v.severity is StuckSeverity.HINT
+        # Second revisit → HINT again (stuck_count becomes 2)
+        v = self._goto(det, "https://example.com")
+        assert v.severity is StuckSeverity.HINT
+        # Third revisit → WARNING (stuck_count >= 2)
+        v = self._goto(det, "https://example.com")
+        assert v.severity is StuckSeverity.WARNING
+
+    def test_revisit_does_not_escalate_when_separated(self):
+        """Revisits separated by many non-stuck actions decay back to HINT."""
+        det = _detector(revisit_gap=3, repeat_hint=20)
+        self._goto(det, "https://example.com")
+        for i in range(4):
+            self._click(det, f"#a-{i}")
+        # First revisit → HINT
+        self._goto(det, "https://example.com")
+        # Intervening actions decay stuck_count back toward 0
+        for i in range(4):
+            self._click(det, f"#b-{i}")
+        # Second revisit after decay → HINT again, not WARNING
+        v = self._goto(det, "https://example.com")
+        assert v.severity is StuckSeverity.HINT
+
+    def test_url_normalization(self):
+        det = _detector(revisit_gap=3)
+        self._goto(det, "https://Example.COM/Path/")
+        for i in range(4):
+            self._click(det, f"#x-{i}")
+        v = self._goto(det, "https://example.com/Path")
+        assert v.severity is StuckSeverity.HINT
+
+    def test_different_urls_not_detected(self):
+        det = _detector(revisit_gap=3)
+        self._goto(det, "https://example.com/page-a")
+        for i in range(4):
+            self._click(det, f"#x-{i}")
+        v = self._goto(det, "https://example.com/page-b")
+        assert v.severity is StuckSeverity.NONE
+
+    def test_failed_goto_not_tracked(self):
+        det = _detector(revisit_gap=3)
+        self._goto(det, "https://example.com", success=False)
+        for i in range(4):
+            self._click(det, f"#x-{i}")
+        v = self._goto(det, "https://example.com")
+        assert v.severity is StuckSeverity.NONE
+
+    def test_execute_sequence_with_goto_tracked(self):
+        det = _detector(revisit_gap=3)
+        det.record(
+            "execute_sequence",
+            {"steps": [{"action": "goto", "url": "https://example.com"}]},
+            input_summary="execute 1-step sequence",
+            success=True,
+        )
+        for i in range(4):
+            self._click(det, f"#x-{i}")
+        v = self._goto(det, "https://example.com")
+        assert v.severity is StuckSeverity.HINT
+
+    def test_reset_clears_url_history(self):
+        det = _detector(revisit_gap=3)
+        self._goto(det, "https://example.com")
+        for i in range(4):
+            self._click(det, f"#x-{i}")
+        det.reset()
+        v = self._goto(det, "https://example.com")
+        assert v.severity is StuckSeverity.NONE
+
+    def test_revisit_does_not_refire_on_subsequent_actions(self):
+        """After a revisit is detected, subsequent non-goto actions should not re-trigger."""
+        det = _detector(revisit_gap=3, repeat_hint=20)
+        self._goto(det, "https://example.com")
+        for i in range(4):
+            self._click(det, f"#a-{i}")
+        v = self._goto(det, "https://example.com")
+        assert v.severity is StuckSeverity.HINT
+        # Subsequent clicks should NOT re-fire the revisit
+        v = self._click(det, "#next-action")
+        assert v.severity is StuckSeverity.NONE
+        v = self._click(det, "#another-action")
+        assert v.severity is StuckSeverity.NONE
+
+    def test_click_navigation_revisit_detected_from_actual_visited_url(self):
+        det = _detector(revisit_gap=3, repeat_hint=20)
+        _record(
+            det,
+            "click '#nav-home'",
+            visited_urls=["https://example.com/dashboard"],
+        )
+        for i in range(4):
+            _record(det, f"click '#x-{i}'", success=True)
+        v = _record(
+            det,
+            "click '#nav-home-again'",
+            visited_urls=["https://example.com/dashboard"],
+        )
+        assert v.severity is StuckSeverity.HINT
+
+    def test_query_variants_are_not_treated_as_same_page(self):
+        det = _detector(revisit_gap=3, repeat_hint=20)
+        _record(
+            det,
+            "click '#search-alpha'",
+            visited_urls=["https://example.com/search?q=alpha"],
+        )
+        for i in range(4):
+            _record(det, f"click '#x-{i}'", success=True)
+        v = _record(
+            det,
+            "click '#search-beta'",
+            visited_urls=["https://example.com/search?q=beta"],
+        )
+        assert v.severity is StuckSeverity.NONE
 
 
 class TestStuckCountDecay:

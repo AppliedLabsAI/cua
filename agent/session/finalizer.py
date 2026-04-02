@@ -44,6 +44,7 @@ class RunOutcome:
     error: ApiError | str | None = None
     data: dict[str, Any] | None = None
     extracted_texts: list[str] = field(default_factory=list)
+    session_memory: str = ""
     trace_status: otel_trace.StatusCode = otel_trace.StatusCode.OK
     trace_message: str | None = None
 
@@ -69,6 +70,7 @@ class RunOutcome:
         message: str,
         *,
         extracted_texts: list[str] | None = None,
+        session_memory: str = "",
     ) -> RunOutcome:
         return cls(
             status=RunStatusValue.TERMINATED,
@@ -80,6 +82,7 @@ class RunOutcome:
                 details={"run_id": run_id},
             ),
             extracted_texts=list(extracted_texts or []),
+            session_memory=session_memory,
             trace_status=otel_trace.StatusCode.ERROR,
             trace_message=message,
         )
@@ -90,6 +93,7 @@ class RunOutcome:
         message: str | None,
         *,
         extracted_texts: list[str] | None = None,
+        session_memory: str = "",
     ) -> RunOutcome:
         return cls(
             status=RunStatusValue.FAILED,
@@ -97,6 +101,7 @@ class RunOutcome:
             exit_code=1,
             error=classify_runtime_error(message),
             extracted_texts=list(extracted_texts or []),
+            session_memory=session_memory,
             trace_status=otel_trace.StatusCode.ERROR,
             trace_message=message or "Unknown error",
         )
@@ -114,6 +119,7 @@ class RunOutcome:
                 summary=result.summary,
                 data=result.data,
                 extracted_texts=list(result.extracted_texts),
+                session_memory=result.session_memory,
                 trace_status=otel_trace.StatusCode.OK,
             )
 
@@ -131,6 +137,7 @@ class RunOutcome:
             exit_code=1,
             error=error,
             extracted_texts=list(result.extracted_texts),
+            session_memory=result.session_memory,
             trace_status=otel_trace.StatusCode.ERROR,
             trace_message=trace_message,
         )
@@ -161,6 +168,7 @@ class RunFinalizer:
                 data=outcome.data,
                 extracted_texts=outcome.extracted_texts,
                 status=outcome.status,
+                session_memory=outcome.session_memory,
             )
             await persist_status(f"/recordings/{self._run_id}")
             await _commit_recording_volume()

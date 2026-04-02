@@ -48,6 +48,9 @@ def init_status(run_id: str) -> None:
     _status.result = None
     _status.error = None
     _status.duration_ms = None
+    _status.data = None
+    _status.extracted_texts = []
+    _status.session_memory = ""
     _action_log.clear()
     _run_start = time.monotonic()
 
@@ -71,6 +74,7 @@ async def complete_run(
     data: dict[str, Any] | None = None,
     extracted_texts: list[str] | None = None,
     status: RunStatusValue | None = None,
+    session_memory: str = "",
 ) -> None:
     """Mark the run as completed or failed. Called by the agent loop on exit."""
     structured_error = coerce_api_error(error, default_code=ApiErrorCode.INTERNAL_ERROR)
@@ -81,6 +85,7 @@ async def complete_run(
     _status.error = structured_error
     _status.data = data
     _status.extracted_texts = extracted_texts or []
+    _status.session_memory = session_memory
     _status.duration_ms = int((time.monotonic() - _run_start) * 1000)
     for q in list(_subscribers):
         try:

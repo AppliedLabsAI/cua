@@ -4,9 +4,10 @@ Detects when the agent repeats the same action or cycles between a small
 set of actions. Integrated via GuardrailEngine.record_action(), called
 from ActionRouter after every tool execution.
 
-Two detection strategies on a sliding window of action signatures:
-  1. Same-action repetition (click '#btn' 5 times in a row)
-  2. Cycle detection (A -> B -> A -> B pattern)
+Three detection strategies:
+  1. Same-action repetition on sliding window (click '#btn' 5 times in a row)
+  2. Cycle detection on sliding window (A -> B -> A -> B pattern)
+  3. URL revisit detection on full history (navigating to a previously visited URL)
 
 Escalation: HINT (gentle nudge) -> WARNING (strong) -> STOP (hard stop).
 """
@@ -16,6 +17,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
+
+from bridge.url_utils import extract_goto_urls, normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,16 @@ _CYCLE_STOP_MSG = (
     "[System] Agent stopped: stuck in an action cycle with no progress. "
     "Summarize what you accomplished and any remaining steps needed."
 )
+_REVISIT_HINT_MSG = (
+    "[System] You are navigating to a URL you already visited earlier in this session. "
+    "Consider whether this is necessary — the session progress in your instructions "
+    "may already contain the information you need from this page."
+)
+_REVISIT_WARN_MSG = (
+    "[System] WARNING: You have navigated to this URL multiple times. "
+    "Think carefully about whether revisiting is required to complete the task, "
+    "or whether the information from your earlier visit is sufficient."
+)
 
 
 class StuckDetector:
@@ -85,6 +98,7 @@ class StuckDetector:
         repeat_stop: int = 7,
         cycle_max_length: int = 3,
         cycle_repeats: int = 3,
+        revisit_gap: int = 5,
     ) -> None:
         # How many recent actions to keep for pattern analysis
         self._window_size = window_size
@@ -98,8 +112,15 @@ class StuckDetector:
         self._cycle_max_length = cycle_max_length
         # How many times a cycle must repeat to trigger detection
         self._cycle_repeats = cycle_repeats
+        # Minimum intervening actions before a URL revisit triggers a hint
+        self._revisit_gap = revisit_gap
         # Sliding window of normalized action signatures.
         self._history: list[ActionSignature] = []
+        # Full history of goto URLs: normalized_url -> [action_indices]
+        self._url_history: dict[str, list[int]] = {}
+        # URLs added in the current record() call — only these are checked for revisits
+        self._just_added_urls: list[str] = []
+        self._action_count: int = 0
         # Cumulative detection count — drives cycle escalation and
         # decays by 1 on each non-stuck action
         self._stuck_count: int = 0
@@ -111,12 +132,14 @@ class StuckDetector:
         *,
         input_summary: str,
         success: bool,
+        visited_urls: list[str] | None = None,
     ) -> StuckVerdict:
         """Record an action and check for stuck patterns.
 
         Returns a verdict with severity and message. The caller decides
         how to act on it (prepend hint, replace result, etc.).
         """
+        self._action_count += 1
         self._history.append(
             ActionSignature(
                 key=build_action_signature(action, tool_input),
@@ -125,6 +148,16 @@ class StuckDetector:
         )
         if len(self._history) > self._window_size:
             self._history = self._history[-self._window_size :]
+
+        self._just_added_urls = []
+        if success:
+            for url in visited_urls or extract_goto_urls(action, tool_input):
+                normalized = normalize_url(url)
+                if normalized:
+                    self._url_history.setdefault(normalized, []).append(
+                        self._action_count
+                    )
+                    self._just_added_urls.append(normalized)
 
         # Need minimum history for any detection
         min_needed = min(self._repeat_hint, 2 * self._cycle_repeats)
@@ -143,6 +176,12 @@ class StuckDetector:
             self._stuck_count += 1
             return cyc
 
+        # Strategy 3: URL revisit detection (full history)
+        revisit = self._check_url_revisit()
+        if revisit.severity is not StuckSeverity.NONE:
+            self._stuck_count += 1
+            return revisit
+
         # No stuck pattern — decay cumulative count
         if self._stuck_count > 0:
             self._stuck_count -= 1
@@ -157,6 +196,9 @@ class StuckDetector:
     def reset(self) -> None:
         """Clear all state."""
         self._history.clear()
+        self._url_history = {}
+        self._just_added_urls = []
+        self._action_count = 0
         self._stuck_count = 0
 
     def _check_repetition(self) -> StuckVerdict:
@@ -208,6 +250,34 @@ class StuckDetector:
                 if self._stuck_count >= 1:
                     return StuckVerdict(StuckSeverity.WARNING, _CYCLE_WARN_MSG)
                 return StuckVerdict(StuckSeverity.HINT, _CYCLE_HINT_MSG)
+
+        return StuckVerdict()
+
+    def _check_url_revisit(self) -> StuckVerdict:
+        """Check if any URL added in the current record() call is a revisit.
+
+        Only checks URLs that were just navigated to, not the entire history.
+        A revisit is flagged when enough intervening actions have passed
+        (controlled by ``revisit_gap``).
+        """
+        for url in self._just_added_urls:
+            indices = self._url_history.get(url, [])
+            if len(indices) < 2:
+                continue
+            latest_idx = indices[-1]
+            for prev_idx in indices[:-1]:
+                gap = latest_idx - prev_idx
+                if gap >= self._revisit_gap:
+                    logger.info(
+                        "URL revisit detected: %s (step %d → %d, gap %d)",
+                        url,
+                        prev_idx,
+                        latest_idx,
+                        gap,
+                    )
+                    if self._stuck_count >= 2:
+                        return StuckVerdict(StuckSeverity.WARNING, _REVISIT_WARN_MSG)
+                    return StuckVerdict(StuckSeverity.HINT, _REVISIT_HINT_MSG)
 
         return StuckVerdict()
 

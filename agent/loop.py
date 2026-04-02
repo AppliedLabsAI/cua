@@ -18,6 +18,7 @@ from actionlog.actions import ActionLog
 from agent.circuit_breaker import CircuitBreaker, CircuitOpenError
 from agent.cua_agent import cua_agent
 from agent.deps import AgentDeps
+from agent.memory import SessionMemory
 from agent.output import (
     collect_extracted_texts,
     extract_structured_output,
@@ -46,6 +47,7 @@ def _error(
         bridge=bridge,
         total_input_tokens=deps.total_input_tokens,
         total_output_tokens=deps.total_output_tokens,
+        session_memory=deps.session_memory.render(),
     )
 
 
@@ -67,6 +69,7 @@ async def run_agent(
     profile_prompt: str | None = None,
     allowed_actions: frozenset[str] | None = None,
     output_schema: dict[str, Any] | None = None,
+    session_memory: SessionMemory | None = None,
 ) -> AgentResult:
     """Run the CUA agent loop using Pydantic AI."""
     run_start = time.monotonic()
@@ -80,6 +83,7 @@ async def run_agent(
         output_schema=output_schema,
         on_action=on_action,
         allowed_actions=allowed_actions,
+        session_memory=session_memory or SessionMemory(),
     )
 
     # Build initial user message with DOM context if available
@@ -169,4 +173,5 @@ async def run_agent(
         total_output_tokens=deps.total_output_tokens,
         data=structured_data,
         extracted_texts=extracted_texts,
+        session_memory=deps.session_memory.render(),
     )

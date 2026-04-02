@@ -53,6 +53,28 @@ class TestBuildSystemPrompt:
         prompt = build_system_prompt(directive="test", profile_prompt=None)
         assert "<task>" in prompt
 
+    def test_session_memory_included(self):
+        memory_block = (
+            "<session_progress>\nSteps completed: 2\n"
+            "Pages visited:\n  - example.com (step 1)\n"
+            "</session_progress>"
+        )
+        prompt = build_system_prompt(directive="test", session_memory=memory_block)
+        assert "<session_progress>" in prompt
+        assert "example.com (step 1)" in prompt
+        # Memory should appear before <task>
+        mem_idx = prompt.index("<session_progress>")
+        task_idx = prompt.index("<task>")
+        assert mem_idx < task_idx
+
+    def test_no_session_memory(self):
+        prompt = build_system_prompt(directive="test")
+        assert "<session_progress>" not in prompt
+
+    def test_do_not_revisit_rule(self):
+        prompt = build_system_prompt(directive="test")
+        assert "Do not revisit pages" in prompt
+
     def test_credentials_and_profile(self):
         creds = {"key": SecretValue("secret-value-123")}
         prompt = build_system_prompt(

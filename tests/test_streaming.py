@@ -151,6 +151,17 @@ class TestInitStatus:
         assert streaming._status.run_id == "new-run"
         assert streaming._status.status == "running"
 
+    def test_clears_result_payload_fields(self):
+        streaming._status.data = {"stale": True}
+        streaming._status.extracted_texts = ["stale"]
+        streaming._status.session_memory = "<session_progress>stale</session_progress>"
+
+        streaming.init_status("new-run")
+
+        assert streaming._status.data is None
+        assert streaming._status.extracted_texts == []
+        assert streaming._status.session_memory == ""
+
 
 class TestCompleteRun:
     @pytest.mark.asyncio
@@ -177,6 +188,18 @@ class TestCompleteRun:
         await streaming.complete_run(summary="Done")
         item = q.get_nowait()
         assert item is None  # sentinel
+
+    @pytest.mark.asyncio
+    async def test_stores_session_memory(self):
+        streaming.init_status("test-run")
+        await streaming.complete_run(
+            summary="Done",
+            session_memory="<session_progress>done</session_progress>",
+        )
+        assert (
+            streaming._status.session_memory
+            == "<session_progress>done</session_progress>"
+        )
 
 
 # ---------------------------------------------------------------------------

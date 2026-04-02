@@ -118,6 +118,7 @@ class GuardrailConfig(BaseModel):
     stuck_repeat_stop: int = 7
     stuck_cycle_max_length: int = 3
     stuck_cycle_repeats: int = 3
+    stuck_revisit_gap: int = 5
 
 
 class GuardrailResult(BaseModel):
@@ -186,6 +187,7 @@ class GuardrailEngine:
             repeat_stop=self.config.stuck_repeat_stop,
             cycle_max_length=self.config.stuck_cycle_max_length,
             cycle_repeats=self.config.stuck_cycle_repeats,
+            revisit_gap=self.config.stuck_revisit_gap,
         )
 
     def check_url(self, url: str) -> GuardrailResult:
@@ -331,6 +333,7 @@ class GuardrailEngine:
         input_summary: str,
         *,
         success: bool,
+        visited_urls: list[str] | None = None,
     ) -> StuckVerdict:
         """Track action for stuck pattern detection."""
         return self._stuck.record(
@@ -338,4 +341,5 @@ class GuardrailEngine:
             tool_input,
             input_summary=input_summary,
             success=success,
+            visited_urls=visited_urls,
         )

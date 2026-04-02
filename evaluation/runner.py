@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 import yaml
 
+from agent.memory import SessionMemory
 from evaluation.models import (
     EvalCase,
     EvalCaseResult,
@@ -141,11 +142,14 @@ async def _run_agent_case(
 
         scope = await extract_task_scope(case.directive, profile, case.start_url)
         blinders = DOMBlinders(scope)
+
+        session_memory = SessionMemory()
         bridge = ActionRouter(
             browser=runtime.browser,
             guardrail_config=guardrail_config,
             blinders=blinders,
             directive=case.directive,
+            session_memory=session_memory,
         )
 
         from credentials import resolve_credentials
@@ -160,6 +164,7 @@ async def _run_agent_case(
             profile_prompt=profile.prompt_extension,
             allowed_actions=scope.allowed_actions,
             output_schema=case.output_schema,
+            session_memory=session_memory,
         )
         output = agent_result_to_output(raw)
         return EvalTrialResult(

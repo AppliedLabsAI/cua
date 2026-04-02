@@ -10,7 +10,7 @@ Recordings are saved to the `output/` directory:
 python scripts/run_local.py --directive "Cancel order #123" --playbook cancel_order
 # After completion:
 # output/trace.zip         — Playwright trace (open in trace viewer)
-# output/action_log.json   — structured action log (LLM path only)
+# output/action_log.json   — structured action log + session memory (LLM path only)
 ```
 
 Replay the session:

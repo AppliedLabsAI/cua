@@ -8,6 +8,7 @@ import logging
 from opentelemetry import context as otel_context
 
 from agent.loop import run_agent
+from agent.memory import SessionMemory
 from agent.output import collect_extracted_texts
 from agent.session.finalizer import RunFinalizer, RunOutcome
 from api.streaming import push_action
@@ -50,6 +51,7 @@ async def run_sandbox_session(
     tracer = get_tracer()
     recording: RecordingManager | None = None
     bridge: ActionRouter | None = None
+    session_memory = SessionMemory()
 
     with tracer.start_as_current_span(
         AGENT_RUN,
@@ -130,6 +132,7 @@ async def run_sandbox_session(
                 guardrail_config=config.guardrail_config,
                 blinders=blinders,
                 directive=config.directive,
+                session_memory=session_memory,
             )
             profile_prompt = config.profile.prompt_extension if config.profile else None
             result = await run_agent(
@@ -143,6 +146,7 @@ async def run_sandbox_session(
                 profile_prompt=profile_prompt,
                 allowed_actions=scope.allowed_actions,
                 output_schema=config.output_schema,
+                session_memory=session_memory,
             )
         except asyncio.CancelledError:
             message = "Run terminated before completion"
@@ -155,6 +159,7 @@ async def run_sandbox_session(
                 extracted_texts=(
                     collect_extracted_texts(bridge.action_log) if bridge else []
                 ),
+                session_memory=session_memory.render(),
             )
             run_span.set_status(outcome.trace_status, outcome.trace_message or "")
             return await finalizer.finalize(outcome)
@@ -166,6 +171,7 @@ async def run_sandbox_session(
                 extracted_texts=(
                     collect_extracted_texts(bridge.action_log) if bridge else []
                 ),
+                session_memory=session_memory.render(),
             )
             run_span.set_status(outcome.trace_status, outcome.trace_message or "")
             return await finalizer.finalize(outcome)

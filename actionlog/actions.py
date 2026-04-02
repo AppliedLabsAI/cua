@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -22,6 +24,9 @@ os.chmod(_LOG_DIR, 0o700)
 # Fields in tool_input that may contain large content — truncated before logging
 _LARGE_FIELDS = {"text"}
 _MAX_FIELD_LEN = 500
+_SESSION_STEP_RE = re.compile(r"^Steps completed: (\d+)$")
+_SESSION_PAGE_RE = re.compile(r"^  - (.*) \(step ([\d, ]+)\)$")
+_SESSION_ACTION_RE = re.compile(r"^  - Step (\d+): (.*?)(?: → (.*))?$")
 
 
 class ActionLog(BaseModel):
@@ -191,9 +196,17 @@ async def persist_action_log(log_entry: ActionLog) -> str:
     return await asyncio.to_thread(_write)
 
 
-async def save_action_log(action_log: list[ActionLog], path: str) -> None:
-    """Save the full action log as a JSON array without blocking the event loop."""
-    payload = [entry.model_dump() for entry in action_log]
+async def save_action_log(
+    action_log: list[ActionLog],
+    path: str,
+    *,
+    session_memory: str = "",
+) -> None:
+    """Save the full action log artifact without blocking the event loop."""
+    payload = {
+        "actions": [entry.model_dump() for entry in action_log],
+        "session_memory": _format_session_memory(session_memory),
+    }
 
     def _write() -> None:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -201,6 +214,77 @@ async def save_action_log(action_log: list[ActionLog], path: str) -> None:
             json.dump(payload, f, indent=2)
 
     await asyncio.to_thread(_write)
+
+
+def _format_session_memory(session_memory: str) -> dict[str, Any] | None:
+    """Convert the rendered session-memory block into readable JSON."""
+    if not session_memory.strip():
+        return None
+
+    payload: dict[str, Any] = {
+        "steps_completed": 0,
+        "pages_visited": [],
+        "actions_completed": [],
+        "failed_attempts": [],
+    }
+    section: str | None = None
+    current_action: dict[str, Any] | None = None
+
+    for raw_line in session_memory.splitlines():
+        line = raw_line.rstrip()
+        if not line or line in {"<session_progress>", "</session_progress>"}:
+            continue
+
+        if match := _SESSION_STEP_RE.match(line):
+            payload["steps_completed"] = int(match.group(1))
+            section = None
+            current_action = None
+            continue
+
+        if line == "Pages visited:":
+            section = "pages_visited"
+            current_action = None
+            continue
+        if line == "Actions completed:":
+            section = "actions_completed"
+            current_action = None
+            continue
+        if line == "Failed attempts:":
+            section = "failed_attempts"
+            current_action = None
+            continue
+
+        if section == "pages_visited":
+            match = _SESSION_PAGE_RE.match(line)
+            if match:
+                payload["pages_visited"].append(
+                    {
+                        "page": match.group(1),
+                        "steps": [
+                            int(part.strip()) for part in match.group(2).split(",")
+                        ],
+                    }
+                )
+            continue
+
+        if section in {"actions_completed", "failed_attempts"}:
+            match = _SESSION_ACTION_RE.match(line)
+            if match:
+                current_action = {
+                    "step": int(match.group(1)),
+                    "summary": match.group(2),
+                }
+                finding = match.group(3)
+                if finding:
+                    current_action["finding"] = finding
+                payload[section].append(current_action)
+                continue
+
+            if current_action is not None:
+                field = "finding" if "finding" in current_action else "summary"
+                current_action[field] = f"{current_action[field]}\n{line}"
+
+    return payload
 
 
 # Fields excluded from SSE events — too large for real-time streaming

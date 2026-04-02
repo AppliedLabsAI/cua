@@ -140,3 +140,4 @@ class RunStatus(BaseModel):
     duration_ms: int | None = None
     data: dict[str, Any] | None = None
     extracted_texts: list[str] = Field(default_factory=list)
+    session_memory: str = ""
