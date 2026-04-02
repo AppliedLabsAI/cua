@@ -132,15 +132,20 @@ class StepRecoveryPolicy:
                 page_url=page.url,
                 runtime_params=runtime_params,
             )
+            from agent.memory import SessionMemory
+
+            session_memory = SessionMemory()
             bridge = ActionRouter(
                 browser=self._browser,
                 guardrail_config=playbook.guardrails.to_runtime_config(),
+                session_memory=session_memory,
             )
             result = await run_agent(
                 directive=directive,
                 bridge=bridge,
                 max_steps=20,
                 thinking="medium",
+                session_memory=session_memory,
             )
             return StepResult(
                 step_index=0,

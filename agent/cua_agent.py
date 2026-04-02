@@ -56,9 +56,14 @@ cua_agent: Agent[AgentDeps, str] = Agent(
 
 @cua_agent.system_prompt
 def system_prompt(ctx: RunContext[AgentDeps]) -> str:
-    """Build the system prompt from runtime deps."""
+    """Build the system prompt from runtime deps.
+
+    Called on every model request — session_memory.render() produces
+    an up-to-date progress block each time.
+    """
     return build_system_prompt(
         directive=ctx.deps.directive,
         credentials=ctx.deps.credentials,
         profile_prompt=ctx.deps.profile_prompt,
+        session_memory=ctx.deps.session_memory.render(),
     )

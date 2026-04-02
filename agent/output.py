@@ -56,6 +56,7 @@ class CuaOutput(BaseModel):
     error: str | None = None
     actions: int = 0
     duration_ms: int = 0
+    session_memory: str = ""
 
 
 def collect_extracted_texts(action_log: list[ActionLog]) -> list[str]:
@@ -144,6 +145,7 @@ def agent_result_to_output(result: AgentResult) -> CuaOutput:
         error=result.error,
         actions=result.action_count,
         duration_ms=result.total_duration_ms,
+        session_memory=result.session_memory,
     )
 
 

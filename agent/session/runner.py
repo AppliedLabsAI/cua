@@ -8,6 +8,7 @@ import logging
 from opentelemetry import context as otel_context
 
 from agent.loop import run_agent
+from agent.memory import SessionMemory
 from agent.output import collect_extracted_texts
 from agent.session.finalizer import RunFinalizer, RunOutcome
 from api.streaming import push_action
@@ -125,11 +126,13 @@ async def run_sandbox_session(
         )
 
         try:
+            session_memory = SessionMemory()
             bridge = ActionRouter(
                 browser=browser,
                 guardrail_config=config.guardrail_config,
                 blinders=blinders,
                 directive=config.directive,
+                session_memory=session_memory,
             )
             profile_prompt = config.profile.prompt_extension if config.profile else None
             result = await run_agent(
@@ -143,6 +146,7 @@ async def run_sandbox_session(
                 profile_prompt=profile_prompt,
                 allowed_actions=scope.allowed_actions,
                 output_schema=config.output_schema,
+                session_memory=session_memory,
             )
         except asyncio.CancelledError:
             message = "Run terminated before completion"

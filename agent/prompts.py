@@ -45,10 +45,12 @@ execute_sequence(steps=[...]) → batches multiple actions into one call with a 
 9. Extract defaults to markdown, which preserves headings, links, and structure. Use mode=value for form fields. Avoid extracting full-page HTML.
 10. Avoid google.com/search?q= because it triggers CAPTCHAs. Cloudflare and reCAPTCHA challenges auto-resolve — wait for them.
 11. Final response: summarize your findings in one plain-text sentence with no markdown formatting (no bold, italics, bullets, or headings). Include all key data inline.
+12. Do not revisit pages or repeat actions you have already completed. Check the session progress below before deciding your next action.
 </rules>
 
 ${credentials_section}\
 ${profile_section}\
+${session_memory}\
 
 <task>
 ${directive}
@@ -59,6 +61,7 @@ def build_system_prompt(
     directive: str,
     credentials: dict[str, SecretValue] | None = None,
     profile_prompt: str | None = None,
+    session_memory: str = "",
 ) -> str:
     """Build the system prompt for a CUA run."""
     credentials_section = ""
@@ -86,8 +89,14 @@ def build_system_prompt(
     if profile_prompt:
         profile_section = profile_prompt.rstrip() + "\n\n"
 
+    # Session memory block — empty string on first call, grows each step.
+    session_memory_section = ""
+    if session_memory:
+        session_memory_section = session_memory + "\n\n"
+
     return _SYSTEM_PROMPT.safe_substitute(
         credentials_section=credentials_section,
         profile_section=profile_section,
+        session_memory=session_memory_section,
         directive=directive,
     )

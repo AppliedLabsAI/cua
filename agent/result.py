@@ -27,6 +27,7 @@ class AgentResult(BaseModel):
     error: str | None = None
     data: dict[str, Any] | None = None
     extracted_texts: list[str] = Field(default_factory=list)
+    session_memory: str = ""
 
 
 def make_error_result(
@@ -37,6 +38,7 @@ def make_error_result(
     bridge: ActionRouter,
     total_input_tokens: int,
     total_output_tokens: int,
+    session_memory: str = "",
 ) -> AgentResult:
     """Build an AgentResult for an error exit."""
     return AgentResult(
@@ -49,4 +51,5 @@ def make_error_result(
         total_output_tokens=total_output_tokens,
         error=error_msg,
         extracted_texts=collect_extracted_texts(bridge.action_log),
+        session_memory=session_memory,
     )

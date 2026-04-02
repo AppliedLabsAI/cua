@@ -30,6 +30,7 @@ def test_run_outcome_success_maps_agent_result():
             summary="done",
             data={"ok": True},
             extracted_texts=["x"],
+            session_memory="",
         )
     )
 
@@ -45,6 +46,7 @@ def test_run_outcome_failure_classifies_agent_error():
             success=False,
             error="Guardrail blocked: out of scope",
             extracted_texts=["x"],
+            session_memory="",
         )
     )
 

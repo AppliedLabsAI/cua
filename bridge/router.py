@@ -44,6 +44,7 @@ from telemetry.spans import (
 )
 
 if TYPE_CHECKING:
+    from agent.memory import SessionMemory
     from blinders.filters import DOMBlinders
     from credentials import SecretValue
 
@@ -72,12 +73,14 @@ class ActionRouter:
         guardrail_config: GuardrailConfig | None = None,
         blinders: DOMBlinders | None = None,
         directive: str = "",
+        session_memory: SessionMemory | None = None,
     ) -> None:
         self.browser = browser
         self.guardrails = GuardrailEngine(guardrail_config)
         self.blinders = blinders
         self._filter_config = blinders.to_js_filter_config() if blinders else None
         self.action_log: list[ActionLog] = []
+        self._session_memory = session_memory
         self._step = 0
         self._stopped = False
         self._tracer = get_tracer()
@@ -201,6 +204,17 @@ class ActionRouter:
         )
         self.action_log.append(entry)
         self._background.schedule(persist_action_log(entry))
+
+        # Record to session memory so the LLM retains awareness of this action.
+        if self._session_memory is not None:
+            self._session_memory.record(
+                step=request.step,
+                action=request.action,
+                tool_input=request.tool_input,
+                input_summary=entry.input_summary,
+                result_text=result.text,
+                success=result.error is None,
+            )
 
         logger.info(
             "Step %d: %s%s.%s%s %s %s",

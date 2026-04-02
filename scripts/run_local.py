@@ -166,11 +166,15 @@ async def _run_agent(
         len(scope.allowed_actions),
     )
 
+    from agent.memory import SessionMemory
+
+    session_memory = SessionMemory()
     bridge = ActionRouter(
         browser=browser,
         guardrail_config=guardrail_config,
         blinders=blinders,
         directive=directive,
+        session_memory=session_memory,
     )
 
     try:
@@ -192,6 +196,7 @@ async def _run_agent(
             ),
             allowed_actions=scope.allowed_actions,
             output_schema=output_schema,
+            session_memory=session_memory,
         )
     finally:
         try:
