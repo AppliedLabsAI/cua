@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from bridge.page_actions import PageActionConfig, execute_page_action
 from playbooks.schema import (
@@ -25,11 +25,15 @@ from settings import (
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from bridge.browser import BrowserManager
+
 
 class PlaybookStepExecutor:
     """Run deterministic playbook steps without owning fallback policy."""
 
-    def __init__(self) -> None:
+    def __init__(self, browser: BrowserManager | None = None) -> None:
+        self._browser = browser
         self._last_extracted: str | None = None
         self._config = PageActionConfig(
             action_timeout_ms=ACTION_TIMEOUT_MS,
@@ -47,6 +51,11 @@ class PlaybookStepExecutor:
         try:
             await self._run_action(step, page)
         except Exception as exc:
+            logger.warning(
+                "Playbook step action failed (%s): %s",
+                step.description or step.action,
+                exc,
+            )
             return StepResult(
                 step_index=0,
                 action=step.action,
@@ -57,8 +66,14 @@ class PlaybookStepExecutor:
 
         if step.verify:
             try:
-                await self._verify(step.verify, page)
+                verify_page = await self._verification_page(page)
+                await self._verify(step.verify, verify_page)
             except Exception as exc:
+                logger.warning(
+                    "Playbook step verification failed (%s): %s",
+                    step.description or step.action,
+                    exc,
+                )
                 return StepResult(
                     step_index=0,
                     action=step.action,
@@ -106,10 +121,33 @@ class PlaybookStepExecutor:
 
     async def _run_action(self, step: PlaybookStep, page: Any) -> None:
         params = dict(step.params)
-        if (
-            step.action in {"click", "select", "extract"}
-            or step.action == "key_press"
-            and step.selector
+
+        # llm_extract: extract page content, then analyze with LLM
+        if step.action == "llm_extract":
+            extract_params = dict(params)
+            if step.selector:
+                extract_params["selector"] = await self.resolve_selector(
+                    step.selector, page
+                )
+            else:
+                extract_params.setdefault("selector", "body")
+            extract_params.setdefault("mode", "markdown")
+
+            outcome = await execute_page_action(
+                page, "extract", extract_params, config=self._config
+            )
+            page_content = outcome.text or ""
+
+            analysis = await self._llm_analyze(
+                page_content,
+                prompt=step.prompt,
+                directive=params.get("directive", ""),
+            )
+            self._last_extracted = analysis
+            return
+
+        if step.action in {"click", "select", "extract"} or (
+            step.action == "key_press" and step.selector
         ):
             params["selector"] = await self.resolve_selector(step.selector, page)
         elif step.action == "wait_for":
@@ -128,6 +166,55 @@ class PlaybookStepExecutor:
         )
         if step.action == "extract":
             self._last_extracted = outcome.text
+
+    async def _verification_page(self, page: Any) -> Any:
+        """Rebind verification to the latest active page after actions."""
+        browser = self._browser
+        if browser is None:
+            return page
+
+        wait_for_active_page = getattr(browser, "wait_for_active_page", None)
+        if callable(wait_for_active_page):
+            with contextlib.suppress(Exception):
+                await wait_for_active_page()
+
+        with contextlib.suppress(Exception):
+            return browser.page
+        return page
+
+    async def _llm_analyze(
+        self,
+        page_content: str,
+        *,
+        prompt: str = "",
+        directive: str = "",
+    ) -> str:
+        """Send extracted page content to LLM for analysis."""
+        from pydantic_ai import Agent
+
+        from settings import UTILITY_MODEL
+
+        analysis_prompt = prompt or (
+            "Analyze the page content and answer the user's question."
+        )
+        user_message = (
+            f"## Directive\n{directive}\n\n"
+            f"## Task\n{analysis_prompt}\n\n"
+            f"## Page Content\n{page_content}"
+        )
+
+        agent: Agent[None, str] = Agent(
+            UTILITY_MODEL,
+            instructions=(
+                "You are analyzing a web page's content to answer a specific question. "
+                "Be concise and factual. Only report what you can see in the page content. "
+                "If the information is not present, say so clearly."
+            ),
+            output_retries=3,
+        )
+        result = await agent.run(user_message)
+        logger.info("LLM analysis complete (%d chars)", len(result.output))
+        return result.output
 
     async def _verify(self, verification: StepVerification, page: Any) -> None:
         timeout = verification.timeout_ms

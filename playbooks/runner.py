@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import time
@@ -34,7 +35,7 @@ class PlaybookRunner:
     ) -> None:
         self._browser = browser
         self._recording = recording
-        self._executor = step_executor or PlaybookStepExecutor()
+        self._executor = step_executor or PlaybookStepExecutor(browser=self._browser)
         self._output_schema = output_schema
         self._recovery = StepRecoveryPolicy(
             browser=self._browser,
@@ -52,7 +53,6 @@ class PlaybookRunner:
         runtime_params = dict(params or {})
         start = time.monotonic()
         step_results: list[StepResult] = []
-        page = self._browser.page
         final_extracted: str | None = None
 
         logger.info(
@@ -63,6 +63,14 @@ class PlaybookRunner:
         )
 
         for index in range(len(playbook.steps)):
+            # Yield to the event loop so async callbacks (e.g., tab switches
+            # from a previous step's click) propagate before we re-fetch page.
+            await asyncio.sleep(0.3)
+            wait_for_active_page = getattr(self._browser, "wait_for_active_page", None)
+            if callable(wait_for_active_page):
+                await wait_for_active_page()
+            # Re-fetch page each iteration — the active page changes on tab switches
+            page = self._browser.page
             step = materialize_step(playbook, index, runtime_params)
             step_start = time.monotonic()
             logger.info(

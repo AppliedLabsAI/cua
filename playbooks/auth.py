@@ -1,17 +1,13 @@
-"""Dashboard authentication — login flow with session persistence."""
+"""Dashboard authentication for clean per-run browser sessions."""
 
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
-import os
-from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
 if TYPE_CHECKING:
-    from patchright.async_api import BrowserContext, Page
+    from patchright.async_api import Page
 
     from bridge.browser import BrowserManager
 
@@ -24,7 +20,6 @@ from settings import (
 
 logger = logging.getLogger(__name__)
 
-_SESSION_DIR = Path.home() / ".cua" / "sessions"
 _USERNAME_SELECTORS = [
     "input[type='email']",
     "input[name='email']",
@@ -51,41 +46,19 @@ _SUBMIT_SELECTORS = [
 ]
 
 
-class DashboardSessionStore:
-    """Persist session state in per-origin files to avoid cross-site reuse."""
-
-    def __init__(self, base_dir: Path = _SESSION_DIR) -> None:
-        self._base_dir = base_dir
-
-    def path_for(self, session_id: str, origin_hint: str) -> Path:
-        parsed = urlparse(origin_hint)
-        host = parsed.netloc or parsed.path or "default"
-        safe_host = "".join(ch if ch.isalnum() else "_" for ch in host).strip("_")
-        namespace = safe_host or "default"
-        return self._base_dir / namespace / f"{session_id}.json"
-
-
 class DashboardAuth:
-    """Handle dashboard login with session persistence.
-
-    Uses Playwright's storage_state to save/restore cookies and localStorage,
-    avoiding re-login on every run.
-    """
+    """Handle dashboard login for a fresh browser context on each run."""
 
     def __init__(
         self,
         browser: BrowserManager,
         credentials: dict,
-        session_id: str = "default",
-        session_store: DashboardSessionStore | None = None,
     ) -> None:
         self._browser = browser
         self._credentials = credentials
-        self._session_id = session_id
-        self._session_store = session_store or DashboardSessionStore()
 
     async def ensure_authenticated(self, login_url: str = "") -> bool:
-        """Check if already logged in; if not, execute login flow.
+        """Navigate to the login surface and authenticate for this run.
 
         Args:
             login_url: URL of the login page. If empty, uses current page.
@@ -93,28 +66,6 @@ class DashboardAuth:
         Returns True if authentication succeeded.
         """
         page = self._browser.page
-        session_path = self._session_store.path_for(
-            self._session_id,
-            login_url or page.url,
-        )
-
-        # Try restoring a saved session first
-        if await self._restore_session(self._browser.context, session_path):
-            # Reload the page to apply restored cookies
-            if login_url:
-                await page.goto(
-                    login_url, wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
-                )
-            else:
-                await page.reload(
-                    wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
-                )
-
-            if await self._is_logged_in(page):
-                logger.info("Session restored successfully")
-                return True
-            else:
-                logger.info("Restored session expired, logging in fresh")
 
         # Navigate to login page if needed
         if login_url and login_url not in page.url:
@@ -122,12 +73,15 @@ class DashboardAuth:
                 login_url, wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
             )
 
+        if await self._is_logged_in(page):
+            logger.info("Already authenticated in current browser context")
+            return True
+
         # Execute login
         success = await self._login(page)
 
         if success:
-            await self._save_session(self._browser.context, session_path)
-            logger.info("Login successful, session saved")
+            logger.info("Login successful")
         else:
             logger.error("Login failed")
 
@@ -154,6 +108,13 @@ class DashboardAuth:
             logger.error("Missing username/email or password in credentials")
             return False
 
+        # Wait for the login page to render (JS frameworks need time after
+        # cross-domain redirects). Once any input is visible, probe quickly.
+        with contextlib.suppress(Exception):
+            await page.wait_for_selector(
+                "input", state="visible", timeout=LOGIN_TIMEOUT_MS
+            )
+
         if not await self._fill_first_visible(page, _USERNAME_SELECTORS, username):
             logger.error("Could not find username/email input field")
             return False
@@ -166,7 +127,17 @@ class DashboardAuth:
             # Fallback: press Enter
             await page.keyboard.press("Enter")
 
-        # Wait for navigation after login
+        # Wait for navigation after login — the page may redirect cross-domain
+        # (e.g., login.example.com → app.example.com), so wait for a URL change.
+        with contextlib.suppress(Exception):
+            await page.wait_for_url(
+                lambda url: (
+                    "/login" not in url.lower()
+                    and "/signin" not in url.lower()
+                    and "/sign-in" not in url.lower()
+                ),
+                timeout=LOGIN_TIMEOUT_MS,
+            )
         with contextlib.suppress(Exception):
             await page.wait_for_load_state("domcontentloaded", timeout=LOGIN_TIMEOUT_MS)
 
@@ -204,95 +175,19 @@ class DashboardAuth:
 
         return True
 
-    async def _save_session(self, context: BrowserContext, session_path: Path) -> None:
-        """Persist cookies and localStorage for session reuse."""
-        try:
-            session_path.parent.mkdir(parents=True, exist_ok=True)
-            os.chmod(session_path.parent, 0o700)
-            state = await context.storage_state()
-            fd = os.open(
-                str(session_path),
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                0o600,
-            )
-            with os.fdopen(fd, "w") as f:
-                json.dump(state, f)
-            logger.info("Session state saved: %s", session_path)
-        except Exception as exc:
-            logger.warning("Failed to save session state: %s", exc)
-
-    async def _restore_session(
-        self,
-        context: BrowserContext,
-        session_path: Path,
-    ) -> bool:
-        """Restore a previously saved session (cookies + per-origin localStorage)."""
-        if not session_path.exists():
-            return False
-
-        try:
-            with open(session_path) as f:
-                state = json.load(f)
-
-            # Restore cookies
-            cookies = state.get("cookies", [])
-            if cookies:
-                await context.add_cookies(cookies)
-                logger.info("Restored %d cookies from saved session", len(cookies))
-
-            # Restore per-origin localStorage
-            origins = state.get("origins", [])
-            if origins:
-                page = self._browser.page
-                for origin_data in origins:
-                    origin_url = origin_data.get("origin", "")
-                    ls_entries = origin_data.get("localStorage", [])
-                    if not origin_url or not ls_entries:
-                        continue
-                    try:
-                        await page.goto(
-                            origin_url,
-                            wait_until="domcontentloaded",
-                            timeout=LOGIN_TIMEOUT_MS,
-                        )
-                        await page.evaluate(
-                            """(entries) => {
-                                for (const e of entries) {
-                                    localStorage.setItem(e.name, e.value);
-                                }
-                            }""",
-                            ls_entries,
-                        )
-                        logger.info(
-                            "Restored %d localStorage entries for %s",
-                            len(ls_entries),
-                            origin_url,
-                        )
-                    except Exception as exc:
-                        logger.debug(
-                            "Failed to restore localStorage for %s: %s",
-                            origin_url,
-                            exc,
-                        )
-
-            return bool(cookies or origins)
-        except Exception as exc:
-            logger.warning("Failed to restore session state: %s", exc)
-
-        return False
-
     async def _fill_first_visible(
         self,
         page: Page,
         selectors: list[str],
         value: str,
+        timeout_ms: int = SELECTOR_PROBE_TIMEOUT_MS,
     ) -> bool:
         for selector in selectors:
             try:
                 handle = await page.wait_for_selector(
                     selector,
                     state="visible",
-                    timeout=SELECTOR_PROBE_TIMEOUT_MS,
+                    timeout=timeout_ms,
                 )
                 if handle:
                     await page.fill(selector, value, timeout=ACTION_TIMEOUT_MS)
@@ -301,13 +196,18 @@ class DashboardAuth:
                 continue
         return False
 
-    async def _click_first_visible(self, page: Page, selectors: list[str]) -> bool:
+    async def _click_first_visible(
+        self,
+        page: Page,
+        selectors: list[str],
+        timeout_ms: int = SELECTOR_PROBE_TIMEOUT_MS,
+    ) -> bool:
         for selector in selectors:
             try:
                 handle = await page.wait_for_selector(
                     selector,
                     state="visible",
-                    timeout=SELECTOR_PROBE_TIMEOUT_MS,
+                    timeout=timeout_ms,
                 )
                 if handle:
                     await page.click(selector, timeout=ACTION_TIMEOUT_MS)

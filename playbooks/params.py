@@ -93,6 +93,7 @@ def _bind_step_placeholders(step: PlaybookStep, params: dict[str, Any]) -> Playb
         description=_replace_text(step.description, params),
         on_failure=step.on_failure,
         store_as=step.store_as,
+        prompt=_replace_text(step.prompt, params) if step.prompt else "",
     )
 
 

@@ -64,11 +64,13 @@ async def _run_playbook(
     directive: str,
     playbook_id: str,
     playbook_params: str | None,
+    output_schema: dict[str, Any] | None,
     browser: BrowserManager,
     recording: RecordingManager,
     credentials: dict | None,
 ) -> int:
     """Execute a playbook deterministically."""
+    from agent.output import playbook_result_to_output
     from playbooks.auth import DashboardAuth
     from playbooks.runner import PlaybookRunner
     from playbooks.store import PlaybookStore
@@ -97,28 +99,14 @@ async def _run_playbook(
             await browser.close()
             return 1
 
-    runner = PlaybookRunner(browser, recording)
-    pb_result = await runner.execute(playbook, pb_params)
+    # Make directive available as {directive} in step templates (e.g. llm_extract)
+    pb_params.setdefault("directive", directive)
 
+    runner = PlaybookRunner(browser, recording, output_schema=output_schema)
+    pb_result = await runner.execute(playbook, pb_params)
+    output = playbook_result_to_output(pb_result)
     print("\n" + "=" * 60)
-    print(f"Status:  {'SUCCESS' if pb_result.success else 'FAILED'}")
-    print(f"Playbook: {pb_result.playbook_id}")
-    if pb_result.error:
-        print(f"Error:   {pb_result.error}")
-    print(f"Steps:   {len(pb_result.step_results)}")
-    print(f"Duration: {pb_result.total_duration_ms}ms")
-    for sr in pb_result.step_results:
-        status = "OK" if sr.success else "FAIL"
-        recovery = " (LLM recovery)" if sr.recovery_used else ""
-        print(
-            f"  Step {sr.step_index + 1}: {sr.action} — {status} ({sr.duration_ms}ms){recovery}"
-        )
-        if sr.extracted_text:
-            print(f"\n--- Extracted Data ---\n{sr.extracted_text}\n")
-    if pb_result.extracted_text and not any(
-        sr.extracted_text for sr in pb_result.step_results
-    ):
-        print(f"\n--- Extracted Data ---\n{pb_result.extracted_text}\n")
+    print(json.dumps(output.model_dump(), indent=2, ensure_ascii=False))
     print("=" * 60)
 
     try:
@@ -312,11 +300,6 @@ def main(
 
             creds = resolve_credentials(raw_creds)
 
-        if playbook:
-            return await _run_playbook(
-                directive, playbook, playbook_params, browser, recording, creds
-            )
-
         parsed_schema = None
         if output_schema:
             try:
@@ -327,6 +310,17 @@ def main(
                     await recording.stop()
                 await browser.close()
                 return 1
+
+        if playbook:
+            return await _run_playbook(
+                directive,
+                playbook,
+                playbook_params,
+                parsed_schema,
+                browser,
+                recording,
+                creds,
+            )
 
         return await _run_agent(
             directive=directive,

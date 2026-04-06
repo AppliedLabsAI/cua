@@ -15,6 +15,7 @@ PlaybookAction = Literal[
     "select",
     "evaluate",
     "extract",
+    "llm_extract",
 ]
 OnFailureMode = Literal["llm_recover", "retry", "abort"]
 ParameterType = Literal["string", "int", "selector_text"]
@@ -28,6 +29,7 @@ KNOWN_PLAYBOOK_ACTIONS: tuple[PlaybookAction, ...] = (
     "select",
     "evaluate",
     "extract",
+    "llm_extract",
 )
 KNOWN_FAILURE_MODES: tuple[OnFailureMode, ...] = ("llm_recover", "retry", "abort")
 KNOWN_PARAMETER_TYPES: tuple[ParameterType, ...] = ("string", "int", "selector_text")
@@ -95,6 +97,7 @@ class PlaybookStep(BaseModel):
     description: str = ""
     on_failure: OnFailureMode = "llm_recover"
     store_as: str = ""  # Save extracted output for later {param} substitution
+    prompt: str = ""  # LLM prompt for llm_extract — analyzed against page content
 
 
 class PlaybookParameter(BaseModel):

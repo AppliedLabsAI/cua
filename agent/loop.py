@@ -89,6 +89,9 @@ async def run_agent(
     # Build initial user message with DOM context if available
     page_url = bridge.browser.page.url
     if page_url and page_url != "about:blank":
+        wait_for_active_page = getattr(bridge.browser, "wait_for_active_page", None)
+        if callable(wait_for_active_page):
+            await wait_for_active_page()
         page_ctx = await attach_page_context(
             bridge.browser, filter_config=bridge._filter_config
         )

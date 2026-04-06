@@ -135,6 +135,10 @@ async def attach_page_context(
     filter_config: dict | None = None,
 ) -> str:
     """Attach the best available page context with the DOM marker prefix."""
+    wait_for_active_page = getattr(browser, "wait_for_active_page", None)
+    if callable(wait_for_active_page):
+        with contextlib.suppress(Exception):
+            await wait_for_active_page()
     page = browser.page
     ctx = await browser.consume_prefetch()
     if not ctx:

@@ -151,7 +151,10 @@ def agent_result_to_output(result: AgentResult) -> CuaOutput:
 
 def playbook_result_to_output(result: PlaybookResult) -> CuaOutput:
     """Convert a PlaybookResult to a CuaOutput."""
-    summary, data = _extract_summary_and_data(result.data)
+    summary, data = _extract_summary_and_data(
+        result.data,
+        result.extracted_text or "",
+    )
 
     return CuaOutput(
         status="completed" if result.success else "failed",

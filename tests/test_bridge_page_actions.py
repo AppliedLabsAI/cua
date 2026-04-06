@@ -9,7 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bridge.page_actions import PageActionConfig, _extract_markdown, execute_page_action
+from bridge.page_actions import (
+    PageActionConfig,
+    _extract_markdown,
+    execute_page_action,
+    wait_for_page_ready,
+)
 from credentials import SecretValue
 
 
@@ -195,6 +200,111 @@ def test_extract_value_returns_raw_field_value():
     )
 
     assert outcome.text == "f1a1523a-a020-4417-a6fb-85f00ce929af"
+
+
+def test_extract_waits_for_page_readiness(monkeypatch):
+    page = _FakePage()
+    observed: dict[str, object] = {}
+
+    async def _fake_wait(page_obj, timeout_ms, **kwargs):
+        observed["page"] = page_obj
+        observed["timeout_ms"] = timeout_ms
+        observed["kwargs"] = kwargs
+
+    monkeypatch.setattr("bridge.page_actions.wait_for_page_ready", _fake_wait)
+
+    outcome = asyncio.run(
+        execute_page_action(
+            page,
+            "extract",
+            {"selector": "body", "mode": "text"},
+            config=_config(),
+        )
+    )
+
+    assert outcome.text == "text:body:3000"
+    assert observed == {
+        "page": page,
+        "timeout_ms": 1000,
+        "kwargs": {
+            "selector": "body",
+            "wait_for_content": True,
+            "settle_sleep_s": 0,
+        },
+    }
+
+
+def test_wait_for_page_ready_polls_until_content_stabilizes():
+    snapshots = [
+        {
+            "readyState": "interactive",
+            "selectorMatched": True,
+            "textLength": 0,
+            "busyCount": 1,
+        },
+        {
+            "readyState": "complete",
+            "selectorMatched": True,
+            "textLength": 42,
+            "busyCount": 1,
+        },
+        {
+            "readyState": "complete",
+            "selectorMatched": True,
+            "textLength": 42,
+            "busyCount": 1,
+        },
+    ]
+    page = AsyncMock()
+    page.wait_for_load_state = AsyncMock()
+    page.wait_for_selector = AsyncMock()
+    page.evaluate = AsyncMock(side_effect=snapshots)
+
+    asyncio.run(
+        wait_for_page_ready(
+            page,
+            200,
+            selector="body",
+            wait_for_content=True,
+            settle_sleep_s=0,
+        )
+    )
+
+    assert page.wait_for_load_state.await_count == 3
+    assert page.evaluate.await_count == 4
+
+
+def test_wait_for_page_ready_requires_stable_snapshot_without_loader():
+    snapshots = [
+        {
+            "readyState": "complete",
+            "selectorMatched": True,
+            "textLength": 128,
+            "busyCount": 0,
+        },
+        {
+            "readyState": "complete",
+            "selectorMatched": True,
+            "textLength": 128,
+            "busyCount": 0,
+        },
+    ]
+    page = AsyncMock()
+    page.wait_for_load_state = AsyncMock()
+    page.wait_for_selector = AsyncMock()
+    page.evaluate = AsyncMock(side_effect=snapshots)
+
+    asyncio.run(
+        wait_for_page_ready(
+            page,
+            200,
+            selector="body",
+            wait_for_content=True,
+            settle_sleep_s=0,
+        )
+    )
+
+    assert page.evaluate.await_count == 2
 
 
 # ---------------------------------------------------------------------------
