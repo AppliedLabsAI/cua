@@ -513,6 +513,62 @@ class TestRunnerStepOutputs:
         assert result.success is True
         assert observed_urls == ["https://example.com/shop/42"]
 
+    def test_runner_accumulates_token_usage_and_structured_output_costs(
+        self, monkeypatch
+    ):
+        from playbooks.runner import PlaybookRunner
+
+        class _TokenExecutor:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def execute_step(self, step, page):
+                self.calls += 1
+                if self.calls == 1:
+                    return StepResult(
+                        step_index=0,
+                        action=step.action,
+                        success=True,
+                        extracted_text="Promo code was not applied.",
+                        input_tokens=11,
+                        output_tokens=7,
+                    )
+                return StepResult(
+                    step_index=0,
+                    action=step.action,
+                    success=True,
+                )
+
+        async def _fake_extract_structured_data(*args, **kwargs):
+            return {"summary": "Promo code was not applied."}, 3, 2
+
+        monkeypatch.setattr(
+            "playbooks.runner.extract_structured_data",
+            _fake_extract_structured_data,
+        )
+
+        runner = PlaybookRunner(
+            browser=SimpleNamespace(page=object()),
+            step_executor=_TokenExecutor(),
+            output_schema={"type": "object"},
+        )
+        playbook = Playbook(
+            id="promo",
+            name="Promo",
+            steps=[
+                PlaybookStep(action="extract", store_as="promo_summary"),
+                PlaybookStep(action="goto", params={"url": "https://example.com"}),
+            ],
+        )
+
+        result = asyncio.run(runner.execute(playbook))
+
+        assert result.success is True
+        assert result.total_input_tokens == 14
+        assert result.total_output_tokens == 9
+        assert result.extracted_texts == ["Promo code was not applied."]
+        assert result.data == {"summary": "Promo code was not applied."}
+
     def test_runner_waits_for_active_page_between_steps(self):
         from playbooks.runner import PlaybookRunner
 

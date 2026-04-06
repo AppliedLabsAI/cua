@@ -172,6 +172,9 @@ class StepRecoveryPolicy:
                 description=f"LLM completed {len(remaining_steps)} remaining steps",
                 error=result.error if not result.success else None,
                 extracted_text=result.summary if result.summary else None,
+                input_tokens=result.total_input_tokens,
+                output_tokens=result.total_output_tokens,
+                session_memory=result.session_memory,
                 recovery_used=True,
             )
         except Exception as exc:

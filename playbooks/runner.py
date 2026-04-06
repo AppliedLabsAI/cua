@@ -23,6 +23,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _collect_playbook_extracted_texts(step_results: list[StepResult]) -> list[str]:
+    return [
+        result.extracted_text
+        for result in step_results
+        if result.success and result.extracted_text
+    ]
+
+
 class PlaybookRunner:
     """Coordinate deterministic step execution and LLM fallback policy."""
 
@@ -54,6 +62,9 @@ class PlaybookRunner:
         start = time.monotonic()
         step_results: list[StepResult] = []
         final_extracted: str | None = None
+        total_input_tokens = 0
+        total_output_tokens = 0
+        session_memory = ""
 
         logger.info(
             "Executing playbook '%s' (%d steps, params=%s)",
@@ -94,6 +105,10 @@ class PlaybookRunner:
             )
             result.step_index = index
             result.duration_ms = int((time.monotonic() - step_start) * 1000)
+            total_input_tokens += result.input_tokens
+            total_output_tokens += result.output_tokens
+            if result.session_memory:
+                session_memory = result.session_memory
 
             if result.success:
                 step_results.append(result)
@@ -110,6 +125,10 @@ class PlaybookRunner:
                         step_results=step_results,
                         total_duration_ms=int((time.monotonic() - start) * 1000),
                         extracted_text=result.extracted_text or final_extracted,
+                        total_input_tokens=total_input_tokens,
+                        total_output_tokens=total_output_tokens,
+                        extracted_texts=_collect_playbook_extracted_texts(step_results),
+                        session_memory=session_memory,
                     )
                 continue
 
@@ -123,6 +142,10 @@ class PlaybookRunner:
                     total_duration_ms=int((time.monotonic() - start) * 1000),
                     error=result.error,
                     extracted_text=result.extracted_text or final_extracted,
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                    extracted_texts=_collect_playbook_extracted_texts(step_results),
+                    session_memory=session_memory,
                 )
 
             logger.error("  Step %d aborted: %s", index + 1, result.error)
@@ -135,17 +158,24 @@ class PlaybookRunner:
                 error=f"Step {index + 1} ({step.description}): {result.error}",
                 screenshot_b64=screenshot_b64,
                 extracted_text=final_extracted,
+                total_input_tokens=total_input_tokens,
+                total_output_tokens=total_output_tokens,
+                extracted_texts=_collect_playbook_extracted_texts(step_results),
+                session_memory=session_memory,
             )
 
         total_ms = int((time.monotonic() - start) * 1000)
         logger.info("Playbook '%s' completed in %dms", playbook.id, total_ms)
 
         # Structured extraction from collected texts
-        data = await extract_structured_data(
+        data, ext_in, ext_out = await extract_structured_data(
             step_results,
+            summary=final_extracted or "",
             playbook_name=playbook.name,
             output_schema=self._output_schema,
         )
+        total_input_tokens += ext_in
+        total_output_tokens += ext_out
 
         return PlaybookResult(
             playbook_id=playbook.id,
@@ -154,6 +184,10 @@ class PlaybookRunner:
             total_duration_ms=total_ms,
             extracted_text=final_extracted,
             data=data,
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+            extracted_texts=_collect_playbook_extracted_texts(step_results),
+            session_memory=session_memory,
         )
 
     async def _capture_failure_screenshot(self, page: Page) -> str | None:

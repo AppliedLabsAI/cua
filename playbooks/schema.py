@@ -135,6 +135,9 @@ class StepResult(BaseModel):
     error: str | None = None
     recovery_used: bool = False
     extracted_text: str | None = None  # Text extracted by 'extract' action
+    input_tokens: int = 0
+    output_tokens: int = 0
+    session_memory: str = ""
 
 
 class PlaybookResult(BaseModel):
@@ -148,3 +151,7 @@ class PlaybookResult(BaseModel):
     screenshot_b64: str | None = None  # Final screenshot on completion/failure
     extracted_text: str | None = None  # Data extracted during execution
     data: dict[str, Any] | None = None  # Schema-driven structured extraction
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    extracted_texts: list[str] = Field(default_factory=list)
+    session_memory: str = ""

@@ -21,7 +21,7 @@ from agent.deps import AgentDeps
 from agent.memory import SessionMemory
 from agent.output import (
     collect_extracted_texts,
-    extract_structured_output,
+    maybe_extract_structured_output,
 )
 from agent.result import AgentResult, make_error_result
 from bridge.execution import attach_page_context
@@ -142,16 +142,14 @@ async def run_agent(
 
     # Post-loop structured extraction (only when caller provides a schema)
     extracted_texts = collect_extracted_texts(bridge.action_log)
-    structured_data = None
-    if output_schema and (summary or extracted_texts):
-        structured_data, ext_in, ext_out = await extract_structured_output(
-            summary=summary,
-            extracted_texts=extracted_texts,
-            output_schema=output_schema,
-            model=model,
-        )
-        deps.total_input_tokens += ext_in
-        deps.total_output_tokens += ext_out
+    structured_data, ext_in, ext_out = await maybe_extract_structured_output(
+        summary=summary,
+        extracted_texts=extracted_texts,
+        output_schema=output_schema,
+        model=model,
+    )
+    deps.total_input_tokens += ext_in
+    deps.total_output_tokens += ext_out
 
     total_ms = int((time.monotonic() - run_start) * 1000)
     logger.info(

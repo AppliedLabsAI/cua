@@ -13,24 +13,20 @@ logger = logging.getLogger(__name__)
 async def extract_structured_data(
     step_results: list[StepResult],
     *,
+    summary: str,
     playbook_name: str,
     output_schema: dict[str, Any] | None,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, int, int]:
     """Run structured extraction from successful extracted texts."""
-    if not output_schema:
-        return None
-
     extracted_texts = [
         sr.extracted_text for sr in step_results if sr.extracted_text and sr.success
     ]
-    if not extracted_texts:
-        return None
 
     try:
-        from agent.output import extract_structured_output
+        from agent.output import maybe_extract_structured_output
 
-        data, input_tokens, output_tokens = await extract_structured_output(
-            summary=f"Playbook '{playbook_name}' completed successfully.",
+        data, input_tokens, output_tokens = await maybe_extract_structured_output(
+            summary=summary or f"Playbook '{playbook_name}' completed successfully.",
             extracted_texts=extracted_texts,
             output_schema=output_schema,
         )
@@ -40,7 +36,7 @@ async def extract_structured_data(
             input_tokens,
             output_tokens,
         )
-        return data
+        return data, input_tokens, output_tokens
     except Exception as exc:
         logger.warning(
             "Structured extraction failed for playbook '%s': %s",
@@ -48,4 +44,6 @@ async def extract_structured_data(
             exc,
             exc_info=True,
         )
-        return None
+        return None, 0, 0
+
+    return data, input_tokens, output_tokens
