@@ -431,6 +431,41 @@ class TestRunnerFailurePolicy:
 
 
 class TestRunnerStepOutputs:
+    def test_executor_verifies_against_active_browser_page(self, monkeypatch):
+        from playbooks.executor import PlaybookStepExecutor
+
+        stale_page = SimpleNamespace(url="https://example.com/customer-profile/123")
+        active_page = SimpleNamespace(url="https://example.com/invoices/456")
+
+        class _FakeBrowser:
+            def __init__(self) -> None:
+                self.page = stale_page
+                self.wait_calls = 0
+
+            async def wait_for_active_page(self) -> None:
+                self.wait_calls += 1
+
+        browser = _FakeBrowser()
+        executor = PlaybookStepExecutor(browser=browser)
+
+        async def _fake_run_action(step, page) -> None:
+            browser.page = active_page
+
+        monkeypatch.setattr(executor, "_run_action", _fake_run_action)
+
+        result = asyncio.run(
+            executor.execute_step(
+                PlaybookStep(
+                    action="click",
+                    verify=StepVerification(expect_url_contains="/invoices/"),
+                ),
+                stale_page,
+            )
+        )
+
+        assert result.success is True
+        assert browser.wait_calls == 1
+
     def test_extracted_output_is_available_to_later_steps(self):
         from playbooks.runner import PlaybookRunner
 
@@ -477,3 +512,38 @@ class TestRunnerStepOutputs:
 
         assert result.success is True
         assert observed_urls == ["https://example.com/shop/42"]
+
+    def test_runner_waits_for_active_page_between_steps(self):
+        from playbooks.runner import PlaybookRunner
+
+        class _PassExecutor:
+            async def execute_step(self, step, page):
+                return StepResult(
+                    step_index=0,
+                    action=step.action,
+                    success=True,
+                )
+
+        class _FakeBrowser:
+            def __init__(self) -> None:
+                self.page = object()
+                self.wait_calls = 0
+
+            async def wait_for_active_page(self) -> None:
+                self.wait_calls += 1
+
+        browser = _FakeBrowser()
+        runner = PlaybookRunner(browser=browser, step_executor=_PassExecutor())
+        playbook = Playbook(
+            id="waits",
+            name="Waits",
+            steps=[
+                PlaybookStep(action="goto", params={"url": "https://example.com"}),
+                PlaybookStep(action="click"),
+            ],
+        )
+
+        result = asyncio.run(runner.execute(playbook))
+
+        assert result.success is True
+        assert browser.wait_calls == 4

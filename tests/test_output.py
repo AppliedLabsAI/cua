@@ -278,6 +278,18 @@ class TestPlaybookResultToOutput:
         assert "summary" not in output.data
         assert output.error is None
 
+    def test_success_without_data_falls_back_to_extracted_text(self):
+        result = PlaybookResult(
+            playbook_id="p1",
+            success=True,
+            extracted_text="Promo code was not applied.",
+        )
+        output = playbook_result_to_output(result)
+
+        assert output.status == "completed"
+        assert output.summary == "Promo code was not applied."
+        assert output.data is None
+
     def test_failure_no_data(self):
         result = PlaybookResult(
             playbook_id="p2",

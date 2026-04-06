@@ -51,6 +51,7 @@ cua_agent: Agent[AgentDeps, str] = Agent(
         "Navigate to pages and read actual content rather than answering from memory."
     ),
     model_settings=ModelSettings(max_tokens=16384),
+    output_retries=3,
 )
 
 

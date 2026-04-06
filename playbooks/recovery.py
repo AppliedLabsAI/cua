@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
@@ -90,13 +91,19 @@ class StepRecoveryPolicy:
         runtime_params: dict[str, Any] | None = None,
     ) -> StepResult:
         """Run a step according to its declared failure mode."""
-        result = await self._executor.execute_step(step, page)
+        result = await self._executor.execute_step(
+            step,
+            await self._resolve_page(page),
+        )
         if result.success or step.on_failure == "abort":
             return result
 
         logger.info("  Step failed, retrying after %.1fs...", self._retry_delay_s)
         await asyncio.sleep(self._retry_delay_s)
-        result = await self._executor.execute_step(step, page)
+        result = await self._executor.execute_step(
+            step,
+            await self._resolve_page(page),
+        )
         if result.success or step.on_failure == "retry":
             return result
 
@@ -105,11 +112,22 @@ class StepRecoveryPolicy:
             playbook=playbook,
             remaining_steps=remaining_steps,
             error=result.error or "",
-            page=page,
+            page=await self._resolve_page(page),
             runtime_params=runtime_params,
         )
         llm_result.recovery_used = True
         return llm_result
+
+    async def _resolve_page(self, page: Page) -> Page:
+        """Return the current active browser page when available."""
+        wait_for_active_page = getattr(self._browser, "wait_for_active_page", None)
+        if callable(wait_for_active_page):
+            with contextlib.suppress(Exception):
+                await wait_for_active_page()
+
+        with contextlib.suppress(Exception):
+            return self._browser.page
+        return page
 
     async def complete_remaining_with_llm(
         self,

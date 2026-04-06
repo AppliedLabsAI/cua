@@ -119,6 +119,9 @@ class ActionRouter:
                 "Summarize what you accomplished and any remaining steps."
             )
 
+        with contextlib.suppress(Exception):
+            await self.browser.wait_for_active_page()
+
         page_url_before = self._current_page_url()
         request = self._build_request(tool_name, tool_input)
         start = time.monotonic()

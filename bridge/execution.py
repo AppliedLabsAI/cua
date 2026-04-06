@@ -115,9 +115,10 @@ async def _handle_screenshot(
 
 
 async def _handle_goto(params: dict[str, Any], ctx: ExecutionContext) -> ActionResult:
+    page = ctx.page
     url = params["url"]
     outcome = await execute_page_action(
-        ctx.page,
+        page,
         "goto",
         params,
         config=_TOOL_ACTION_CONFIG,
@@ -128,23 +129,24 @@ async def _handle_goto(params: dict[str, Any], ctx: ExecutionContext) -> ActionR
 
 
 async def _handle_click(params: dict[str, Any], ctx: ExecutionContext) -> ActionResult:
-    await start_mutation_observer(ctx.page)
+    page = ctx.page
+    await start_mutation_observer(page)
     try:
         await execute_page_action(
-            ctx.page,
+            page,
             "click",
             params,
             config=_TOOL_ACTION_CONFIG,
         )
     except Exception:
-        await stop_mutation_observer(ctx.page)
+        await stop_mutation_observer(page)
         raise
 
     if ctx.policy.include_page_context:
         ctx.browser.start_prefetch(
-            quick_page_map(ctx.page, filter_config=ctx.filter_config)
+            quick_page_map(ctx.browser.page, filter_config=ctx.filter_config)
         )
-    delta = await stop_mutation_observer(ctx.page)
+    delta = await stop_mutation_observer(page)
     text = f"Clicked {delta}" if delta else "Clicked"
     return ActionResult(text=await _append_page_context(text, ctx))
 
@@ -153,8 +155,9 @@ async def _handle_extract(
     params: dict[str, Any],
     ctx: ExecutionContext,
 ) -> ActionResult:
+    page = ctx.page
     outcome = await execute_page_action(
-        ctx.page,
+        page,
         "extract",
         params,
         config=_TOOL_ACTION_CONFIG,
@@ -167,15 +170,18 @@ async def _handle_evaluate(
     params: dict[str, Any],
     ctx: ExecutionContext,
 ) -> ActionResult:
+    page = ctx.page
     outcome = await execute_page_action(
-        ctx.page,
+        page,
         "evaluate",
         params,
         config=_TOOL_ACTION_CONFIG,
     )
     text = "Evaluated script"
     if outcome.page_changed:
-        dom = await quick_dom_snapshot(ctx.page, filter_config=ctx.filter_config)
+        dom = await quick_dom_snapshot(
+            ctx.browser.page, filter_config=ctx.filter_config
+        )
         if dom:
             text += f"\n\n{DOM_MARKER}\n{dom}"
     return ActionResult(text=text)
@@ -185,8 +191,9 @@ async def _handle_select(
     params: dict[str, Any],
     ctx: ExecutionContext,
 ) -> ActionResult:
+    page = ctx.page
     outcome = await execute_page_action(
-        ctx.page,
+        page,
         "select",
         params,
         config=_TOOL_ACTION_CONFIG,
@@ -198,8 +205,9 @@ async def _handle_wait_for(
     params: dict[str, Any],
     ctx: ExecutionContext,
 ) -> ActionResult:
+    page = ctx.page
     outcome = await execute_page_action(
-        ctx.page,
+        page,
         "wait_for",
         params,
         config=_TOOL_ACTION_CONFIG,
@@ -211,8 +219,9 @@ async def _handle_key_press(
     params: dict[str, Any],
     ctx: ExecutionContext,
 ) -> ActionResult:
+    page = ctx.page
     outcome = await execute_page_action(
-        ctx.page,
+        page,
         "key_press",
         params,
         config=_TOOL_ACTION_CONFIG,
@@ -225,8 +234,9 @@ async def _handle_scroll(
     params: dict[str, Any],
     ctx: ExecutionContext,
 ) -> ActionResult:
+    page = ctx.page
     await execute_page_action(
-        ctx.page,
+        page,
         "scroll",
         params,
         config=_TOOL_ACTION_CONFIG,
@@ -242,8 +252,9 @@ async def _handle_get_dom(
     params: dict[str, Any],
     ctx: ExecutionContext,
 ) -> ActionResult:
+    page = ctx.page
     dom = await get_dom_snapshot(
-        ctx.page,
+        page,
         selector=params.get("selector"),
         max_chars=DOM_MAX_CHARS,
         filter_config=ctx.filter_config,

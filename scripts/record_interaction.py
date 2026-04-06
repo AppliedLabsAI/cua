@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import contextlib
 
-from patchright.async_api import async_playwright
+from patchright.async_api import Page, async_playwright
 
 from bridge.js_helpers import RECORDER_INIT_JS
 from settings import LOGIN_TIMEOUT_MS
@@ -145,17 +145,40 @@ async def run(args: argparse.Namespace) -> int:
 
         context = await browser.new_context(
             viewport={"width": args.width, "height": args.height},
+            bypass_csp=True,
         )
 
         # Wire JS -> Python bridge (survives navigations, works in all frames)
         await context.expose_function("__cuaRecordEvent", recorder.on_event)
-        await context.add_init_script(script=RECORDER_INIT_JS)
 
         # Detect browser close — "disconnected" fires reliably when the user
         # closes Chrome, unlike context.on("close") which requires a clean shutdown.
         browser.on("disconnected", lambda _: recorder.done.set())
 
         page = await context.new_page()
+
+        # Inject recorder via page.evaluate after each navigation
+        # (add_init_script is suppressed by Patchright to avoid bot detection)
+        async def inject_recorder(page_ref: Page) -> None:
+            with contextlib.suppress(Exception):
+                await page_ref.evaluate(RECORDER_INIT_JS)
+
+        def wire_page(p: Page) -> None:
+            """Attach recorder injection to a page's navigation events."""
+            p.on(
+                "domcontentloaded",
+                lambda _p=p: asyncio.ensure_future(inject_recorder(_p)),
+            )
+
+        wire_page(page)
+
+        # When a new tab/popup opens, wire it up and inject the recorder
+        def on_new_page(new_page: Page) -> None:
+            logger.info("New tab opened: %s", new_page.url[:80] or "about:blank")
+            wire_page(new_page)
+            asyncio.ensure_future(inject_recorder(new_page))
+
+        context.on("page", on_new_page)
 
         # Handle Ctrl+C
         loop = asyncio.get_running_loop()
@@ -176,6 +199,9 @@ async def run(args: argparse.Namespace) -> int:
                 args.start_url, wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
             )
             logger.info("Navigated to %s", args.start_url)
+
+        # Inject on the initial page as well
+        await inject_recorder(page)
 
         # Wait for done signal
         await recorder.done.wait()

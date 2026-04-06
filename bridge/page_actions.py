@@ -29,6 +29,51 @@ READABILITY_EXTRACT_CALL_JS = """(initJS) => {
         : null;
 }"""
 
+PAGE_READINESS_CALL_JS = """(selector) => {
+    const probeSelector = selector || 'body';
+    let target = null;
+    try {
+        target = document.querySelector(probeSelector);
+    } catch (_) {
+        target = null;
+    }
+
+    const probe = target || document.body || document.documentElement;
+    const text = (
+        probe?.innerText ??
+        probe?.textContent ??
+        probe?.value ??
+        ''
+    ).trim();
+
+    const busySelectors = [
+        "[aria-busy='true']",
+        "[role='progressbar']",
+        "[data-loading='true']",
+        "[data-testid*='loading']",
+        ".loading",
+        ".loader",
+        ".spinner",
+        ".skeleton",
+    ];
+
+    let busyCount = 0;
+    for (const sel of busySelectors) {
+        try {
+            busyCount += document.querySelectorAll(sel).length;
+        } catch (_) {
+            // Ignore invalid selectors and continue probing readiness.
+        }
+    }
+
+    return {
+        readyState: document.readyState || '',
+        selectorMatched: Boolean(target),
+        textLength: text.length,
+        busyCount,
+    };
+}"""
+
 
 class PageActionConfig(BaseModel):
     """Execution knobs shared across browser action call sites."""
@@ -70,7 +115,11 @@ async def execute_page_action(
             wait_until="domcontentloaded",
             timeout=config.navigation_timeout_ms,
         )
-        await wait_for_stable(page, config.settle_timeout_ms)
+        await wait_for_stable(
+            page,
+            config.settle_timeout_ms,
+            settle_sleep_s=config.settle_sleep_s,
+        )
         return PageActionOutcome(
             page_changed=page.url != url_before,
             navigation_status=response.status if response else "unknown",
@@ -80,7 +129,11 @@ async def execute_page_action(
         url_before = page.url
         await page.click(params["selector"], timeout=config.action_timeout_ms)
         if config.settle_after_click:
-            await wait_for_stable(page, config.settle_timeout_ms)
+            await wait_for_stable(
+                page,
+                config.settle_timeout_ms,
+                settle_sleep_s=config.settle_sleep_s,
+            )
         return PageActionOutcome(page_changed=page.url != url_before)
 
     if action == "key_press":
@@ -162,13 +215,25 @@ async def execute_page_action(
         url_before = page.url
         await page.evaluate(script)
         if config.settle_after_evaluate:
-            await wait_for_stable(page, config.settle_timeout_ms)
+            await wait_for_stable(
+                page,
+                config.settle_timeout_ms,
+                settle_sleep_s=config.settle_sleep_s,
+            )
         return PageActionOutcome(page_changed=page.url != url_before)
 
     if action == "extract":
+        selector = params.get("selector", "body")
+        await wait_for_page_ready(
+            page,
+            config.settle_timeout_ms,
+            selector=selector,
+            wait_for_content=True,
+            settle_sleep_s=config.settle_sleep_s,
+        )
         content = await extract_content(
             page,
-            selector=params.get("selector", "body"),
+            selector=selector,
             mode=params.get("mode", "markdown"),
             timeout_ms=config.action_timeout_ms,
         )
@@ -226,16 +291,96 @@ async def _extract_markdown(page: Any) -> str:
     return await page.inner_text("body")
 
 
-async def wait_for_stable(page: Any, timeout_ms: int) -> None:
-    """Best-effort post-action stabilization shared by both execution paths.
+async def _get_page_readiness_snapshot(
+    page: Any,
+    *,
+    selector: str | None,
+) -> dict[str, Any] | None:
+    try:
+        snapshot = await page.evaluate(PAGE_READINESS_CALL_JS, selector)
+    except Exception:
+        return None
+    if not isinstance(snapshot, dict):
+        return None
+    return snapshot
 
-    Waits for domcontentloaded first (HTML parsed), then attempts networkidle
-    (no in-flight requests for 500ms).  The networkidle phase catches SPA data
-    fetches that fire after the initial parse — without it the LLM sees a
-    partially-rendered page.  Both waits are best-effort: if they time out
-    (e.g. long-polling / websocket pages), execution continues.
-    """
+
+async def wait_for_page_ready(
+    page: Any,
+    timeout_ms: int,
+    *,
+    selector: str | None = None,
+    wait_for_content: bool = False,
+    settle_sleep_s: float = SETTLE_SLEEP_S,
+) -> None:
+    """Best-effort readiness wait that works for both static and SPA pages."""
+    if timeout_ms <= 0:
+        return
+
     with contextlib.suppress(Exception):
         await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
     with contextlib.suppress(Exception):
-        await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        await page.wait_for_load_state("load", timeout=min(timeout_ms, 1_500))
+    with contextlib.suppress(Exception):
+        await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 1_500))
+
+    if selector:
+        with contextlib.suppress(Exception):
+            await page.wait_for_selector(
+                selector,
+                state="visible",
+                timeout=min(timeout_ms, 1_000),
+            )
+
+    if not wait_for_content:
+        return
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + (timeout_ms / 1000)
+    last_signature: tuple[Any, ...] | None = None
+    stable_polls = 0
+    sleep_interval = settle_sleep_s if settle_sleep_s > 0 else 0.05
+
+    while loop.time() < deadline:
+        snapshot = await _get_page_readiness_snapshot(page, selector=selector)
+        if snapshot is None:
+            return
+
+        signature = (
+            snapshot.get("readyState"),
+            snapshot.get("textLength"),
+            snapshot.get("busyCount"),
+            snapshot.get("selectorMatched"),
+        )
+        has_content = bool(snapshot.get("textLength", 0))
+        ready_state = snapshot.get("readyState") in {"interactive", "complete"}
+        busy_count = int(snapshot.get("busyCount", 0) or 0)
+
+        if signature == last_signature and has_content:
+            stable_polls += 1
+        else:
+            stable_polls = 0
+        last_signature = signature
+
+        required_stable_polls = 1 if busy_count == 0 else 2
+
+        if has_content and ready_state and stable_polls >= required_stable_polls:
+            return
+
+        await asyncio.sleep(sleep_interval)
+
+
+async def wait_for_stable(
+    page: Any,
+    timeout_ms: int,
+    *,
+    settle_sleep_s: float = SETTLE_SLEEP_S,
+) -> None:
+    """Best-effort post-action stabilization shared by both execution paths."""
+    await wait_for_page_ready(
+        page,
+        timeout_ms,
+        selector="body",
+        wait_for_content=True,
+        settle_sleep_s=settle_sleep_s,
+    )

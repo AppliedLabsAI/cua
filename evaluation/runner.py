@@ -56,6 +56,7 @@ async def _run_playbook_case(
         height=height,
         start_url=case.start_url,
     ) as runtime:
+        from agent.output import playbook_result_to_output
         from playbooks.auth import DashboardAuth
         from playbooks.runner import PlaybookRunner
         from playbooks.store import PlaybookStore
@@ -77,14 +78,12 @@ async def _run_playbook_case(
             runtime.recording,
             output_schema=case.output_schema,
         )
-        raw = await runner.execute(playbook, case.playbook_params)
+        eval_params = dict(case.playbook_params or {})
+        eval_params.setdefault("directive", case.directive or "")
+        raw = await runner.execute(playbook, eval_params)
+        output = playbook_result_to_output(raw)
         extracted = [sr.extracted_text for sr in raw.step_results if sr.extracted_text]
         recovery_used = any(sr.recovery_used for sr in raw.step_results)
-        summary = ""
-        if raw.data:
-            summary = str(raw.data.get("summary", ""))
-        if not summary and raw.extracted_text:
-            summary = raw.extracted_text
         return EvalTrialResult(
             id=case.id,
             trial_index=trial_index,
@@ -92,7 +91,7 @@ async def _run_playbook_case(
             success=raw.success,
             mode=ObservedMode.HYBRID if recovery_used else ObservedMode.PLAYBOOK,
             requested_mode=case.execution_mode,
-            summary=summary,
+            summary=output.summary,
             error=raw.error,
             duration_ms=raw.total_duration_ms,
             actions=len(raw.step_results),
@@ -104,7 +103,7 @@ async def _run_playbook_case(
             handoff_succeeded=recovery_used and raw.success,
             estimated_cost_usd=0.0,
             benchmark_tags=list(case.benchmark_tags),
-            data=raw.data,
+            data=output.data,
             extracted_texts=extracted,
         )
 
