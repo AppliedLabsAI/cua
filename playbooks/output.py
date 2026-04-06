@@ -45,5 +45,3 @@ async def extract_structured_data(
             exc_info=True,
         )
         return None, 0, 0
-
-    return data, input_tokens, output_tokens
