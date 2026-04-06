@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from playbooks.output import collect_step_extracted_texts
 from playbooks.params import bind_step_params, materialize_playbook
 from playbooks.parser import DirectiveParser
 from playbooks.recovery import StepRecoveryPolicy
@@ -472,6 +473,38 @@ class TestRunnerFailurePolicy:
         assert executor_calls == 1
         assert result.success is True
         assert result.recovery_used is True
+
+
+class TestPlaybookOutputHelpers:
+    def test_collect_step_extracted_texts_filters_successful_texts(self):
+        step_results = [
+            StepResult(
+                step_index=0,
+                action="extract",
+                success=True,
+                extracted_text="first",
+            ),
+            StepResult(
+                step_index=1,
+                action="extract",
+                success=False,
+                extracted_text="ignored failure",
+            ),
+            StepResult(
+                step_index=2,
+                action="click",
+                success=True,
+                extracted_text=None,
+            ),
+            StepResult(
+                step_index=3,
+                action="llm_handoff",
+                success=True,
+                extracted_text="second",
+            ),
+        ]
+
+        assert collect_step_extracted_texts(step_results) == ["first", "second"]
 
 
 class TestRunnerStepOutputs:

@@ -10,6 +10,13 @@ from playbooks.schema import StepResult
 logger = logging.getLogger(__name__)
 
 
+def collect_step_extracted_texts(step_results: list[StepResult]) -> list[str]:
+    """Return extracted text from successful steps only."""
+    return [
+        sr.extracted_text for sr in step_results if sr.success and sr.extracted_text
+    ]
+
+
 async def extract_structured_data(
     step_results: list[StepResult],
     *,
@@ -18,9 +25,7 @@ async def extract_structured_data(
     output_schema: dict[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, int, int]:
     """Run structured extraction from successful extracted texts."""
-    extracted_texts = [
-        sr.extracted_text for sr in step_results if sr.extracted_text and sr.success
-    ]
+    extracted_texts = collect_step_extracted_texts(step_results)
 
     try:
         from agent.output import maybe_extract_structured_output

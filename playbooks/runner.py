@@ -9,7 +9,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from playbooks.executor import PlaybookStepExecutor
-from playbooks.output import extract_structured_data
+from playbooks.output import collect_step_extracted_texts, extract_structured_data
 from playbooks.params import materialize_step
 from playbooks.recovery import RETRY_DELAY_S, StepRecoveryPolicy
 from playbooks.schema import Playbook, PlaybookResult, StepResult
@@ -23,14 +23,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 STEP_SLEEP_SECONDS = 0.3
-
-
-def _collect_playbook_extracted_texts(step_results: list[StepResult]) -> list[str]:
-    return [
-        result.extracted_text
-        for result in step_results
-        if result.success and result.extracted_text
-    ]
 
 
 class PlaybookRunner:
@@ -131,7 +123,7 @@ class PlaybookRunner:
                         extracted_text=result.extracted_text or final_extracted,
                         total_input_tokens=total_input_tokens,
                         total_output_tokens=total_output_tokens,
-                        extracted_texts=_collect_playbook_extracted_texts(step_results),
+                        extracted_texts=collect_step_extracted_texts(step_results),
                         session_memory=session_memory,
                     )
                 continue
@@ -148,7 +140,7 @@ class PlaybookRunner:
                     extracted_text=result.extracted_text or final_extracted,
                     total_input_tokens=total_input_tokens,
                     total_output_tokens=total_output_tokens,
-                    extracted_texts=_collect_playbook_extracted_texts(step_results),
+                    extracted_texts=collect_step_extracted_texts(step_results),
                     session_memory=session_memory,
                 )
 
@@ -164,7 +156,7 @@ class PlaybookRunner:
                 extracted_text=final_extracted,
                 total_input_tokens=total_input_tokens,
                 total_output_tokens=total_output_tokens,
-                extracted_texts=_collect_playbook_extracted_texts(step_results),
+                extracted_texts=collect_step_extracted_texts(step_results),
                 session_memory=session_memory,
             )
 
@@ -190,7 +182,7 @@ class PlaybookRunner:
             data=data,
             total_input_tokens=total_input_tokens,
             total_output_tokens=total_output_tokens,
-            extracted_texts=_collect_playbook_extracted_texts(step_results),
+            extracted_texts=collect_step_extracted_texts(step_results),
             session_memory=session_memory,
         )
 
