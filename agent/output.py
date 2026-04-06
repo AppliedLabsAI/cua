@@ -68,6 +68,24 @@ def collect_extracted_texts(action_log: list[ActionLog]) -> list[str]:
     ]
 
 
+async def maybe_extract_structured_output(
+    *,
+    summary: str,
+    extracted_texts: list[str],
+    output_schema: dict[str, Any] | None,
+    model: str = PRIMARY_MODEL,
+) -> tuple[dict[str, Any] | None, int, int]:
+    """Run schema extraction only when both schema and context are present."""
+    if not output_schema or not (summary or extracted_texts):
+        return None, 0, 0
+    return await extract_structured_output(
+        summary=summary,
+        extracted_texts=extracted_texts,
+        output_schema=output_schema,
+        model=model,
+    )
+
+
 async def extract_structured_output(
     summary: str,
     extracted_texts: list[str],

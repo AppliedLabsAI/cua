@@ -9,7 +9,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from playbooks.executor import PlaybookStepExecutor
-from playbooks.output import extract_structured_data
+from playbooks.output import collect_step_extracted_texts, extract_structured_data
 from playbooks.params import materialize_step
 from playbooks.recovery import RETRY_DELAY_S, StepRecoveryPolicy
 from playbooks.schema import Playbook, PlaybookResult, StepResult
@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+STEP_SLEEP_SECONDS = 0.3
+
 
 class PlaybookRunner:
     """Coordinate deterministic step execution and LLM fallback policy."""
@@ -32,11 +34,13 @@ class PlaybookRunner:
         recording: RecordingManager | None = None,
         step_executor: PlaybookStepExecutor | None = None,
         output_schema: dict[str, Any] | None = None,
+        step_sleep_seconds: float = STEP_SLEEP_SECONDS,
     ) -> None:
         self._browser = browser
         self._recording = recording
         self._executor = step_executor or PlaybookStepExecutor(browser=self._browser)
         self._output_schema = output_schema
+        self.step_sleep_seconds = step_sleep_seconds
         self._recovery = StepRecoveryPolicy(
             browser=self._browser,
             recording=self._recording,
@@ -54,6 +58,9 @@ class PlaybookRunner:
         start = time.monotonic()
         step_results: list[StepResult] = []
         final_extracted: str | None = None
+        total_input_tokens = 0
+        total_output_tokens = 0
+        session_memory = ""
 
         logger.info(
             "Executing playbook '%s' (%d steps, params=%s)",
@@ -65,7 +72,7 @@ class PlaybookRunner:
         for index in range(len(playbook.steps)):
             # Yield to the event loop so async callbacks (e.g., tab switches
             # from a previous step's click) propagate before we re-fetch page.
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(self.step_sleep_seconds)
             wait_for_active_page = getattr(self._browser, "wait_for_active_page", None)
             if callable(wait_for_active_page):
                 await wait_for_active_page()
@@ -94,6 +101,10 @@ class PlaybookRunner:
             )
             result.step_index = index
             result.duration_ms = int((time.monotonic() - step_start) * 1000)
+            total_input_tokens += result.input_tokens
+            total_output_tokens += result.output_tokens
+            if result.session_memory:
+                session_memory = result.session_memory
 
             if result.success:
                 step_results.append(result)
@@ -110,6 +121,10 @@ class PlaybookRunner:
                         step_results=step_results,
                         total_duration_ms=int((time.monotonic() - start) * 1000),
                         extracted_text=result.extracted_text or final_extracted,
+                        total_input_tokens=total_input_tokens,
+                        total_output_tokens=total_output_tokens,
+                        extracted_texts=collect_step_extracted_texts(step_results),
+                        session_memory=session_memory,
                     )
                 continue
 
@@ -123,6 +138,10 @@ class PlaybookRunner:
                     total_duration_ms=int((time.monotonic() - start) * 1000),
                     error=result.error,
                     extracted_text=result.extracted_text or final_extracted,
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                    extracted_texts=collect_step_extracted_texts(step_results),
+                    session_memory=session_memory,
                 )
 
             logger.error("  Step %d aborted: %s", index + 1, result.error)
@@ -135,17 +154,24 @@ class PlaybookRunner:
                 error=f"Step {index + 1} ({step.description}): {result.error}",
                 screenshot_b64=screenshot_b64,
                 extracted_text=final_extracted,
+                total_input_tokens=total_input_tokens,
+                total_output_tokens=total_output_tokens,
+                extracted_texts=collect_step_extracted_texts(step_results),
+                session_memory=session_memory,
             )
 
         total_ms = int((time.monotonic() - start) * 1000)
         logger.info("Playbook '%s' completed in %dms", playbook.id, total_ms)
 
         # Structured extraction from collected texts
-        data = await extract_structured_data(
+        data, ext_in, ext_out = await extract_structured_data(
             step_results,
+            summary=final_extracted or "",
             playbook_name=playbook.name,
             output_schema=self._output_schema,
         )
+        total_input_tokens += ext_in
+        total_output_tokens += ext_out
 
         return PlaybookResult(
             playbook_id=playbook.id,
@@ -154,6 +180,10 @@ class PlaybookRunner:
             total_duration_ms=total_ms,
             extracted_text=final_extracted,
             data=data,
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+            extracted_texts=collect_step_extracted_texts(step_results),
+            session_memory=session_memory,
         )
 
     async def _capture_failure_screenshot(self, page: Page) -> str | None:

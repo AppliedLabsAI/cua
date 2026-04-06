@@ -269,6 +269,9 @@ class TestPlaybookResultToOutput:
             total_duration_ms=500,
             extracted_text="some data",
             data={"summary": "Playbook done.", "structured": True},
+            total_input_tokens=13,
+            total_output_tokens=8,
+            extracted_texts=["some data"],
         )
         output = playbook_result_to_output(result)
 

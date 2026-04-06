@@ -98,6 +98,21 @@ class StepRecoveryPolicy:
         if result.success or step.on_failure == "abort":
             return result
 
+        if step.action == "llm_extract":
+            if step.on_failure == "retry":
+                return result
+
+            logger.info("  llm_extract failed - handing off to LLM agent")
+            llm_result = await self._handoff_runner(
+                playbook=playbook,
+                remaining_steps=remaining_steps,
+                error=result.error or "",
+                page=await self._resolve_page(page),
+                runtime_params=runtime_params,
+            )
+            llm_result.recovery_used = True
+            return llm_result
+
         logger.info("  Step failed, retrying after %.1fs...", self._retry_delay_s)
         await asyncio.sleep(self._retry_delay_s)
         result = await self._executor.execute_step(
@@ -172,6 +187,9 @@ class StepRecoveryPolicy:
                 description=f"LLM completed {len(remaining_steps)} remaining steps",
                 error=result.error if not result.success else None,
                 extracted_text=result.summary if result.summary else None,
+                input_tokens=result.total_input_tokens,
+                output_tokens=result.total_output_tokens,
+                session_memory=result.session_memory,
                 recovery_used=True,
             )
         except Exception as exc:

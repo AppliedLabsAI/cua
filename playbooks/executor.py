@@ -35,6 +35,9 @@ class PlaybookStepExecutor:
     def __init__(self, browser: BrowserManager | None = None) -> None:
         self._browser = browser
         self._last_extracted: str | None = None
+        self._last_input_tokens = 0
+        self._last_output_tokens = 0
+        self._last_session_memory = ""
         self._config = PageActionConfig(
             action_timeout_ms=ACTION_TIMEOUT_MS,
             navigation_timeout_ms=NAVIGATION_TIMEOUT_MS,
@@ -48,8 +51,10 @@ class PlaybookStepExecutor:
 
     async def execute_step(self, step: PlaybookStep, page: Any) -> StepResult:
         """Execute a single playbook step and verify its outcome."""
+        self._reset_step_state()
+        extracted: str | None = None
         try:
-            await self._run_action(step, page)
+            extracted = await self._run_action(step, page)
         except Exception as exc:
             logger.warning(
                 "Playbook step action failed (%s): %s",
@@ -62,6 +67,9 @@ class PlaybookStepExecutor:
                 success=False,
                 description=step.description,
                 error=str(exc),
+                input_tokens=self._last_input_tokens,
+                output_tokens=self._last_output_tokens,
+                session_memory=self._last_session_memory,
             )
 
         if step.verify:
@@ -80,16 +88,21 @@ class PlaybookStepExecutor:
                     success=False,
                     description=step.description,
                     error=f"Verification failed: {exc}",
+                    input_tokens=self._last_input_tokens,
+                    output_tokens=self._last_output_tokens,
+                    session_memory=self._last_session_memory,
                 )
 
-        extracted = self._last_extracted
-        self._last_extracted = None
+        self._last_extracted = extracted
         return StepResult(
             step_index=0,
             action=step.action,
             success=True,
             description=step.description,
             extracted_text=extracted,
+            input_tokens=self._last_input_tokens,
+            output_tokens=self._last_output_tokens,
+            session_memory=self._last_session_memory,
         )
 
     async def resolve_selector(
@@ -119,7 +132,7 @@ class PlaybookStepExecutor:
             + (f" ({strategy.description})" if strategy.description else "")
         )
 
-    async def _run_action(self, step: PlaybookStep, page: Any) -> None:
+    async def _run_action(self, step: PlaybookStep, page: Any) -> str | None:
         params = dict(step.params)
 
         # llm_extract: extract page content, then analyze with LLM
@@ -138,13 +151,14 @@ class PlaybookStepExecutor:
             )
             page_content = outcome.text or ""
 
-            analysis = await self._llm_analyze(
+            analysis, input_tokens, output_tokens = await self._llm_analyze(
                 page_content,
                 prompt=step.prompt,
                 directive=params.get("directive", ""),
             )
-            self._last_extracted = analysis
-            return
+            self._last_input_tokens = input_tokens
+            self._last_output_tokens = output_tokens
+            return analysis
 
         if step.action in {"click", "select", "extract"} or (
             step.action == "key_press" and step.selector
@@ -165,7 +179,8 @@ class PlaybookStepExecutor:
             config=self._config,
         )
         if step.action == "extract":
-            self._last_extracted = outcome.text
+            return outcome.text
+        return None
 
     async def _verification_page(self, page: Any) -> Any:
         """Rebind verification to the latest active page after actions."""
@@ -182,13 +197,19 @@ class PlaybookStepExecutor:
             return browser.page
         return page
 
+    def _reset_step_state(self) -> None:
+        self._last_extracted = None
+        self._last_input_tokens = 0
+        self._last_output_tokens = 0
+        self._last_session_memory = ""
+
     async def _llm_analyze(
         self,
         page_content: str,
         *,
         prompt: str = "",
         directive: str = "",
-    ) -> str:
+    ) -> tuple[str, int, int]:
         """Send extracted page content to LLM for analysis."""
         from pydantic_ai import Agent
 
@@ -213,8 +234,9 @@ class PlaybookStepExecutor:
             output_retries=3,
         )
         result = await agent.run(user_message)
+        usage = result.usage()
         logger.info("LLM analysis complete (%d chars)", len(result.output))
-        return result.output
+        return result.output, usage.input_tokens or 0, usage.output_tokens or 0
 
     async def _verify(self, verification: StepVerification, page: Any) -> None:
         timeout = verification.timeout_ms

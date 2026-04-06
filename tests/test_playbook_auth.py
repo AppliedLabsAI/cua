@@ -46,19 +46,21 @@ class _TestDashboardAuth(DashboardAuth):
 
     async def _login(self, page: Page) -> bool:
         self.login_calls += 1
+        if self._login_result:
+            self._is_logged_in_result = True
         return self._login_result
 
 
 @pytest.mark.asyncio
-async def test_ensure_authenticated_uses_clean_current_context_without_login():
+async def test_ensure_authenticated_rechecks_existing_session_after_login_attempt():
     browser = _FakeBrowser()
-    auth = _TestDashboardAuth(browser, is_logged_in=True)
+    auth = _TestDashboardAuth(browser, is_logged_in=True, login_result=False)
 
     result = await auth.ensure_authenticated("https://example.com/login")
 
     assert result is True
     browser.page.goto.assert_awaited_once()
-    assert auth.login_calls == 0
+    assert auth.login_calls == 1
 
 
 @pytest.mark.asyncio

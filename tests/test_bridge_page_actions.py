@@ -234,12 +234,50 @@ def test_extract_waits_for_page_readiness(monkeypatch):
     }
 
 
+def test_extract_value_mode_skips_content_wait(monkeypatch):
+    page = _FakePage()
+    observed: dict[str, object] = {}
+
+    async def _fake_wait(page_obj, timeout_ms, **kwargs):
+        observed["page"] = page_obj
+        observed["timeout_ms"] = timeout_ms
+        observed["kwargs"] = kwargs
+
+    monkeypatch.setattr("bridge.page_actions.wait_for_page_ready", _fake_wait)
+
+    outcome = asyncio.run(
+        execute_page_action(
+            page,
+            "extract",
+            {"selector": "#shop", "mode": "value"},
+            config=_config(),
+        )
+    )
+
+    assert outcome.text == "f1a1523a-a020-4417-a6fb-85f00ce929af"
+    assert observed == {
+        "page": page,
+        "timeout_ms": 1000,
+        "kwargs": {
+            "selector": "#shop",
+            "wait_for_content": False,
+            "settle_sleep_s": 0,
+        },
+    }
+
+
 def test_wait_for_page_ready_polls_until_content_stabilizes():
     snapshots = [
         {
             "readyState": "interactive",
             "selectorMatched": True,
             "textLength": 0,
+            "busyCount": 1,
+        },
+        {
+            "readyState": "complete",
+            "selectorMatched": True,
+            "textLength": 42,
             "busyCount": 1,
         },
         {
@@ -274,6 +312,38 @@ def test_wait_for_page_ready_polls_until_content_stabilizes():
     assert page.evaluate.await_count == 4
 
 
+def test_wait_for_page_ready_uses_total_timeout_budget():
+    observed_timeouts: list[int] = []
+
+    async def _fake_wait_for_load_state(_state: str, *, timeout: int) -> None:
+        observed_timeouts.append(timeout)
+        await asyncio.sleep(0.02)
+
+    async def _fake_wait_for_selector(
+        _selector: str, *, state: str, timeout: int
+    ) -> object:
+        observed_timeouts.append(timeout)
+        return object()
+
+    page = AsyncMock()
+    page.wait_for_load_state = AsyncMock(side_effect=_fake_wait_for_load_state)
+    page.wait_for_selector = AsyncMock(side_effect=_fake_wait_for_selector)
+
+    asyncio.run(
+        wait_for_page_ready(
+            page,
+            100,
+            selector="#ready",
+            wait_for_content=False,
+        )
+    )
+
+    assert len(observed_timeouts) == 4
+    assert 1 <= observed_timeouts[0] <= 100
+    assert observed_timeouts[0] > observed_timeouts[1] > observed_timeouts[2]
+    assert observed_timeouts[2] > observed_timeouts[3]
+
+
 def test_wait_for_page_ready_requires_stable_snapshot_without_loader():
     snapshots = [
         {
@@ -305,6 +375,57 @@ def test_wait_for_page_ready_requires_stable_snapshot_without_loader():
     )
 
     assert page.evaluate.await_count == 2
+
+
+def test_wait_for_page_ready_requires_selector_match_before_return():
+    snapshots = [
+        {
+            "readyState": "complete",
+            "selectorMatched": False,
+            "textLength": 128,
+            "busyCount": 0,
+        },
+        {
+            "readyState": "complete",
+            "selectorMatched": False,
+            "textLength": 128,
+            "busyCount": 0,
+        },
+        {
+            "readyState": "complete",
+            "selectorMatched": False,
+            "textLength": 128,
+            "busyCount": 0,
+        },
+        {
+            "readyState": "complete",
+            "selectorMatched": True,
+            "textLength": 128,
+            "busyCount": 0,
+        },
+        {
+            "readyState": "complete",
+            "selectorMatched": True,
+            "textLength": 128,
+            "busyCount": 0,
+        },
+    ]
+    page = AsyncMock()
+    page.wait_for_load_state = AsyncMock()
+    page.wait_for_selector = AsyncMock()
+    page.evaluate = AsyncMock(side_effect=snapshots)
+
+    asyncio.run(
+        wait_for_page_ready(
+            page,
+            300,
+            selector="#ready",
+            wait_for_content=True,
+            settle_sleep_s=0.01,
+        )
+    )
+
+    assert page.evaluate.await_count == 5
 
 
 # ---------------------------------------------------------------------------

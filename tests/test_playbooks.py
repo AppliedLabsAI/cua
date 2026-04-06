@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from playbooks.output import collect_step_extracted_texts
 from playbooks.params import bind_step_params, materialize_playbook
 from playbooks.parser import DirectiveParser
 from playbooks.recovery import StepRecoveryPolicy
@@ -429,6 +430,82 @@ class TestRunnerFailurePolicy:
         assert result.success is False
         assert result.error == "still boom"
 
+    def test_llm_extract_hands_off_without_retrying_same_step(self):
+        executor_calls = 0
+
+        class _FailingLLMExecutor:
+            async def execute_step(self, step, page):
+                nonlocal executor_calls
+                executor_calls += 1
+                return StepResult(
+                    step_index=0,
+                    action=step.action,
+                    success=False,
+                    error="boom",
+                )
+
+        async def _handoff_runner(**kwargs):
+            return StepResult(
+                step_index=0,
+                action="llm_handoff",
+                success=True,
+                extracted_text="Recovered",
+            )
+
+        policy = StepRecoveryPolicy(
+            browser=SimpleNamespace(page=object()),
+            recording=None,
+            executor=_FailingLLMExecutor(),
+            retry_delay_s=0,
+            handoff_runner=_handoff_runner,
+        )
+
+        step = PlaybookStep(action="llm_extract", on_failure="llm_recover")
+        result = asyncio.run(
+            policy.run(
+                playbook=Playbook(id="p", name="P"),
+                step=step,
+                remaining_steps=[step],
+                page=object(),
+            )
+        )
+
+        assert executor_calls == 1
+        assert result.success is True
+        assert result.recovery_used is True
+
+
+class TestPlaybookOutputHelpers:
+    def test_collect_step_extracted_texts_filters_successful_texts(self):
+        step_results = [
+            StepResult(
+                step_index=0,
+                action="extract",
+                success=True,
+                extracted_text="first",
+            ),
+            StepResult(
+                step_index=1,
+                action="extract",
+                success=False,
+                extracted_text="ignored failure",
+            ),
+            StepResult(
+                step_index=2,
+                action="click",
+                success=True,
+                extracted_text=None,
+            ),
+            StepResult(
+                step_index=3,
+                action="llm_handoff",
+                success=True,
+                extracted_text="second",
+            ),
+        ]
+
+        assert collect_step_extracted_texts(step_results) == ["first", "second"]
+
 
 class TestRunnerStepOutputs:
     def test_executor_verifies_against_active_browser_page(self, monkeypatch):
@@ -465,6 +542,39 @@ class TestRunnerStepOutputs:
 
         assert result.success is True
         assert browser.wait_calls == 1
+
+    def test_llm_extract_output_is_not_cached_when_verification_fails(
+        self, monkeypatch
+    ):
+        from playbooks.executor import PlaybookStepExecutor
+
+        executor = PlaybookStepExecutor()
+
+        async def _fake_execute_page_action(page, action, params, config):
+            return SimpleNamespace(text="Page content")
+
+        async def _fake_llm_analyze(page_content, *, prompt="", directive=""):
+            return "Extracted answer", 5, 3
+
+        monkeypatch.setattr(
+            "playbooks.executor.execute_page_action",
+            _fake_execute_page_action,
+        )
+        monkeypatch.setattr(executor, "_llm_analyze", _fake_llm_analyze)
+
+        result = asyncio.run(
+            executor.execute_step(
+                PlaybookStep(
+                    action="llm_extract",
+                    verify=StepVerification(expect_url_contains="/missing"),
+                ),
+                SimpleNamespace(url="https://example.com"),
+            )
+        )
+
+        assert result.success is False
+        assert result.extracted_text is None
+        assert executor._last_extracted is None
 
     def test_extracted_output_is_available_to_later_steps(self):
         from playbooks.runner import PlaybookRunner
@@ -513,6 +623,62 @@ class TestRunnerStepOutputs:
         assert result.success is True
         assert observed_urls == ["https://example.com/shop/42"]
 
+    def test_runner_accumulates_token_usage_and_structured_output_costs(
+        self, monkeypatch
+    ):
+        from playbooks.runner import PlaybookRunner
+
+        class _TokenExecutor:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def execute_step(self, step, page):
+                self.calls += 1
+                if self.calls == 1:
+                    return StepResult(
+                        step_index=0,
+                        action=step.action,
+                        success=True,
+                        extracted_text="Promo code was not applied.",
+                        input_tokens=11,
+                        output_tokens=7,
+                    )
+                return StepResult(
+                    step_index=0,
+                    action=step.action,
+                    success=True,
+                )
+
+        async def _fake_extract_structured_data(*args, **kwargs):
+            return {"summary": "Promo code was not applied."}, 3, 2
+
+        monkeypatch.setattr(
+            "playbooks.runner.extract_structured_data",
+            _fake_extract_structured_data,
+        )
+
+        runner = PlaybookRunner(
+            browser=SimpleNamespace(page=object()),
+            step_executor=_TokenExecutor(),
+            output_schema={"type": "object"},
+        )
+        playbook = Playbook(
+            id="promo",
+            name="Promo",
+            steps=[
+                PlaybookStep(action="extract", store_as="promo_summary"),
+                PlaybookStep(action="goto", params={"url": "https://example.com"}),
+            ],
+        )
+
+        result = asyncio.run(runner.execute(playbook))
+
+        assert result.success is True
+        assert result.total_input_tokens == 14
+        assert result.total_output_tokens == 9
+        assert result.extracted_texts == ["Promo code was not applied."]
+        assert result.data == {"summary": "Promo code was not applied."}
+
     def test_runner_waits_for_active_page_between_steps(self):
         from playbooks.runner import PlaybookRunner
 
@@ -547,3 +713,40 @@ class TestRunnerStepOutputs:
 
         assert result.success is True
         assert browser.wait_calls == 4
+
+    def test_runner_uses_configurable_step_sleep(self, monkeypatch):
+        from playbooks.runner import PlaybookRunner
+
+        sleep_calls: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            sleep_calls.append(delay)
+
+        class _PassExecutor:
+            async def execute_step(self, step, page):
+                return StepResult(
+                    step_index=0,
+                    action=step.action,
+                    success=True,
+                )
+
+        monkeypatch.setattr("playbooks.runner.asyncio.sleep", _fake_sleep)
+
+        runner = PlaybookRunner(
+            browser=SimpleNamespace(page=object()),
+            step_executor=_PassExecutor(),
+            step_sleep_seconds=0.05,
+        )
+        playbook = Playbook(
+            id="delays",
+            name="Delays",
+            steps=[
+                PlaybookStep(action="goto", params={"url": "https://example.com"}),
+                PlaybookStep(action="click"),
+            ],
+        )
+
+        result = asyncio.run(runner.execute(playbook))
+
+        assert result.success is True
+        assert sleep_calls == [0.05, 0.05]
