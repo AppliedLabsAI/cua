@@ -429,6 +429,50 @@ class TestRunnerFailurePolicy:
         assert result.success is False
         assert result.error == "still boom"
 
+    def test_llm_extract_hands_off_without_retrying_same_step(self):
+        executor_calls = 0
+
+        class _FailingLLMExecutor:
+            async def execute_step(self, step, page):
+                nonlocal executor_calls
+                executor_calls += 1
+                return StepResult(
+                    step_index=0,
+                    action=step.action,
+                    success=False,
+                    error="boom",
+                )
+
+        async def _handoff_runner(**kwargs):
+            return StepResult(
+                step_index=0,
+                action="llm_handoff",
+                success=True,
+                extracted_text="Recovered",
+            )
+
+        policy = StepRecoveryPolicy(
+            browser=SimpleNamespace(page=object()),
+            recording=None,
+            executor=_FailingLLMExecutor(),
+            retry_delay_s=0,
+            handoff_runner=_handoff_runner,
+        )
+
+        step = PlaybookStep(action="llm_extract", on_failure="llm_recover")
+        result = asyncio.run(
+            policy.run(
+                playbook=Playbook(id="p", name="P"),
+                step=step,
+                remaining_steps=[step],
+                page=object(),
+            )
+        )
+
+        assert executor_calls == 1
+        assert result.success is True
+        assert result.recovery_used is True
+
 
 class TestRunnerStepOutputs:
     def test_executor_verifies_against_active_browser_page(self, monkeypatch):
@@ -465,6 +509,39 @@ class TestRunnerStepOutputs:
 
         assert result.success is True
         assert browser.wait_calls == 1
+
+    def test_llm_extract_output_is_not_cached_when_verification_fails(
+        self, monkeypatch
+    ):
+        from playbooks.executor import PlaybookStepExecutor
+
+        executor = PlaybookStepExecutor()
+
+        async def _fake_execute_page_action(page, action, params, config):
+            return SimpleNamespace(text="Page content")
+
+        async def _fake_llm_analyze(page_content, *, prompt="", directive=""):
+            return "Extracted answer", 5, 3
+
+        monkeypatch.setattr(
+            "playbooks.executor.execute_page_action",
+            _fake_execute_page_action,
+        )
+        monkeypatch.setattr(executor, "_llm_analyze", _fake_llm_analyze)
+
+        result = asyncio.run(
+            executor.execute_step(
+                PlaybookStep(
+                    action="llm_extract",
+                    verify=StepVerification(expect_url_contains="/missing"),
+                ),
+                SimpleNamespace(url="https://example.com"),
+            )
+        )
+
+        assert result.success is False
+        assert result.extracted_text is None
+        assert executor._last_extracted is None
 
     def test_extracted_output_is_available_to_later_steps(self):
         from playbooks.runner import PlaybookRunner
@@ -603,3 +680,40 @@ class TestRunnerStepOutputs:
 
         assert result.success is True
         assert browser.wait_calls == 4
+
+    def test_runner_uses_configurable_step_sleep(self, monkeypatch):
+        from playbooks.runner import PlaybookRunner
+
+        sleep_calls: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            sleep_calls.append(delay)
+
+        class _PassExecutor:
+            async def execute_step(self, step, page):
+                return StepResult(
+                    step_index=0,
+                    action=step.action,
+                    success=True,
+                )
+
+        monkeypatch.setattr("playbooks.runner.asyncio.sleep", _fake_sleep)
+
+        runner = PlaybookRunner(
+            browser=SimpleNamespace(page=object()),
+            step_executor=_PassExecutor(),
+            step_sleep_seconds=0.05,
+        )
+        playbook = Playbook(
+            id="delays",
+            name="Delays",
+            steps=[
+                PlaybookStep(action="goto", params={"url": "https://example.com"}),
+                PlaybookStep(action="click"),
+            ],
+        )
+
+        result = asyncio.run(runner.execute(playbook))
+
+        assert result.success is True
+        assert sleep_calls == [0.05, 0.05]

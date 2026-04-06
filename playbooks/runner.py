@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+STEP_SLEEP_SECONDS = 0.3
+
 
 def _collect_playbook_extracted_texts(step_results: list[StepResult]) -> list[str]:
     return [
@@ -40,11 +42,13 @@ class PlaybookRunner:
         recording: RecordingManager | None = None,
         step_executor: PlaybookStepExecutor | None = None,
         output_schema: dict[str, Any] | None = None,
+        step_sleep_seconds: float = STEP_SLEEP_SECONDS,
     ) -> None:
         self._browser = browser
         self._recording = recording
         self._executor = step_executor or PlaybookStepExecutor(browser=self._browser)
         self._output_schema = output_schema
+        self.step_sleep_seconds = step_sleep_seconds
         self._recovery = StepRecoveryPolicy(
             browser=self._browser,
             recording=self._recording,
@@ -76,7 +80,7 @@ class PlaybookRunner:
         for index in range(len(playbook.steps)):
             # Yield to the event loop so async callbacks (e.g., tab switches
             # from a previous step's click) propagate before we re-fetch page.
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(self.step_sleep_seconds)
             wait_for_active_page = getattr(self._browser, "wait_for_active_page", None)
             if callable(wait_for_active_page):
                 await wait_for_active_page()

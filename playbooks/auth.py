@@ -73,15 +73,17 @@ class DashboardAuth:
                 login_url, wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
             )
 
-        if await self._is_logged_in(page):
-            logger.info("Already authenticated in current browser context")
-            return True
+        already_authenticated = await self._is_logged_in(page)
 
         # Execute login
-        success = await self._login(page)
+        await self._login(page)
+        success = await self._is_logged_in(page)
 
         if success:
-            logger.info("Login successful")
+            if already_authenticated:
+                logger.info("Already authenticated in current browser context")
+            else:
+                logger.info("Login successful")
         else:
             logger.error("Login failed")
 

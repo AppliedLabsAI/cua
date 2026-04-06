@@ -224,17 +224,18 @@ async def execute_page_action(
 
     if action == "extract":
         selector = params.get("selector", "body")
+        mode = params.get("mode", "markdown")
         await wait_for_page_ready(
             page,
             config.settle_timeout_ms,
             selector=selector,
-            wait_for_content=True,
+            wait_for_content=mode != "value",
             settle_sleep_s=config.settle_sleep_s,
         )
         content = await extract_content(
             page,
             selector=selector,
-            mode=params.get("mode", "markdown"),
+            mode=mode,
             timeout_ms=config.action_timeout_ms,
         )
         return PageActionOutcome(text=content)
@@ -317,26 +318,44 @@ async def wait_for_page_ready(
     if timeout_ms <= 0:
         return
 
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + (timeout_ms / 1000)
+
+    def remaining_ms() -> int:
+        return max(0, int((deadline - loop.time()) * 1000))
+
+    remaining = remaining_ms()
+    if remaining <= 0:
+        return
     with contextlib.suppress(Exception):
-        await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+        await page.wait_for_load_state("domcontentloaded", timeout=remaining)
+
+    remaining = remaining_ms()
+    if remaining <= 0:
+        return
     with contextlib.suppress(Exception):
-        await page.wait_for_load_state("load", timeout=min(timeout_ms, 1_500))
+        await page.wait_for_load_state("load", timeout=remaining)
+
+    remaining = remaining_ms()
+    if remaining <= 0:
+        return
     with contextlib.suppress(Exception):
-        await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 1_500))
+        await page.wait_for_load_state("networkidle", timeout=remaining)
 
     if selector:
+        remaining = remaining_ms()
+        if remaining <= 0:
+            return
         with contextlib.suppress(Exception):
             await page.wait_for_selector(
                 selector,
                 state="visible",
-                timeout=min(timeout_ms, 1_000),
+                timeout=remaining,
             )
 
     if not wait_for_content:
         return
 
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + (timeout_ms / 1000)
     last_signature: tuple[Any, ...] | None = None
     stable_polls = 0
     sleep_interval = settle_sleep_s if settle_sleep_s > 0 else 0.05
@@ -354,6 +373,7 @@ async def wait_for_page_ready(
         )
         has_content = bool(snapshot.get("textLength", 0))
         ready_state = snapshot.get("readyState") in {"interactive", "complete"}
+        selector_matched = bool(snapshot.get("selectorMatched"))
         busy_count = int(snapshot.get("busyCount", 0) or 0)
 
         if signature == last_signature and has_content:
@@ -364,10 +384,18 @@ async def wait_for_page_ready(
 
         required_stable_polls = 1 if busy_count == 0 else 2
 
-        if has_content and ready_state and stable_polls >= required_stable_polls:
+        if (
+            has_content
+            and ready_state
+            and stable_polls >= required_stable_polls
+            and (not selector or selector_matched)
+        ):
             return
 
-        await asyncio.sleep(sleep_interval)
+        remaining_s = deadline - loop.time()
+        if remaining_s <= 0:
+            return
+        await asyncio.sleep(min(sleep_interval, remaining_s))
 
 
 async def wait_for_stable(

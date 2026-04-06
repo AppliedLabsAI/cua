@@ -52,8 +52,9 @@ class PlaybookStepExecutor:
     async def execute_step(self, step: PlaybookStep, page: Any) -> StepResult:
         """Execute a single playbook step and verify its outcome."""
         self._reset_step_state()
+        extracted: str | None = None
         try:
-            await self._run_action(step, page)
+            extracted = await self._run_action(step, page)
         except Exception as exc:
             logger.warning(
                 "Playbook step action failed (%s): %s",
@@ -92,7 +93,7 @@ class PlaybookStepExecutor:
                     session_memory=self._last_session_memory,
                 )
 
-        extracted = self._last_extracted
+        self._last_extracted = extracted
         return StepResult(
             step_index=0,
             action=step.action,
@@ -131,7 +132,7 @@ class PlaybookStepExecutor:
             + (f" ({strategy.description})" if strategy.description else "")
         )
 
-    async def _run_action(self, step: PlaybookStep, page: Any) -> None:
+    async def _run_action(self, step: PlaybookStep, page: Any) -> str | None:
         params = dict(step.params)
 
         # llm_extract: extract page content, then analyze with LLM
@@ -155,10 +156,9 @@ class PlaybookStepExecutor:
                 prompt=step.prompt,
                 directive=params.get("directive", ""),
             )
-            self._last_extracted = analysis
             self._last_input_tokens = input_tokens
             self._last_output_tokens = output_tokens
-            return
+            return analysis
 
         if step.action in {"click", "select", "extract"} or (
             step.action == "key_press" and step.selector
@@ -179,7 +179,8 @@ class PlaybookStepExecutor:
             config=self._config,
         )
         if step.action == "extract":
-            self._last_extracted = outcome.text
+            return outcome.text
+        return None
 
     async def _verification_page(self, page: Any) -> Any:
         """Rebind verification to the latest active page after actions."""

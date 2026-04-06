@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -91,7 +92,8 @@ async def run_agent(
     if page_url and page_url != "about:blank":
         wait_for_active_page = getattr(bridge.browser, "wait_for_active_page", None)
         if callable(wait_for_active_page):
-            await wait_for_active_page()
+            with contextlib.suppress(Exception):
+                await wait_for_active_page()
         page_ctx = await attach_page_context(
             bridge.browser, filter_config=bridge._filter_config
         )
