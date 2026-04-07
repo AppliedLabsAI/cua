@@ -110,6 +110,8 @@ class StepRecoveryPolicy:
                 page=await self._resolve_page(page),
                 runtime_params=runtime_params,
             )
+            if not llm_result.success:
+                return self._surface_llm_failure(result, llm_result)
             llm_result.recovery_used = True
             return llm_result
 
@@ -130,8 +132,38 @@ class StepRecoveryPolicy:
             page=await self._resolve_page(page),
             runtime_params=runtime_params,
         )
+        if not llm_result.success:
+            return self._surface_llm_failure(result, llm_result)
         llm_result.recovery_used = True
         return llm_result
+
+    def _surface_llm_failure(
+        self,
+        step_result: StepResult,
+        llm_result: StepResult,
+    ) -> StepResult:
+        """Surface LLM recovery failure without losing the original step context."""
+        logger.warning(
+            "LLM recovery failed for step '%s': %s",
+            step_result.description or step_result.action,
+            llm_result.error,
+        )
+        parts = []
+        if step_result.error:
+            parts.append(f"step error: {step_result.error}")
+        if llm_result.error:
+            parts.append(f"recovery error: {llm_result.error}")
+        return llm_result.model_copy(
+            update={
+                "description": step_result.description or llm_result.description,
+                "error": "; ".join(parts) if parts else llm_result.error,
+                "input_tokens": step_result.input_tokens + llm_result.input_tokens,
+                "output_tokens": step_result.output_tokens + llm_result.output_tokens,
+                "session_memory": llm_result.session_memory
+                or step_result.session_memory,
+                "recovery_used": True,
+            }
+        )
 
     async def _resolve_page(self, page: Page) -> Page:
         """Return the current active browser page when available."""

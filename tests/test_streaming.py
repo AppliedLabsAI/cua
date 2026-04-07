@@ -220,7 +220,7 @@ class TestSseReplay:
         from starlette.testclient import TestClient
 
         client = TestClient(streaming.app)
-        resp = client.get("/events", timeout=5)
+        resp = client.get("/events")
         assert resp.status_code == 200
 
         lines = resp.text.strip().split("\n")
@@ -246,7 +246,7 @@ class TestSseReplay:
         from starlette.testclient import TestClient
 
         client = TestClient(streaming.app)
-        resp = client.get("/events", headers={"Last-Event-ID": "2"}, timeout=5)
+        resp = client.get("/events", headers={"Last-Event-ID": "2"})
         assert resp.status_code == 200
 
         lines = resp.text.strip().split("\n")
@@ -265,7 +265,7 @@ class TestSseReplay:
         from starlette.testclient import TestClient
 
         client = TestClient(streaming.app)
-        resp = client.get("/events", timeout=5)
+        resp = client.get("/events")
         assert "event: complete" in resp.text
         assert '"completed"' in resp.text
 
@@ -312,3 +312,13 @@ class TestRunResponseModel:
             stream_url="/runs/r1/stream",
         )
         assert resp.status == "starting"
+
+
+class TestGuardrailSettingsModel:
+    def test_exposes_runtime_stuck_revisit_gap(self):
+        from api.models import GuardrailSettings
+
+        settings = GuardrailSettings(stuck_revisit_gap=9)
+
+        assert settings.stuck_revisit_gap == 9
+        assert settings.model_dump()["stuck_revisit_gap"] == 9

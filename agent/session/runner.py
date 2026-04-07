@@ -133,6 +133,7 @@ async def run_sandbox_session(
                 blinders=blinders,
                 directive=config.directive,
                 session_memory=session_memory,
+                run_id=run_id,
             )
             profile_prompt = config.profile.prompt_extension if config.profile else None
             result = await run_agent(

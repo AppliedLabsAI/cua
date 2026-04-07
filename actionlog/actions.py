@@ -182,13 +182,16 @@ def _sanitize_filename(s: str, max_len: int = 30) -> str:
     return safe[:max_len]
 
 
-async def persist_action_log(log_entry: ActionLog) -> str:
+async def persist_action_log(log_entry: ActionLog, *, run_id: str = "") -> str:
     """Write an ActionLog entry to disk without blocking the event loop."""
     action_safe = _sanitize_filename(log_entry.action)
     filename = f"{log_entry.step:04d}_{log_entry.tool}_{action_safe}.json"
     path = os.path.join(_LOG_DIR, filename)
+    if run_id:
+        path = os.path.join(_LOG_DIR, _sanitize_filename(run_id, max_len=80), filename)
 
     def _write() -> str:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
             json.dump(log_entry.model_dump(), f, indent=2)
         return path

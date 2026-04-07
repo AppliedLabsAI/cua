@@ -59,6 +59,7 @@ class TestPlaybookSchema:
     def test_step_defaults(self):
         step = PlaybookStep(action="click")
         assert step.on_failure == "llm_recover"
+        assert step.failure_message == ""
         assert step.selector is None
         assert step.verify is None
 
@@ -317,6 +318,25 @@ class TestDirectiveParser:
         loaded = store.load("extractor")
         assert loaded.steps[0].store_as == "shop_id"
 
+    def test_save_and_reload_preserves_failure_message(self, tmp_path: Path):
+        playbook = Playbook(
+            id="fails_cleanly",
+            name="Fails Cleanly",
+            steps=[
+                PlaybookStep(
+                    action="click",
+                    failure_message="Customer {email} not found",
+                )
+            ],
+        )
+
+        store = PlaybookStore(tmp_path)
+        store.save(playbook)
+        store._cache.clear()
+
+        loaded = store.load("fails_cleanly")
+        assert loaded.steps[0].failure_message == "Customer {email} not found"
+
 
 # ---------------------------------------------------------------------------
 # Runner parameter injection tests (no browser needed)
@@ -331,6 +351,7 @@ class TestRunnerParamInjection:
             selector=SelectorStrategy(primary="input[data-id='{order_id}']"),
             verify=StepVerification(expect_text_on_page="Order {order_id}"),
             description="Type order {order_id}",
+            failure_message="Order {order_id} could not be processed",
         )
 
         result = bind_step_params(step, {"order_id": "12345"})
@@ -340,6 +361,7 @@ class TestRunnerParamInjection:
         assert result.verify is not None
         assert result.verify.expect_text_on_page == "Order 12345"
         assert result.description == "Type order 12345"
+        assert result.failure_message == "Order 12345 could not be processed"
 
     def test_inject_params_no_params_returns_same(self):
         step = PlaybookStep(action="click", description="Click button")
@@ -474,6 +496,63 @@ class TestRunnerFailurePolicy:
         assert result.success is True
         assert result.recovery_used is True
 
+    def test_llm_handoff_failure_surfaces_recovery_error_with_step_context(self):
+        executor = _FakeExecutor(
+            [
+                StepResult(
+                    step_index=0,
+                    action="click",
+                    success=False,
+                    error="boom",
+                ),
+                StepResult(
+                    step_index=0,
+                    action="click",
+                    success=False,
+                    error="still boom",
+                ),
+            ]
+        )
+
+        async def _failed_handoff(**kwargs):
+            return StepResult(
+                step_index=0,
+                action="llm_handoff",
+                success=False,
+                error="LLM handoff failed: Unknown tool name",
+                input_tokens=5,
+                output_tokens=3,
+                session_memory="handoff-mem",
+            )
+
+        policy = StepRecoveryPolicy(
+            browser=SimpleNamespace(page=object()),
+            recording=None,
+            executor=executor,
+            retry_delay_s=0,
+            handoff_runner=_failed_handoff,
+        )
+
+        result = asyncio.run(
+            policy.run(
+                playbook=Playbook(id="p", name="P"),
+                step=PlaybookStep(action="click", on_failure="llm_recover"),
+                remaining_steps=[PlaybookStep(action="click")],
+                page=object(),
+            )
+        )
+
+        assert result.success is False
+        assert result.action == "llm_handoff"
+        assert result.error == (
+            "step error: still boom; "
+            "recovery error: LLM handoff failed: Unknown tool name"
+        )
+        assert result.recovery_used is True
+        assert result.input_tokens == 5
+        assert result.output_tokens == 3
+        assert result.session_memory == "handoff-mem"
+
 
 class TestPlaybookOutputHelpers:
     def test_collect_step_extracted_texts_filters_successful_texts(self):
@@ -508,6 +587,30 @@ class TestPlaybookOutputHelpers:
 
 
 class TestRunnerStepOutputs:
+    def test_executor_uses_custom_failure_message_for_verification_error(self):
+        from playbooks.executor import PlaybookStepExecutor
+
+        class _MissingPage:
+            url = "https://example.com"
+
+            async def wait_for_selector(self, *args, **kwargs):
+                raise RuntimeError("missing")
+
+        executor = PlaybookStepExecutor()
+        result = asyncio.run(
+            executor.execute_step(
+                PlaybookStep(
+                    action="goto",
+                    verify=StepVerification(expect_element_visible="table"),
+                    failure_message="Customer search returned no visible results",
+                ),
+                _MissingPage(),
+            )
+        )
+
+        assert result.success is False
+        assert result.error == "Customer search returned no visible results"
+
     def test_executor_verifies_against_active_browser_page(self, monkeypatch):
         from playbooks.executor import PlaybookStepExecutor
 
@@ -678,6 +781,42 @@ class TestRunnerStepOutputs:
         assert result.total_output_tokens == 9
         assert result.extracted_texts == ["Promo code was not applied."]
         assert result.data == {"summary": "Promo code was not applied."}
+
+    def test_runner_includes_failed_step_result_on_abort(self):
+        from playbooks.runner import PlaybookRunner
+
+        class _FailExecutor:
+            async def execute_step(self, step, page):
+                return StepResult(
+                    step_index=0,
+                    action=step.action,
+                    success=False,
+                    error="boom",
+                    description=step.description,
+                )
+
+        runner = PlaybookRunner(
+            browser=SimpleNamespace(page=object()),
+            step_executor=_FailExecutor(),
+        )
+        playbook = Playbook(
+            id="fails",
+            name="Fails",
+            steps=[
+                PlaybookStep(
+                    action="click",
+                    description="Click broken button",
+                    on_failure="abort",
+                )
+            ],
+        )
+
+        result = asyncio.run(runner.execute(playbook))
+
+        assert result.success is False
+        assert len(result.step_results) == 1
+        assert result.step_results[0].success is False
+        assert result.step_results[0].error == "boom"
 
     def test_runner_waits_for_active_page_between_steps(self):
         from playbooks.runner import PlaybookRunner

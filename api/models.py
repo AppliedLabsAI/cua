@@ -47,6 +47,7 @@ class GuardrailSettings(BaseModel):
     stuck_repeat_stop: int = Field(default=7, ge=2, le=40)
     stuck_cycle_max_length: int = Field(default=3, ge=2, le=10)
     stuck_cycle_repeats: int = Field(default=3, ge=2, le=20)
+    stuck_revisit_gap: int = Field(default=5, ge=1, le=50)
 
     @model_validator(mode="after")
     def check_stuck_threshold_ordering(self) -> GuardrailSettings:
