@@ -31,6 +31,8 @@ class CUAConfig(BaseModel):
     proxy_url: str | None = None
     profile_name: str = "default"
     credentials: dict[str, SecretValue] | None = None
+    playbook: str | None = None
+    playbook_params: dict[str, Any] | None = None
     guardrail_config: GuardrailConfig = Field(default_factory=GuardrailConfig)
     recording_config: RecordingConfig = Field(default_factory=RecordingConfig)
     output_schema: dict[str, Any] | None = None
@@ -55,6 +57,15 @@ class CUAConfig(BaseModel):
         return RecordingConfig.model_validate(json.loads(raw_json))
 
     @staticmethod
+    def _parse_playbook_params(raw_json: str) -> dict[str, Any] | None:
+        if not raw_json:
+            return None
+        parsed = json.loads(raw_json)
+        if not isinstance(parsed, dict):
+            raise ConfigError("PLAYBOOK_PARAMS_JSON must be a JSON object")
+        return parsed
+
+    @staticmethod
     def _parse_guardrails(raw_json: str) -> GuardrailConfig | None:
         if not raw_json:
             return None
@@ -69,6 +80,7 @@ class CUAConfig(BaseModel):
             raise ConfigError("DIRECTIVE env var is required")
 
         credentials = cls._parse_credentials(env.credentials_json)
+        playbook_params = cls._parse_playbook_params(env.playbook_params_json)
         guardrail_config = cls._parse_guardrails(env.guardrails_json)
         recording_config = cls._parse_recording(env.recording_json)
         output_schema = None
@@ -91,6 +103,8 @@ class CUAConfig(BaseModel):
             proxy_url=env.proxy_url or None,
             profile_name=env.profile,
             credentials=credentials,
+            playbook=env.playbook or None,
+            playbook_params=playbook_params,
             guardrail_config=guardrail_config,
             recording_config=recording_config,
             output_schema=output_schema,

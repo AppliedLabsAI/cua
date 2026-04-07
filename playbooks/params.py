@@ -5,11 +5,18 @@ from __future__ import annotations
 from typing import Any
 
 from playbooks.schema import (
+    ApiRequestConfig,
+    ApiResponseConfig,
+    AuthSuccessCriteria,
+    CookieCapture,
     Playbook,
+    PlaybookAuthConfig,
+    PlaybookCaptureConfig,
     PlaybookParameter,
     PlaybookStep,
     SelectorStrategy,
     StepVerification,
+    StorageCapture,
 )
 
 
@@ -18,12 +25,23 @@ def materialize_playbook(playbook: Playbook, params: dict[str, Any]) -> Playbook
     if not params:
         return playbook
 
+    auth = None
+    if playbook.auth:
+        auth = PlaybookAuthConfig(
+            mode=playbook.auth.mode,
+            login_url=_replace_text(playbook.auth.login_url, params),
+            success=_bind_auth_success(playbook.auth.success, params),
+        )
+
+    capture = _bind_capture(playbook.capture, params)
     steps = [
         materialize_step(playbook, step_index, params)
         for step_index, _ in enumerate(playbook.steps)
     ]
 
-    return playbook.model_copy(update={"steps": steps})
+    return playbook.model_copy(
+        update={"auth": auth, "capture": capture, "steps": steps}
+    )
 
 
 def materialize_step(
@@ -88,6 +106,7 @@ def _bind_step_placeholders(step: PlaybookStep, params: dict[str, Any]) -> Playb
     return PlaybookStep(
         action=step.action,
         params=_replace_value(step.params, params),
+        request=_bind_request(step.request, params),
         selector=selector,
         verify=verify,
         description=_replace_text(step.description, params),
@@ -121,6 +140,71 @@ def _replace_optional(value: str | None, params: dict[str, Any]) -> str | None:
     if value is None:
         return None
     return _replace_text(value, params)
+
+
+def _bind_auth_success(
+    success: AuthSuccessCriteria | None,
+    params: dict[str, Any],
+) -> AuthSuccessCriteria | None:
+    if success is None:
+        return None
+    return AuthSuccessCriteria(
+        url_contains=_replace_optional(success.url_contains, params),
+        element_visible=_replace_optional(success.element_visible, params),
+        text_on_page=_replace_optional(success.text_on_page, params),
+        cookie_present=_replace_optional(success.cookie_present, params),
+        timeout_ms=success.timeout_ms,
+    )
+
+
+def _bind_capture(
+    capture: PlaybookCaptureConfig,
+    params: dict[str, Any],
+) -> PlaybookCaptureConfig:
+    return PlaybookCaptureConfig(
+        cookies=[
+            CookieCapture(
+                name=_replace_text(item.name, params),
+                store_as=_replace_text(item.store_as, params),
+                domain=_replace_text(item.domain, params),
+            )
+            for item in capture.cookies
+        ],
+        storage=[
+            StorageCapture(
+                key=_replace_text(item.key, params),
+                store_as=_replace_text(item.store_as, params),
+                scope=item.scope,
+            )
+            for item in capture.storage
+        ],
+        static_headers={
+            key: _replace_text(value, params)
+            for key, value in capture.static_headers.items()
+        },
+    )
+
+
+def _bind_request(
+    request: ApiRequestConfig | None,
+    params: dict[str, Any],
+) -> ApiRequestConfig | None:
+    if request is None:
+        return None
+    return ApiRequestConfig(
+        method=_replace_text(request.method, params),
+        url=_replace_text(request.url, params),
+        query=_replace_value(request.query, params),
+        headers=_replace_value(request.headers, params),
+        cookies=_replace_value(request.cookies, params),
+        json_body=_replace_value(request.json_body, params),
+        form=_replace_value(request.form, params),
+        timeout_ms=request.timeout_ms,
+        response=ApiResponseConfig(
+            mode=request.response.mode,
+            json_path=_replace_text(request.response.json_path, params),
+        ),
+    )
 
 
 def _assign_inject_path(

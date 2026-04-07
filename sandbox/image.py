@@ -17,9 +17,7 @@ from api.models import RunConfig
 _project_root = Path(__file__).resolve().parent.parent
 
 # Only include source files — invert matcher so everything else is ignored
-_exclude_dirs = FilePatternMatcher(
-    "output/**", "tests/**", "llm/**", ".git/**", "playbooks/definitions/**"
-)
+_exclude_dirs = FilePatternMatcher("output/**", "tests/**", "llm/**", ".git/**")
 _include_exts = ~FilePatternMatcher(
     "**/*.py",
     "**/*.js",
@@ -110,10 +108,13 @@ async def create_cua_sandbox(
         "PROFILE": config.profile,
         "START_URL": config.start_url or "",
         "PROXY_URL": config.proxy or "",
+        "PLAYBOOK": config.playbook or "",
     }
 
     if credentials:
         env["CREDENTIALS_JSON"] = json.dumps(credentials)
+    if config.playbook_params is not None:
+        env["PLAYBOOK_PARAMS_JSON"] = json.dumps(config.playbook_params)
 
     if config.guardrails:
         env["GUARDRAILS_JSON"] = json.dumps(

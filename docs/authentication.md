@@ -2,7 +2,8 @@
 
 ## Dashboard Authentication
 
-CUA handles dashboard login with session persistence:
+CUA handles dashboard login in the browser, then can optionally capture
+allowlisted session artifacts for later API calls:
 
 ```bash
 python scripts/run_local.py \
@@ -12,11 +13,42 @@ python scripts/run_local.py \
 ```
 
 The auth system:
-1. Tries restoring a previously saved session (cookies/localStorage)
-2. If expired, logs in by detecting common form patterns (email/username + password fields)
-3. Saves the new session for future runs
+1. Opens the login surface in the browser
+2. Authenticates with either:
+   - `form_login` by detecting common email/username/password fields
+   - `manual` by waiting for a human-completed login to reach an authenticated state
+3. Captures only the cookies/storage keys explicitly requested by the playbook
+4. Reuses those session artifacts in later `api_request` steps
 
-Sessions are stored at `~/.cua/sessions/` and reused across runs.
+Cross-run session persistence is not implemented.
+
+### Session Artifacts
+
+The value extracted after a successful login is a session artifact, such as:
+
+- an authenticated cookie
+- a localStorage or sessionStorage value
+- a static header that must accompany later API requests
+
+These are not the raw credentials originally supplied to CUA. Raw credentials are
+still treated as input-only secrets.
+
+Example playbook shape:
+
+```yaml
+auth:
+  mode: manual
+  login_url: "https://login.example.com"
+  success:
+    cookie_present: "user_session"
+
+capture:
+  cookies:
+    - name: "user_session"
+      store_as: "session_cookie"
+  static_headers:
+    FFF-Auth: "V1.1"
+```
 
 ## Credential Security
 
@@ -31,6 +63,7 @@ What this protects:
 - Plaintext credentials are not injected into the system prompt
 - Action logs record `credential_ref` names such as `email` or `password`, not the resolved value
 - Browser action validation and summaries operate on the reference name, not the secret text
+- Captured session cookies/storage values are redacted before any LLM recovery handoff prompt is built
 
 What this does **not** protect:
 

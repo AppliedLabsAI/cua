@@ -90,6 +90,8 @@ class RunConfig(BaseModel):
     profile: str = Field(default="default", max_length=100)
     start_url: str | None = Field(default=None, max_length=2048)
     credentials: CredentialsMap | None = None
+    playbook: str | None = Field(default=None, max_length=200)
+    playbook_params: dict[str, Any] | None = None
     proxy: str | None = Field(default=None, max_length=2048)
     guardrails: GuardrailSettings | None = None
     recording: RecordingSettings | None = None

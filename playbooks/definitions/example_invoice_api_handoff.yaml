@@ -1,0 +1,31 @@
+id: example_invoice_api_handoff
+name: Example Invoice API Handoff
+description: >
+  Log into a billing portal in the browser, capture the authenticated session
+  cookie, then fetch invoice data directly from a downstream API.
+tags: ["invoice api", "billing api", "session handoff"]
+auth_required: true
+auth:
+  mode: form_login
+  login_url: "{base_url}/login"
+  success:
+    cookie_present: "user_session"
+capture:
+  cookies:
+    - name: "user_session"
+      store_as: "session_cookie"
+  static_headers:
+    FFF-Auth: "V1.1"
+
+steps:
+  - action: api_request
+    description: Fetch invoice details for the customer
+    request:
+      method: GET
+      url: "{base_url}/api/invoices"
+      query:
+        email: "{customer_email}"
+      cookies:
+        user_session: "{session_cookie}"
+      response:
+        mode: json

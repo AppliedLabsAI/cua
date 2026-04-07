@@ -2,7 +2,7 @@
  * Browser interaction recorder for playbook generation.
  *
  * Injected via context.add_init_script(). Captures user interactions (clicks,
- * typing, navigation, selections, scrolling) and sends structured events to
+ * typing, navigation, selections) and sends structured events to
  * Python via window.__cuaRecordEvent() (exposed by context.expose_function).
  *
  * Each interacted element gets multiple selector candidates for fallback chains.
@@ -375,33 +375,6 @@
       });
     },
     true
-  );
-
-  // --- Scroll (debounced) ---
-  let _scrollTimer = null;
-  let _scrollStartY = window.scrollY;
-  let _scrollStartX = window.scrollX;
-
-  window.addEventListener(
-    "scroll",
-    function () {
-      clearTimeout(_scrollTimer);
-      _scrollTimer = setTimeout(function () {
-        const dy = window.scrollY - _scrollStartY;
-        const dx = window.scrollX - _scrollStartX;
-
-        if (Math.abs(dy) > 100 || Math.abs(dx) > 100) {
-          const direction = Math.abs(dy) >= Math.abs(dx) ? (dy > 0 ? "down" : "up") : (dx > 0 ? "right" : "left");
-          const amount = Math.abs(dy) >= Math.abs(dx) ? Math.abs(dy) : Math.abs(dx);
-
-          recordEvent("scroll", null, { direction: direction, amount: amount });
-        }
-
-        _scrollStartY = window.scrollY;
-        _scrollStartX = window.scrollX;
-      }, 300);
-    },
-    { capture: true, passive: true }
   );
 
   // =========================================================================

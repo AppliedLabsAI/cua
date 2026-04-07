@@ -6,13 +6,14 @@ import asyncio
 import base64
 import logging
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from playbooks.executor import PlaybookStepExecutor
 from playbooks.output import collect_step_extracted_texts, extract_structured_data
 from playbooks.params import materialize_step
 from playbooks.recovery import RETRY_DELAY_S, StepRecoveryPolicy
-from playbooks.schema import Playbook, PlaybookResult, StepResult
+from playbooks.schema import Playbook, PlaybookResult, PlaybookStep, StepResult
 
 if TYPE_CHECKING:
     from patchright.async_api import Page
@@ -35,12 +36,14 @@ class PlaybookRunner:
         step_executor: PlaybookStepExecutor | None = None,
         output_schema: dict[str, Any] | None = None,
         step_sleep_seconds: float = STEP_SLEEP_SECONDS,
+        on_step_result: Callable[[int, PlaybookStep, StepResult], None] | None = None,
     ) -> None:
         self._browser = browser
         self._recording = recording
         self._executor = step_executor or PlaybookStepExecutor(browser=self._browser)
         self._output_schema = output_schema
         self.step_sleep_seconds = step_sleep_seconds
+        self._on_step_result = on_step_result
         self._recovery = StepRecoveryPolicy(
             browser=self._browser,
             recording=self._recording,
@@ -68,6 +71,12 @@ class PlaybookRunner:
             len(playbook.steps),
             sorted(runtime_params.keys()),
         )
+        configure_api_context = getattr(self._executor, "configure_api_context", None)
+        if callable(configure_api_context):
+            configure_api_context(
+                guardrail_config=playbook.guardrails.to_runtime_config(),
+                default_headers=playbook.capture.static_headers,
+            )
 
         for index in range(len(playbook.steps)):
             # Yield to the event loop so async callbacks (e.g., tab switches
@@ -105,6 +114,7 @@ class PlaybookRunner:
             total_output_tokens += result.output_tokens
             if result.session_memory:
                 session_memory = result.session_memory
+            self._emit_step_result(index, step, result)
 
             if result.success:
                 step_results.append(result)
@@ -193,3 +203,16 @@ class PlaybookRunner:
             return base64.b64encode(raw).decode("ascii")
         except Exception:
             return None
+
+    def _emit_step_result(
+        self,
+        step_index: int,
+        step: PlaybookStep,
+        result: StepResult,
+    ) -> None:
+        if self._on_step_result is None:
+            return
+        try:
+            self._on_step_result(step_index, step, result)
+        except Exception:
+            logger.warning("Failed to publish playbook step result", exc_info=True)

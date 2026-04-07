@@ -109,6 +109,22 @@ def validate_run_config(config: RunConfig) -> DryRunResponse:
             )
         )
 
+    # Playbook
+    if config.playbook:
+        try:
+            from playbooks.store import PlaybookStore
+
+            playbook = PlaybookStore().load(config.playbook)
+            checks.append(
+                DryRunCheck(
+                    name="playbook",
+                    passed=True,
+                    message=f"Playbook '{playbook.id}' loaded",
+                )
+            )
+        except FileNotFoundError as exc:
+            checks.append(DryRunCheck(name="playbook", passed=False, message=str(exc)))
+
     # Guardrails (already validated by GuardrailSettings Pydantic model)
     if config.guardrails:
         checks.append(
@@ -204,6 +220,7 @@ def validate_run_config(config: RunConfig) -> DryRunResponse:
             "display": f"{config.display_width}x{config.display_height}",
             "profile": config.profile,
             "has_credentials": config.credentials is not None,
+            "has_playbook": config.playbook is not None,
             "has_guardrails": config.guardrails is not None,
             "has_start_url": config.start_url is not None,
             "has_output_schema": config.output_schema is not None,

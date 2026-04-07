@@ -10,9 +10,9 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from api.models import RunStatus, RunStatusValue
+from api.models import RunConfig, RunStatus, RunStatusValue
 from api.runs.registry import InMemoryRunRegistry
-from api.runs.service import RunService
+from api.runs.service import RunService, validate_run_config
 from api.runs.store import PersistedRunStore
 
 
@@ -203,3 +203,25 @@ async def test_stream_run_marks_run_inactive_and_falls_back_to_persisted_replay(
     assert 'id: 1\ndata: {"step": 1' in payload
     assert "event: error" not in payload
     mark_inactive.assert_called_once_with(run_id)
+
+
+def test_validate_run_config_checks_explicit_playbook(monkeypatch):
+    from playbooks.schema import Playbook
+
+    monkeypatch.setattr(
+        "playbooks.store.PlaybookStore.load",
+        lambda self, playbook_id: Playbook(id=playbook_id, name="Loaded"),
+    )
+
+    response = validate_run_config(
+        RunConfig(
+            directive="Find invoice details",
+            playbook="example_invoice_api_handoff",
+        )
+    )
+
+    playbook_check = next(
+        check for check in response.checks if check.name == "playbook"
+    )
+    assert playbook_check.passed is True
+    assert response.config_summary["has_playbook"] is True

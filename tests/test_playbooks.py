@@ -3,24 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from playbooks.output import collect_step_extracted_texts
 from playbooks.params import bind_step_params, materialize_playbook
 from playbooks.parser import DirectiveParser
 from playbooks.recovery import StepRecoveryPolicy
 from playbooks.schema import (
+    ApiRequestConfig,
+    ApiResponseConfig,
+    AuthSuccessCriteria,
+    CookieCapture,
     Playbook,
+    PlaybookAuthConfig,
+    PlaybookCaptureConfig,
     PlaybookGuardrails,
     PlaybookParameter,
     PlaybookStep,
     SelectorStrategy,
     StepResult,
     StepVerification,
+    StorageCapture,
 )
 from playbooks.store import PlaybookStore
 
@@ -50,10 +59,12 @@ class TestPlaybookSchema:
     def test_defaults(self):
         pb = Playbook(id="test", name="Test")
         assert pb.auth_required is True
+        assert pb.auth_config.mode == "form_login"
         assert pb.steps == []
         assert pb.tags == []
         assert pb.parameters == []
         assert pb.start_url == ""
+        assert pb.capture.static_headers == {}
         assert pb.guardrails.has_overrides() is False
 
     def test_step_defaults(self):
@@ -62,11 +73,37 @@ class TestPlaybookSchema:
         assert step.failure_message == ""
         assert step.selector is None
         assert step.verify is None
+        assert step.request is None
+
+    def test_scroll_is_not_a_valid_playbook_action(self):
+        with pytest.raises(ValidationError):
+            PlaybookStep(action="scroll")
 
     def test_guardrails_to_runtime_config(self):
         guardrails = PlaybookGuardrails(allow_private_networks=True)
         runtime = guardrails.to_runtime_config()
         assert runtime.allow_private_networks is True
+
+    def test_auth_config_uses_explicit_config_when_present(self):
+        pb = Playbook(
+            id="manual",
+            name="Manual",
+            auth_required=True,
+            auth=PlaybookAuthConfig(mode="manual", login_url="https://login.example"),
+        )
+        assert pb.auth_config.mode == "manual"
+        assert pb.auth_config.login_url == "https://login.example"
+
+    def test_capture_sensitive_runtime_names_include_cookies_and_storage(self):
+        pb = Playbook(
+            id="capture",
+            name="Capture",
+            capture=PlaybookCaptureConfig(
+                cookies=[CookieCapture(name="session", store_as="session_cookie")],
+                storage=[StorageCapture(key="token", store_as="user_token")],
+            ),
+        )
+        assert pb.sensitive_runtime_param_names() == {"session_cookie", "user_token"}
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +257,52 @@ class TestPlaybookStore:
         assert loaded.steps[1].verify is not None
         assert loaded.steps[1].verify.expect_text_on_page == "Success"
 
+    def test_save_and_reload_preserves_auth_capture_and_request(self, tmp_path: Path):
+        playbook = Playbook(
+            id="handoff",
+            name="Handoff",
+            auth_required=True,
+            auth=PlaybookAuthConfig(
+                mode="manual",
+                login_url="https://login.example.com",
+                success=AuthSuccessCriteria(cookie_present="sm_session_info"),
+            ),
+            capture=PlaybookCaptureConfig(
+                cookies=[
+                    CookieCapture(
+                        name="sm_session_info",
+                        store_as="session_cookie",
+                    )
+                ],
+                static_headers={"FFF-Auth": "V1.1"},
+            ),
+            steps=[
+                PlaybookStep(
+                    action="api_request",
+                    request=ApiRequestConfig(
+                        method="GET",
+                        url="https://api.example.com/users",
+                        headers={"X-Test": "1"},
+                        response=ApiResponseConfig(
+                            mode="json_path", json_path="data.0"
+                        ),
+                    ),
+                    store_as="first_user",
+                )
+            ],
+        )
+
+        store = PlaybookStore(tmp_path)
+        store.save(playbook)
+        store._cache.clear()
+
+        loaded = store.load("handoff")
+        assert loaded.auth is not None
+        assert loaded.auth.mode == "manual"
+        assert loaded.capture.cookies[0].store_as == "session_cookie"
+        assert loaded.steps[0].request is not None
+        assert loaded.steps[0].request.response.json_path == "data.0"
+
 
 # ---------------------------------------------------------------------------
 # Parser tests
@@ -298,6 +381,62 @@ class TestDirectiveParser:
         bound = materialize_playbook(playbook, {"order_id": "12345"})
         assert bound.steps[1].params["text"] == "12345"
 
+    def test_materialize_playbook_binds_auth_capture_and_request_placeholders(self):
+        playbook = Playbook(
+            id="handoff",
+            name="Handoff",
+            auth_required=True,
+            auth=PlaybookAuthConfig(
+                mode="manual",
+                login_url="https://login.example.com?email={email}",
+                success=AuthSuccessCriteria(text_on_page="Welcome {email}"),
+            ),
+            capture=PlaybookCaptureConfig(
+                static_headers={"X-Org": "{org_id}"},
+                cookies=[
+                    CookieCapture(name="session_{org_id}", store_as="session_cookie")
+                ],
+            ),
+            steps=[
+                PlaybookStep(
+                    action="api_request",
+                    request=ApiRequestConfig(
+                        method="GET",
+                        url="https://api.example.com/users/{user_id}",
+                        query={"email": "{email}"},
+                        cookies={"session": "{session_cookie}"},
+                        response=ApiResponseConfig(
+                            mode="json_path",
+                            json_path="users.{index}.id",
+                        ),
+                    ),
+                )
+            ],
+        )
+
+        bound = materialize_playbook(
+            playbook,
+            {
+                "email": "user@example.com",
+                "org_id": "north",
+                "user_id": "42",
+                "session_cookie": "cookie-value",
+                "index": "0",
+            },
+        )
+
+        assert bound.auth is not None
+        assert bound.auth.login_url.endswith("email=user@example.com")
+        assert bound.auth.success is not None
+        assert bound.auth.success.text_on_page == "Welcome user@example.com"
+        assert bound.capture.static_headers["X-Org"] == "north"
+        assert bound.capture.cookies[0].name == "session_north"
+        assert bound.steps[0].request is not None
+        assert bound.steps[0].request.url == "https://api.example.com/users/42"
+        assert bound.steps[0].request.query["email"] == "user@example.com"
+        assert bound.steps[0].request.cookies["session"] == "cookie-value"
+        assert bound.steps[0].request.response.json_path == "users.0.id"
+
     def test_save_and_reload_preserves_store_as(self, tmp_path: Path):
         playbook = Playbook(
             id="extractor",
@@ -368,6 +507,36 @@ class TestRunnerParamInjection:
         result = bind_step_params(step, {})
         assert result.action == "click"
         assert result.description == "Click button"
+
+    def test_inject_params_replaces_api_request_placeholders(self):
+        step = PlaybookStep(
+            action="api_request",
+            request=ApiRequestConfig(
+                method="GET",
+                url="https://api.example.com/users/{user_id}",
+                query={"email": "{email}"},
+                cookies={"session": "{session_cookie}"},
+                response=ApiResponseConfig(
+                    mode="json_path", json_path="users.{index}.id"
+                ),
+            ),
+        )
+
+        result = bind_step_params(
+            step,
+            {
+                "user_id": "42",
+                "email": "user@example.com",
+                "session_cookie": "cookie-value",
+                "index": "0",
+            },
+        )
+
+        assert result.request is not None
+        assert result.request.url == "https://api.example.com/users/42"
+        assert result.request.query["email"] == "user@example.com"
+        assert result.request.cookies["session"] == "cookie-value"
+        assert result.request.response.json_path == "users.0.id"
 
 
 class _FakeExecutor:
@@ -553,6 +722,28 @@ class TestRunnerFailurePolicy:
         assert result.output_tokens == 3
         assert result.session_memory == "handoff-mem"
 
+    def test_handoff_directive_redacts_sensitive_runtime_params(self):
+        from playbooks.recovery import build_handoff_directive
+
+        playbook = Playbook(
+            id="handoff",
+            name="Handoff",
+            capture=PlaybookCaptureConfig(
+                cookies=[CookieCapture(name="session", store_as="session_cookie")]
+            ),
+        )
+
+        directive = build_handoff_directive(
+            playbook=playbook,
+            remaining_steps=[PlaybookStep(action="click", description="Click next")],
+            error="boom",
+            page_url="https://example.com",
+            runtime_params={"session_cookie": "secret", "customer_id": "42"},
+        )
+
+        assert "session_cookie = [redacted]" in directive
+        assert "customer_id = 42" in directive
+
 
 class TestPlaybookOutputHelpers:
     def test_collect_step_extracted_texts_filters_successful_texts(self):
@@ -584,6 +775,62 @@ class TestPlaybookOutputHelpers:
         ]
 
         assert collect_step_extracted_texts(step_results) == ["first", "second"]
+
+
+class TestApiRequestExecution:
+    def test_execute_api_request_merges_default_headers_and_extracts_json_path(
+        self, monkeypatch
+    ):
+        import httpx
+
+        from guardrails import GuardrailConfig
+        from playbooks.http import execute_api_request
+
+        captured: dict[str, object] = {}
+
+        class _FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def request(self, **kwargs):
+                captured.update(kwargs)
+                return httpx.Response(
+                    200,
+                    json={"users": [{"id": "42"}]},
+                    request=httpx.Request(kwargs["method"], kwargs["url"]),
+                )
+
+        monkeypatch.setattr("playbooks.http.httpx.AsyncClient", _FakeAsyncClient)
+
+        result = asyncio.run(
+            execute_api_request(
+                ApiRequestConfig(
+                    method="GET",
+                    url="https://api.example.com/users",
+                    query={"email": "user@example.com"},
+                    headers={"X-Customer": "123"},
+                    cookies={"session": "cookie-value"},
+                    response=ApiResponseConfig(
+                        mode="json_path", json_path="users.0.id"
+                    ),
+                ),
+                guardrail_config=GuardrailConfig(),
+                default_headers={"FFF-Auth": "V1.1"},
+            )
+        )
+
+        assert result == "42"
+        assert captured["headers"] == {
+            "FFF-Auth": "V1.1",
+            "X-Customer": "123",
+        }
+        assert captured["cookies"] == {"session": "cookie-value"}
 
 
 class TestRunnerStepOutputs:
@@ -889,3 +1136,96 @@ class TestRunnerStepOutputs:
 
         assert result.success is True
         assert sleep_calls == [0.05, 0.05]
+
+    def test_runner_emits_step_results_via_callback(self):
+        from playbooks.runner import PlaybookRunner
+
+        emitted: list[tuple[int, str, bool]] = []
+
+        class _PassExecutor:
+            async def execute_step(self, step, page):
+                return StepResult(
+                    step_index=0,
+                    action=step.action,
+                    success=True,
+                )
+
+        runner = PlaybookRunner(
+            browser=SimpleNamespace(page=object()),
+            step_executor=_PassExecutor(),
+            on_step_result=lambda step_index, step, result: emitted.append(
+                (step_index, step.action, result.success)
+            ),
+        )
+        playbook = Playbook(
+            id="callbacks",
+            name="Callbacks",
+            steps=[
+                PlaybookStep(action="goto", params={"url": "https://example.com"}),
+                PlaybookStep(action="click"),
+            ],
+        )
+
+        result = asyncio.run(runner.execute(playbook))
+
+        assert result.success is True
+        assert emitted == [(0, "goto", True), (1, "click", True)]
+
+
+class TestPlaybookActionLogs:
+    def test_api_request_action_log_redacts_sensitive_values(self):
+        from playbooks.actionlog import build_playbook_action_log
+
+        log = build_playbook_action_log(
+            step_index=0,
+            step=PlaybookStep(
+                action="api_request",
+                request=ApiRequestConfig(
+                    method="POST",
+                    url="https://api.example.com/invoices",
+                    headers={"Authorization": "Bearer secret-token"},
+                    cookies={"session": "cookie-secret"},
+                    json_body={"customerId": "123"},
+                    response=ApiResponseConfig(mode="json"),
+                ),
+            ),
+            result=StepResult(
+                step_index=0,
+                action="api_request",
+                success=True,
+                extracted_text='{"ok": true}',
+            ),
+            sensitive_values={"Bearer secret-token", "cookie-secret"},
+        )
+
+        payload = json.dumps(log.model_dump())
+
+        assert log.input_summary == "POST https://api.example.com/invoices"
+        assert log.tool_input["header_names"] == ["Authorization"]
+        assert log.tool_input["cookie_names"] == ["session"]
+        assert "cookie-secret" not in payload
+        assert "Bearer secret-token" not in payload
+
+    def test_key_press_action_log_redacts_typed_text(self):
+        from playbooks.actionlog import build_playbook_action_log
+
+        log = build_playbook_action_log(
+            step_index=1,
+            step=PlaybookStep(
+                action="key_press",
+                params={"text": "super-secret-password", "key": "Enter"},
+                selector=SelectorStrategy(primary="input[type='password']"),
+            ),
+            result=StepResult(
+                step_index=1,
+                action="key_press",
+                success=True,
+            ),
+            sensitive_values={"super-secret-password"},
+        )
+
+        payload = json.dumps(log.model_dump())
+
+        assert log.input_summary == "type into 'input[type='password']' + press Enter"
+        assert log.tool_input["text"] == "[redacted]"
+        assert "super-secret-password" not in payload

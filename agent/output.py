@@ -181,4 +181,5 @@ def playbook_result_to_output(result: PlaybookResult) -> CuaOutput:
         error=result.error,
         actions=len(result.step_results),
         duration_ms=result.total_duration_ms,
+        session_memory=result.session_memory,
     )

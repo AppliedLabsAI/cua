@@ -10,9 +10,7 @@ from modal import FilePatternMatcher
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VOLUME_MOUNT = "/recordings"
 
-_exclude_dirs = FilePatternMatcher(
-    "output/**", "tests/**", "llm/**", ".git/**", "playbooks/definitions/**"
-)
+_exclude_dirs = FilePatternMatcher("output/**", "tests/**", "llm/**", ".git/**")
 # Exclude files that do not match the source extensions we want in the image.
 _exclude_non_source = ~FilePatternMatcher(
     "**/*.py",

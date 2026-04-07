@@ -42,6 +42,16 @@ class TestCUAConfigFromEnv:
         assert config.guardrail_config is not None
         assert config.guardrail_config.max_urls_visited == 100
 
+    def test_playbook_from_env(self, monkeypatch):
+        monkeypatch.setenv("DIRECTIVE", "Find invoice details")
+        monkeypatch.setenv("PLAYBOOK", "example_invoice_api_handoff")
+        monkeypatch.setenv("PLAYBOOK_PARAMS_JSON", '{"email": "user@example.com"}')
+
+        config = CUAConfig.from_env()
+
+        assert config.playbook == "example_invoice_api_handoff"
+        assert config.playbook_params == {"email": "user@example.com"}
+
     def test_defaults(self, monkeypatch):
         monkeypatch.setenv("DIRECTIVE", "test")
         # Clear optional vars

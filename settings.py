@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     proxy_url: str = ""
     profile: str = "default"
     credentials_json: str = ""
+    playbook: str = ""
+    playbook_params_json: str = ""
     guardrails_json: str = ""
     recording_json: str = ""
     output_schema_json: str = ""

@@ -9,6 +9,8 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from bridge.page_actions import PageActionConfig, execute_page_action
+from guardrails import GuardrailConfig
+from playbooks.http import execute_api_request
 from playbooks.schema import (
     PlaybookStep,
     SelectorStrategy,
@@ -38,16 +40,27 @@ class PlaybookStepExecutor:
         self._last_input_tokens = 0
         self._last_output_tokens = 0
         self._last_session_memory = ""
+        self._guardrail_config = GuardrailConfig()
+        self._default_api_headers: dict[str, str] = {}
         self._config = PageActionConfig(
             action_timeout_ms=ACTION_TIMEOUT_MS,
             navigation_timeout_ms=NAVIGATION_TIMEOUT_MS,
-            scroll_unit=1,
             type_delay_ms=50,
             settle_after_click=True,
             settle_after_evaluate=True,
             settle_timeout_ms=SETTLE_TIMEOUT_MS,
             settle_sleep_s=SETTLE_SLEEP_S,
         )
+
+    def configure_api_context(
+        self,
+        *,
+        guardrail_config: GuardrailConfig,
+        default_headers: dict[str, str] | None = None,
+    ) -> None:
+        """Set request defaults for deterministic API playbook steps."""
+        self._guardrail_config = guardrail_config
+        self._default_api_headers = dict(default_headers or {})
 
     async def execute_step(self, step: PlaybookStep, page: Any) -> StepResult:
         """Execute a single playbook step and verify its outcome."""
@@ -138,6 +151,15 @@ class PlaybookStepExecutor:
 
     async def _run_action(self, step: PlaybookStep, page: Any) -> str | None:
         params = dict(step.params)
+
+        if step.action == "api_request":
+            if step.request is None:
+                raise ValueError("api_request action requires a request block")
+            return await execute_api_request(
+                step.request,
+                guardrail_config=self._guardrail_config,
+                default_headers=self._default_api_headers,
+            )
 
         # llm_extract: extract page content, then analyze with LLM
         if step.action == "llm_extract":

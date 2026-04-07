@@ -35,6 +35,16 @@ class DirectiveParser:
         )
         return playbook, params
 
+    def extract_params_for_playbook(self, directive: str, playbook: Playbook) -> dict:
+        """Extract parameters for an already-selected playbook."""
+        params = self._extract_params(directive, playbook)
+        logger.info(
+            "Extracted params for explicit playbook '%s': %s",
+            playbook.id,
+            params,
+        )
+        return params
+
     def _extract_params(self, directive: str, playbook: Playbook) -> dict:
         """Extract parameter values from a directive.
 

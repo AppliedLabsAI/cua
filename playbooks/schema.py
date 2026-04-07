@@ -10,26 +10,29 @@ PlaybookAction = Literal[
     "goto",
     "click",
     "key_press",
-    "scroll",
     "wait_for",
     "select",
     "evaluate",
     "extract",
     "llm_extract",
+    "api_request",
 ]
 OnFailureMode = Literal["llm_recover", "retry", "abort"]
 ParameterType = Literal["string", "int", "selector_text"]
+AuthMode = Literal["form_login", "manual", "none"]
+StorageScope = Literal["local", "session"]
+ApiResponseMode = Literal["text", "json", "json_path"]
 
 KNOWN_PLAYBOOK_ACTIONS: tuple[PlaybookAction, ...] = (
     "goto",
     "click",
     "key_press",
-    "scroll",
     "wait_for",
     "select",
     "evaluate",
     "extract",
     "llm_extract",
+    "api_request",
 )
 KNOWN_FAILURE_MODES: tuple[OnFailureMode, ...] = ("llm_recover", "retry", "abort")
 KNOWN_PARAMETER_TYPES: tuple[ParameterType, ...] = ("string", "int", "selector_text")
@@ -63,6 +66,92 @@ class StepVerification(BaseModel):
     timeout_ms: int = 5000
 
 
+class AuthSuccessCriteria(BaseModel):
+    """Signals that indicate the login flow reached an authenticated state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url_contains: str | None = None
+    element_visible: str | None = None
+    text_on_page: str | None = None
+    cookie_present: str | None = None
+    timeout_ms: int = 15000
+
+
+class PlaybookAuthConfig(BaseModel):
+    """Authentication behavior for a playbook run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: AuthMode = "form_login"
+    login_url: str = ""
+    success: AuthSuccessCriteria | None = None
+
+
+class CookieCapture(BaseModel):
+    """Cookie value to capture from the authenticated browser context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    store_as: str
+    domain: str = ""
+
+
+class StorageCapture(BaseModel):
+    """Storage key to capture from the active page."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    store_as: str
+    scope: StorageScope = "local"
+
+
+class PlaybookCaptureConfig(BaseModel):
+    """Session artifacts and headers captured outside normal browser steps."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cookies: list[CookieCapture] = Field(default_factory=list)
+    storage: list[StorageCapture] = Field(default_factory=list)
+    static_headers: dict[str, str] = Field(default_factory=dict)
+
+    def sensitive_runtime_param_names(self) -> set[str]:
+        names = {item.store_as for item in self.cookies}
+        names.update(item.store_as for item in self.storage)
+        return names
+
+
+class ApiResponseConfig(BaseModel):
+    """How an API response should be materialized into playbook output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: ApiResponseMode = "text"
+    json_path: str = ""
+
+
+class ApiRequestConfig(BaseModel):
+    """Deterministic HTTP request executed from a playbook step."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    method: str = "GET"
+    url: str
+    query: dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
+    cookies: dict[str, str] = Field(default_factory=dict)
+    json_body: dict[str, Any] | list[Any] | None = Field(
+        default=None,
+        alias="json",
+        serialization_alias="json",
+    )
+    form: dict[str, Any] = Field(default_factory=dict)
+    timeout_ms: int = 10000
+    response: ApiResponseConfig = Field(default_factory=ApiResponseConfig)
+
+
 class PlaybookGuardrails(BaseModel):
     """Optional per-playbook guardrail overrides for LLM handoff."""
 
@@ -92,6 +181,7 @@ class PlaybookStep(BaseModel):
 
     action: PlaybookAction
     params: dict[str, Any] = Field(default_factory=dict)
+    request: ApiRequestConfig | None = None
     selector: SelectorStrategy | None = None
     verify: StepVerification | None = None
     description: str = ""
@@ -119,10 +209,24 @@ class Playbook(BaseModel):
     description: str = ""
     parameters: list[PlaybookParameter] = Field(default_factory=list)
     auth_required: bool = True
+    auth: PlaybookAuthConfig | None = None
+    capture: PlaybookCaptureConfig = Field(default_factory=PlaybookCaptureConfig)
     steps: list[PlaybookStep] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     start_url: str = ""  # Override start URL for this playbook
     guardrails: PlaybookGuardrails = Field(default_factory=PlaybookGuardrails)
+
+    @property
+    def auth_config(self) -> PlaybookAuthConfig:
+        """Return the explicit auth config or derive it from legacy fields."""
+        if self.auth is not None:
+            return self.auth
+        if self.auth_required:
+            return PlaybookAuthConfig(mode="form_login", login_url=self.start_url)
+        return PlaybookAuthConfig(mode="none", login_url=self.start_url)
+
+    def sensitive_runtime_param_names(self) -> set[str]:
+        return self.capture.sensitive_runtime_param_names()
 
 
 class StepResult(BaseModel):

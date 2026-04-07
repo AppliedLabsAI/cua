@@ -44,9 +44,13 @@ def build_handoff_directive(
 
     param_section = ""
     if runtime_params:
+        sensitive_names = playbook.sensitive_runtime_param_names()
         param_section = (
             "\nRuntime parameters:\n"
-            + "\n".join(f"  {k} = {v}" for k, v in runtime_params.items())
+            + "\n".join(
+                f"  {k} = {'[redacted]' if k in sensitive_names else v}"
+                for k, v in runtime_params.items()
+            )
             + "\n"
         )
 

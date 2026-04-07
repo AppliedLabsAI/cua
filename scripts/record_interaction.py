@@ -62,6 +62,11 @@ class InteractionRecorder:
             self._done.set()
             return
 
+        if data.get("action") == "scroll":
+            # Playbooks do not model manual scroll; selector-based steps already
+            # auto-scroll targets into view when interacting with them.
+            return
+
         self._seq += 1
         data["seq"] = self._seq  # Override JS seq (resets on navigation)
         self._log.append(data)
@@ -97,11 +102,6 @@ class InteractionRecorder:
 
         if action == "goto":
             return params.get("url", "")[:80]
-
-        if action == "scroll":
-            direction = params.get("direction", "?")
-            amount = params.get("amount", 0)
-            return f"{direction} {amount}px"
 
         if action == "select":
             value = params.get("optionText") or params.get("value", "")

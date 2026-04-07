@@ -29,6 +29,8 @@ CUA deploys to [Modal](https://modal.com) as a managed API. Each run spawns an i
 | `guardrails` | object | null | Domain/action safety config |
 | `recording` | object | null | `{"enabled": true, "trace": true}` |
 | `output_schema` | object | null | JSON schema for structured output extraction |
+| `playbook` | string | null | Explicit playbook ID to run instead of the LLM agent loop |
+| `playbook_params` | object | null | Parameter map passed into the selected playbook |
 
 ## Dry Run (`POST /runs/dry-run`)
 

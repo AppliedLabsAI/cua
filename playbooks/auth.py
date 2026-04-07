@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,6 +12,13 @@ if TYPE_CHECKING:
 
     from bridge.browser import BrowserManager
 
+from playbooks.schema import (
+    AuthSuccessCriteria,
+    Playbook,
+    PlaybookAuthConfig,
+    PlaybookCaptureConfig,
+)
+from playbooks.session import capture_session_artifacts
 from settings import (
     ACTION_TIMEOUT_MS,
     LOGIN_DETECT_TIMEOUT_MS,
@@ -57,27 +65,37 @@ class DashboardAuth:
         self._browser = browser
         self._credentials = credentials
 
-    async def ensure_authenticated(self, login_url: str = "") -> bool:
+    async def ensure_authenticated(
+        self,
+        login_or_playbook: str | Playbook | PlaybookAuthConfig = "",
+    ) -> bool:
         """Navigate to the login surface and authenticate for this run.
 
         Args:
-            login_url: URL of the login page. If empty, uses current page.
+            login_or_playbook: URL, auth config, or playbook describing login behavior.
 
         Returns True if authentication succeeded.
         """
+        auth = self._coerce_auth_config(login_or_playbook)
         page = self._browser.page
 
         # Navigate to login page if needed
-        if login_url and login_url not in page.url:
+        if auth.login_url and auth.login_url not in page.url:
             await page.goto(
-                login_url, wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
+                auth.login_url, wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS
             )
 
-        already_authenticated = await self._is_logged_in(page)
+        already_authenticated = await self._is_authenticated(page, auth)
+
+        if auth.mode == "none":
+            return already_authenticated
+
+        if auth.mode == "manual":
+            return await self._wait_for_authenticated(page, auth)
 
         # Execute login
         await self._login(page)
-        success = await self._is_logged_in(page)
+        success = await self._wait_for_authenticated(page, auth)
 
         if success:
             if already_authenticated:
@@ -88,6 +106,19 @@ class DashboardAuth:
             logger.error("Login failed")
 
         return success
+
+    async def capture_session_artifacts(
+        self,
+        playbook_or_capture: Playbook | PlaybookCaptureConfig | None,
+    ) -> dict[str, str]:
+        """Capture allowlisted session artifacts for later API requests."""
+        if playbook_or_capture is None:
+            return {}
+        if isinstance(playbook_or_capture, Playbook):
+            capture = playbook_or_capture.capture
+        else:
+            capture = playbook_or_capture
+        return await capture_session_artifacts(self._browser, capture)
 
     async def _login(self, page: Page) -> bool:
         """Execute the login flow using provided credentials.
@@ -143,13 +174,30 @@ class DashboardAuth:
         with contextlib.suppress(Exception):
             await page.wait_for_load_state("domcontentloaded", timeout=LOGIN_TIMEOUT_MS)
 
-        return await self._is_logged_in(page)
+        return True
 
-    async def _is_logged_in(self, page: Page) -> bool:
-        """Check if the current page indicates a logged-in state.
+    def _coerce_auth_config(
+        self,
+        login_or_playbook: str | Playbook | PlaybookAuthConfig,
+    ) -> PlaybookAuthConfig:
+        if isinstance(login_or_playbook, Playbook):
+            return login_or_playbook.auth_config
+        if isinstance(login_or_playbook, PlaybookAuthConfig):
+            return login_or_playbook
+        return PlaybookAuthConfig(mode="form_login", login_url=login_or_playbook)
 
-        Heuristic: absence of login form elements suggests logged in.
-        """
+    async def _is_authenticated(
+        self,
+        page: Page,
+        auth: PlaybookAuthConfig,
+    ) -> bool:
+        """Check whether the current browser context appears authenticated."""
+        if auth.success:
+            return await self._matches_success_criteria(page, auth.success)
+        return await self._matches_default_logged_in_state(page)
+
+    async def _matches_default_logged_in_state(self, page: Page) -> bool:
+        """Heuristic fallback when no explicit auth success criteria are provided."""
         # If there's still a visible password field, probably not logged in
         try:
             handle = await page.wait_for_selector(
@@ -176,6 +224,53 @@ class DashboardAuth:
                 return False
 
         return True
+
+    async def _matches_success_criteria(
+        self,
+        page: Page,
+        success: AuthSuccessCriteria,
+    ) -> bool:
+        if success.url_contains and success.url_contains not in page.url:
+            return False
+
+        if success.cookie_present:
+            cookies = await self._browser.context.cookies()
+            if not any(item.get("name") == success.cookie_present for item in cookies):
+                return False
+
+        if success.element_visible:
+            try:
+                handle = await page.wait_for_selector(
+                    success.element_visible,
+                    state="visible",
+                    timeout=SELECTOR_PROBE_TIMEOUT_MS,
+                )
+                if not handle:
+                    return False
+            except Exception:
+                return False
+
+        if success.text_on_page:
+            body = await page.text_content("body")
+            if not body or success.text_on_page not in body:
+                return False
+
+        return True
+
+    async def _wait_for_authenticated(
+        self,
+        page: Page,
+        auth: PlaybookAuthConfig,
+    ) -> bool:
+        timeout_ms = auth.success.timeout_ms if auth.success else LOGIN_TIMEOUT_MS
+        deadline = time.monotonic() + (timeout_ms / 1000)
+        while time.monotonic() < deadline:
+            if await self._is_authenticated(page, auth):
+                return True
+            with contextlib.suppress(Exception):
+                await page.wait_for_load_state("domcontentloaded", timeout=500)
+            await page.wait_for_timeout(250)
+        return await self._is_authenticated(page, auth)
 
     async def _fill_first_visible(
         self,

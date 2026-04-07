@@ -137,7 +137,11 @@ class PlaybookStore:
         Uses exclude_defaults to produce compact output, then ensures
         required structural fields are always present.
         """
-        result = playbook.model_dump(exclude_defaults=True, exclude_none=True)
+        result = playbook.model_dump(
+            exclude_defaults=True,
+            exclude_none=True,
+            by_alias=True,
+        )
         # Always include auth_required and steps even when they match defaults
         result["auth_required"] = playbook.auth_required
         if "steps" not in result:

@@ -18,6 +18,7 @@ flowchart LR
 ## Why CUA
 
 - **Playbook + LLM hybrid** — deterministic YAML playbooks for known flows (0 LLM calls, 1-5s), automatic LLM fallback for unknown flows or broken selectors
+- **Browser-to-API session handoff** — authenticate in the browser, capture allowlisted session artifacts such as cookies, then call backend APIs directly with deterministic playbook steps
 - **Semantic page understanding** — unlike screenshot-based agents that "look" at pixels or raw DOM dumpers that flood the context window, CUA builds a structured page map with semantic landmarks (region summaries like `form#login: 3 inputs, 1 button` and `table#results: 5 cols, 47 rows`), parent-context disambiguation (`Edit [row: "john@example.com"]`), and action-outcome verification (`[URL changed → /dashboard]`). The agent understands page structure, not just elements — and every action confirms whether it worked
 - **Multi-provider** — works with Anthropic, OpenAI, Google Gemini, and any [PydanticAI-supported model](https://ai.pydantic.dev/models/)
 - **Safety by default** — Cognitive Blinders filter what the agent can see based on task type, preventing prompt injection and accidental destructive actions
@@ -120,6 +121,13 @@ python scripts/run_local.py \
   --playbook cancel_order \
   --playbook-params '{"order_id": "12345"}' \
   --credentials '{"username": "admin", "password": "secret"}'
+
+# Browser login -> API handoff playbook
+python scripts/run_local.py \
+  --directive "Log in and fetch invoice details for alice@example.com" \
+  --playbook example_invoice_api_handoff \
+  --playbook-params '{"base_url": "http://127.0.0.1:18924", "customer_email": "alice@example.com"}' \
+  --credentials '{"email": "agent@example.com", "password": "hunter2"}'
 
 # LLM agent (for unknown flows)
 python scripts/run_local.py \

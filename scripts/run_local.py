@@ -72,6 +72,7 @@ async def _run_playbook(
     """Execute a playbook deterministically."""
     from agent.output import playbook_result_to_output
     from playbooks.auth import DashboardAuth
+    from playbooks.params import materialize_playbook
     from playbooks.runner import PlaybookRunner
     from playbooks.store import PlaybookStore
 
@@ -85,19 +86,21 @@ async def _run_playbook(
     elif playbook.parameters:
         from playbooks.parser import DirectiveParser
 
-        parsed = DirectiveParser(store).parse(directive)
-        if parsed:
-            _, pb_params = parsed
+        pb_params = DirectiveParser(store).extract_params_for_playbook(
+            directive, playbook
+        )
 
-    if playbook.auth_required:
+    playbook = materialize_playbook(playbook, pb_params)
+
+    if playbook.auth_required or playbook.auth is not None:
         auth = DashboardAuth(browser, credentials or {})
-        login_url = playbook.start_url or ""
-        if not await auth.ensure_authenticated(login_url):
+        if not await auth.ensure_authenticated(playbook):
             logger.error("Authentication failed")
             with contextlib.suppress(Exception):
                 await recording.stop()
             await browser.close()
             return 1
+        pb_params.update(await auth.capture_session_artifacts(playbook))
 
     # Make directive available as {directive} in step templates (e.g. llm_extract)
     pb_params.setdefault("directive", directive)
