@@ -73,18 +73,18 @@ class TestRunRegistryPhase:
         handle.phase = RunPhase.TERMINATED
         assert handle.phase == RunPhase.TERMINATED
 
-    def test_registry_add_get_remove(self):
+    async def test_registry_add_get_remove(self):
         reg = InMemoryRunRegistry()
         handle = RunHandle(run_id="r1", sandbox=None, status_base_url="http://x")
         reg.add(handle)
         assert reg.get("r1") is handle
-        removed = reg.remove("r1")
+        removed = await reg.remove("r1")
         assert removed is handle
         assert reg.get("r1") is None
 
-    def test_registry_remove_nonexistent(self):
+    async def test_registry_remove_nonexistent(self):
         reg = InMemoryRunRegistry()
-        assert reg.remove("nonexistent") is None
+        assert await reg.remove("nonexistent") is None
 
     def test_error_field(self):
         handle = RunHandle(

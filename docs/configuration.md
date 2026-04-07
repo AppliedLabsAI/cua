@@ -8,7 +8,7 @@
 | `--playbook` | None | Playbook ID to execute deterministically |
 | `--playbook-params` | None | JSON dict of playbook parameters |
 | `--credentials` | None | JSON credentials: `'{"username": "...", "password": "..."}'` |
-| `--model` | `anthropic:claude-sonnet-4-6` | Model for LLM agent (any PydanticAI-supported model) |
+| `--model` | `openai-responses:gpt-5.4` | Model for LLM agent (any PydanticAI-supported model) |
 | `--max-steps` | 50 | Max tool-call iterations (LLM path only) |
 | `--thinking` | `high` | Thinking effort level (`minimal`, `low`, `medium`, `high`, `xhigh`) |
 | `--allow-private-networks` | false | Allow localhost and private IPs |
@@ -20,8 +20,8 @@
 CUA uses [PydanticAI](https://ai.pydantic.dev/) and works with any model it supports — Anthropic, OpenAI, Google Gemini, Groq, and more. Set the model in `settings.py`:
 
 ```python
-PRIMARY_MODEL = "google-gla:gemini-3-flash-preview"      # main agent
-UTILITY_MODEL = "google-gla:gemini-3.1-flash-lite-preview"  # classification, guardrails, extraction
+PRIMARY_MODEL = "openai-responses:gpt-5.4"      # main agent
+UTILITY_MODEL = "openai-responses:gpt-5.4-mini"  # classification, guardrails, extraction
 ```
 
 To switch providers, change the model string and set the corresponding API key:

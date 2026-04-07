@@ -24,7 +24,16 @@ _RECORDING_VOLUME_NAME = "cua-recordings"
 
 
 async def _commit_recording_volume() -> None:
-    """Commit the recordings volume so the outer API can read persisted data."""
+    """Commit the recordings volume so the outer API can read persisted data.
+
+    Inside a Modal sandbox the volume is auto-synced on exit and the Modal
+    API token is unavailable, so we skip the explicit commit.
+    """
+    from settings import get_settings
+
+    if get_settings().modal_sandbox_id != "local":
+        logger.debug("Skipping volume commit (sandbox auto-syncs on exit)")
+        return
     try:
         vol = modal.Volume.from_name(_RECORDING_VOLUME_NAME)
         await vol.commit.aio()

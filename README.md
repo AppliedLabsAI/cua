@@ -195,11 +195,10 @@ cua/
 
 | Topic | Description |
 |---|---|
-| [Architecture](docs/architecture.md) | Full sequence diagram and component overview |
 | [API Reference](docs/api.md) | Endpoints, SSE streaming, replay, multi-container support |
-| [Browser Tools](docs/tools.md) | 9 browser actions, `execute_sequence` batching, design choices |
+| [Browser Tools](docs/tools.md) | 10 browser actions, `execute_sequence` batching, design choices |
 | [Playbooks](docs/playbooks.md) | Deterministic workflows, selector fallbacks, LLM handoff |
-| [Authentication](docs/authentication.md) | Session persistence, credential refs, `SecretValue`, and security caveats |
+| [Authentication](docs/authentication.md) | Credential refs, `SecretValue`, and security caveats |
 | [Guardrails](docs/guardrails.md) | Cognitive Blinders, runtime safety, domain/action controls |
 | [Recording](docs/recording.md) | Playwright tracing, session replay |
 | [Evaluation](docs/evaluation.md) | Benchmark suites, trial scoring, pass/fail expectations |

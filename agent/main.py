@@ -18,8 +18,12 @@ import logging
 import os
 import signal
 import sys
+from typing import TYPE_CHECKING
 
 from telemetry.logging import setup_logging
+
+if TYPE_CHECKING:
+    import uvicorn
 
 setup_logging()
 logger = logging.getLogger("cua.agent")
@@ -27,12 +31,16 @@ logger = logging.getLogger("cua.agent")
 STATUS_API_PORT = 8090
 
 
-async def _start_status_api() -> asyncio.Task:
+async def _start_status_api() -> tuple[asyncio.Task, uvicorn.Server]:
     """Start the in-sandbox status API as a background asyncio task.
 
     Runs uvicorn in the same process so the status API shares module
     globals with the agent loop (push_action / complete_run update the
     same _status and _subscribers objects that GET /events reads from).
+
+    Returns ``(task, server)`` so the caller can trigger a graceful
+    shutdown via ``server.should_exit = True`` instead of cancelling
+    the task (which causes a noisy ``CancelledError`` in Starlette).
     """
     import uvicorn
 
@@ -48,7 +56,7 @@ async def _start_status_api() -> asyncio.Task:
     task = asyncio.create_task(server.serve())
     # Give uvicorn a moment to bind the port
     await asyncio.sleep(0.5)
-    return task
+    return task, server
 
 
 async def main() -> int:
@@ -91,7 +99,7 @@ async def main() -> int:
     logger.info("Directive: %s", config.directive[:200])
 
     # Start status API in-process (shares globals with agent loop)
-    status_task = await _start_status_api()
+    status_task, status_server = await _start_status_api()
     logger.info("Status API started on port %d (in-process)", STATUS_API_PORT)
 
     # Initialize status API state
@@ -143,9 +151,10 @@ async def main() -> int:
     except asyncio.CancelledError:
         result = 1
 
-    # Cancel the status API after a grace period for final SSE delivery
+    # Keep the status API alive so the outer API can do final polling
+    # during the entrypoint keep-alive window, then shut down gracefully.
     await asyncio.sleep(1)
-    status_task.cancel()
+    status_server.should_exit = True
     with contextlib.suppress(asyncio.CancelledError):
         await status_task
 

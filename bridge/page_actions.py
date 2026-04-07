@@ -182,6 +182,21 @@ async def execute_page_action(
     raise ValueError(f"Unknown browser_dom action: {action}")
 
 
+_HREF_EXACT_RE = __import__("re").compile(r'\[href="([^"]+)"\]')
+
+
+def _relax_href_selector(selector: str) -> str | None:
+    """Convert exact href matches to starts-with (^=) for truncated URLs.
+
+    The DOM snapshot truncates hrefs (e.g. 60 chars).  When the LLM uses a
+    truncated href as an exact-match CSS selector it won't find the element.
+    Retrying with ``[href^="…"]`` handles this gracefully.
+    """
+    if _HREF_EXACT_RE.search(selector):
+        return _HREF_EXACT_RE.sub(r'[href^="\1"]', selector)
+    return None
+
+
 async def extract_content(
     page: Any,
     *,
@@ -204,7 +219,15 @@ async def extract_content(
             EXTRACT_VALUE_CALL_JS,
             [selector, EXTRACT_VALUE_INIT_JS],
         )
-    return await page.inner_text(selector, timeout=timeout_ms)
+    try:
+        return await page.inner_text(selector, timeout=timeout_ms)
+    except Exception:
+        # Retry with starts-with match for truncated href selectors
+        relaxed = _relax_href_selector(selector)
+        if relaxed:
+            logger.debug("Retrying extract with relaxed selector: %s", relaxed)
+            return await page.inner_text(relaxed, timeout=timeout_ms)
+        raise
 
 
 async def _extract_markdown(page: Any) -> str:

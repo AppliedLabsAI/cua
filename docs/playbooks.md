@@ -53,7 +53,7 @@ Playbooks support these actions (same as the LLM agent's `browser_dom` tool):
   - `llm_recover` (default) — after 2 failures, hands off ALL remaining steps to the full LLM agent
   - `retry` — retry without LLM fallback
   - `abort` — stop immediately
-- **Authentication**: Built-in login flow with session persistence via Playwright cookies/localStorage. Sessions saved to `~/.cua/sessions/` and reused across runs.
+- **Authentication**: Built-in login flow that detects common form patterns (email/username + password fields) and performs fresh login when `auth_required: true`.
 
 ## Execution Tiers
 

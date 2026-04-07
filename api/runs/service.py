@@ -234,8 +234,8 @@ class RunService:
             volume=volume,
         )
 
-    def remove_handle(self, run_id: str) -> None:
-        self._registry.remove(run_id)
+    async def remove_handle(self, run_id: str) -> None:
+        await self._registry.remove(run_id)
 
     def _mark_run_active(self, run_id: str) -> None:
         self._active_run_ids.add(run_id)
@@ -302,7 +302,7 @@ class RunService:
         logger.info(
             "Cleaning up finished sandbox for run %s (exit code %s)", run_id, exit_code
         )
-        self.remove_handle(run_id)
+        await self.remove_handle(run_id)
         self._mark_run_inactive(run_id)
         return True
 
@@ -402,7 +402,7 @@ class RunService:
             resp.raise_for_status()
             return RunStatus.model_validate(resp.json())
         except (ValidationError, ValueError, TypeError) as exc:
-            self.remove_handle(run_id)
+            await self.remove_handle(run_id)
             self._mark_run_inactive(run_id)
             logger.warning(
                 "Invalid status payload for run %s: %s",
@@ -419,7 +419,7 @@ class RunService:
                 ),
             )
         except httpx.HTTPError as exc:
-            self.remove_handle(run_id)
+            await self.remove_handle(run_id)
             self._mark_run_inactive(run_id)
             logger.warning("Status request failed for run %s: %s", run_id, exc)
             return await self._terminated_status(
@@ -453,7 +453,7 @@ class RunService:
                 "Terminate call failed for run %s: %s", run_id, exc, exc_info=True
             )
 
-        self.remove_handle(run_id)
+        await self.remove_handle(run_id)
         self._mark_run_inactive(run_id)
         logger.info("Terminated run %s", run_id)
         return {"status": RunStatusValue.TERMINATED, "run_id": run_id}
@@ -525,7 +525,7 @@ class RunService:
                         yielded_any = True
                         yield line + "\n"
             except httpx.HTTPError as exc:
-                self.remove_handle(run_id)
+                await self.remove_handle(run_id)
                 self._mark_run_inactive(run_id)
                 if not yielded_any:
                     persisted = await self.build_persisted_event_stream(

@@ -36,7 +36,7 @@ Convert the recorded interactions into a playbook YAML file. Apply these optimiz
 
 **Auth handling (IMPORTANT):**
 - **NEVER include login/auth steps** (typing username, password, clicking login) in the playbook.
-- Authentication is handled externally by `DashboardAuth.ensure_authenticated()` before the playbook runs. It restores saved sessions or performs fresh login automatically.
+- Authentication is handled externally by the auth system before the playbook runs. It detects login forms and performs fresh login automatically.
 - If the recording includes login interactions, **strip them out**. The playbook should start from the first post-login action.
 - Set `auth_required: true` if login was part of the recording — this tells the runner to authenticate before executing.
 

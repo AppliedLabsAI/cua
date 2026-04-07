@@ -108,12 +108,15 @@ guardrails:
   allowed_domains: ["*.internal.com"]   # Domain allowlist (optional)
 
   # Stuck detection thresholds
-  stuck_window_size: 8                  # Sliding window of recent actions
+  stuck_window_size: 12                 # Sliding window of recent actions
   stuck_repeat_hint: 3                  # Same action N times → hint
   stuck_repeat_warn: 5                  # Same action N times → warning
   stuck_repeat_stop: 7                  # Same action N times → hard stop
   stuck_cycle_max_length: 3             # Max cycle pattern length (e.g. A-B-C)
-  stuck_cycle_repeats: 3                 # Cycle must repeat N times to trigger
+  stuck_cycle_repeats: 3               # Cycle must repeat N times to trigger
+  stuck_revisit_gap: 5                  # Min steps between URL revisits before warning
+  stuck_failure_cluster_window: 5       # Window for failure cluster detection
+  stuck_failure_cluster_threshold: 3    # Failed actions in window to trigger cluster alert
 ```
 
 When omitted, safe defaults apply (private networks blocked, LLM checks enabled, standard limits).

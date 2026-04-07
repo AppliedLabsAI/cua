@@ -2,7 +2,7 @@
 
 ## Dashboard Authentication
 
-CUA handles dashboard login with session persistence:
+CUA handles dashboard login automatically:
 
 ```bash
 python scripts/run_local.py \
@@ -11,12 +11,7 @@ python scripts/run_local.py \
   --credentials '{"email": "admin@company.com", "password": "secret"}'
 ```
 
-The auth system:
-1. Tries restoring a previously saved session (cookies/localStorage)
-2. If expired, logs in by detecting common form patterns (email/username + password fields)
-3. Saves the new session for future runs
-
-Sessions are stored at `~/.cua/sessions/` and reused across runs.
+The auth system detects common login form patterns (email/username + password fields) and performs a fresh login each run. Credentials are resolved at fill time via `credential_ref` so secrets never appear in the LLM prompt.
 
 ## Credential Security
 

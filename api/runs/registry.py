@@ -50,7 +50,7 @@ class RunRegistry:
     def get(self, run_id: str) -> RunHandle | None:
         raise NotImplementedError
 
-    def remove(self, run_id: str) -> RunHandle | None:
+    async def remove(self, run_id: str) -> RunHandle | None:
         raise NotImplementedError
 
     def contains(self, run_id: str) -> bool:
@@ -69,7 +69,7 @@ class InMemoryRunRegistry(RunRegistry):
     def get(self, run_id: str) -> RunHandle | None:
         return self._runs.get(run_id)
 
-    def remove(self, run_id: str) -> RunHandle | None:
+    async def remove(self, run_id: str) -> RunHandle | None:
         return self._runs.pop(run_id, None)
 
     def contains(self, run_id: str) -> bool:
@@ -106,10 +106,10 @@ class ModalDictRunRegistry(RunRegistry):
         # via modal.Sandbox.from_id() and re-adds to the registry.
         return self._local.get(run_id)
 
-    def remove(self, run_id: str) -> RunHandle | None:
+    async def remove(self, run_id: str) -> RunHandle | None:
         handle = self._local.pop(run_id, None)
         with contextlib.suppress(Exception):
-            self._dict.pop(run_id)
+            await self._dict.pop.aio(run_id)
         return handle
 
     def contains(self, run_id: str) -> bool:
