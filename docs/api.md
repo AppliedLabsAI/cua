@@ -19,7 +19,7 @@ CUA deploys to [Modal](https://modal.com) as a managed API. Each run spawns an i
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `directive` | string | (required) | Natural language task |
-| `model` | string | `google-gla:gemini-3-flash-preview` | LLM model |
+| `model` | string | `openai-responses:gpt-5.4` | LLM model |
 | `max_steps` | int | 50 | Max agent iterations |
 | `timeout_seconds` | int | 600 | Sandbox timeout (30-3600) |
 | `thinking` | string | `high` | Thinking effort level |
@@ -48,11 +48,11 @@ curl -X POST https://<workspace>--cua-serve.modal.run/runs/dry-run \
     {"name": "profile", "passed": true, "message": "Profile 'default' loaded"},
     {"name": "credentials", "passed": true, "message": "No credentials (anonymous run)"},
     {"name": "guardrails", "passed": true, "message": "Default guardrails"},
-    {"name": "model", "passed": true, "message": "Model: google-gla:gemini-3-flash-preview"}
+    {"name": "model", "passed": true, "message": "Model: openai-responses:gpt-5.4"}
   ],
   "warnings": [],
   "config_summary": {
-    "model": "google-gla:gemini-3-flash-preview",
+    "model": "openai-responses:gpt-5.4",
     "max_steps": 50,
     "timeout_seconds": 600,
     "thinking": "high",

@@ -1,6 +1,6 @@
 # Browser Tools
 
-CUA exposes a single `browser_dom` tool with 9 actions. The agent chooses which action to call based on the task and page state.
+CUA exposes a single `browser_dom` tool with 10 actions. The agent chooses which action to call based on the task and page state.
 
 ## Actions
 
@@ -13,7 +13,8 @@ CUA exposes a single `browser_dom` tool with 9 actions. The agent chooses which 
 | `scroll(direction, amount)` | Scroll the page | Page map |
 | `extract(selector, mode)` | Extract content as markdown (default), text, HTML, or form values | Content string + page map |
 | `get_dom(selector?)` | Get a compact DOM snapshot (optionally scoped) | DOM string |
-| `wait_for(selector, state)` | Wait for an element to be visible, hidden, etc. | Confirmation |
+| `select(selector, value)` | Select a dropdown option | Confirmation |
+| `evaluate(script)` | Execute arbitrary JavaScript on the page | Page map (if URL changed) |
 | `execute_sequence(steps)` | **Batch multiple actions in a single tool call** | Combined results + page map |
 
 ## Why `execute_sequence` matters

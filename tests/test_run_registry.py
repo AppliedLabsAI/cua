@@ -118,58 +118,58 @@ class TestModalDictRunRegistryGet:
 
 
 class TestModalDictRunRegistryRemove:
-    def test_remove_deletes_handle_from_local_cache(self):
+    async def test_remove_deletes_handle_from_local_cache(self):
         registry, _ = _make_registry()
         handle = _make_handle("run-1")
         registry._local["run-1"] = handle
 
-        registry.remove("run-1")
+        await registry.remove("run-1")
 
         assert "run-1" not in registry._local
 
-    def test_remove_calls_dict_pop(self):
+    async def test_remove_calls_dict_pop_aio(self):
         registry, modal_dict = _make_registry()
         handle = _make_handle("run-1")
         registry._local["run-1"] = handle
 
-        registry.remove("run-1")
+        await registry.remove("run-1")
 
-        modal_dict.pop.assert_called_once_with("run-1")
+        modal_dict.pop.aio.assert_called_once_with("run-1")
 
-    def test_remove_returns_the_handle(self):
+    async def test_remove_returns_the_handle(self):
         registry, _ = _make_registry()
         handle = _make_handle("run-1")
         registry._local["run-1"] = handle
 
-        result = registry.remove("run-1")
+        result = await registry.remove("run-1")
 
         assert result is handle
 
-    def test_remove_returns_none_when_run_id_not_in_local(self):
+    async def test_remove_returns_none_when_run_id_not_in_local(self):
         registry, _ = _make_registry()
 
-        result = registry.remove("nonexistent-run")
+        result = await registry.remove("nonexistent-run")
 
         assert result is None
 
-    def test_remove_returns_handle_when_dict_pop_raises(self):
+    async def test_remove_returns_handle_when_dict_pop_raises(self):
         registry, modal_dict = _make_registry()
-        modal_dict.pop.side_effect = RuntimeError("modal unavailable")
+        modal_dict.pop.aio.side_effect = RuntimeError("modal unavailable")
         handle = _make_handle("run-1")
         registry._local["run-1"] = handle
 
-        result = registry.remove("run-1")
+        result = await registry.remove("run-1")
 
         assert result is handle
 
-    def test_remove_does_not_raise_when_dict_pop_raises(self):
+    async def test_remove_does_not_raise_when_dict_pop_raises(self):
         registry, modal_dict = _make_registry()
-        modal_dict.pop.side_effect = Exception("network error")
+        modal_dict.pop.aio.side_effect = Exception("network error")
         handle = _make_handle("run-1")
         registry._local["run-1"] = handle
 
         # Failure must be swallowed
-        registry.remove("run-1")
+        await registry.remove("run-1")
 
 
 class TestModalDictRunRegistryContains:
