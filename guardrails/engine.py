@@ -112,13 +112,15 @@ class GuardrailConfig(BaseModel):
     max_consecutive_errors: int = 5
     allow_private_networks: bool = False
     enable_llm_action_check: bool = True
-    stuck_window_size: int = 8
+    stuck_window_size: int = 12
     stuck_repeat_hint: int = 3
     stuck_repeat_warn: int = 5
     stuck_repeat_stop: int = 7
     stuck_cycle_max_length: int = 3
     stuck_cycle_repeats: int = 3
     stuck_revisit_gap: int = 5
+    stuck_failure_cluster_window: int = 5
+    stuck_failure_cluster_threshold: int = 3
 
 
 class GuardrailResult(BaseModel):
@@ -188,6 +190,8 @@ class GuardrailEngine:
             cycle_max_length=self.config.stuck_cycle_max_length,
             cycle_repeats=self.config.stuck_cycle_repeats,
             revisit_gap=self.config.stuck_revisit_gap,
+            failure_cluster_window=self.config.stuck_failure_cluster_window,
+            failure_cluster_threshold=self.config.stuck_failure_cluster_threshold,
         )
 
     def check_url(self, url: str) -> GuardrailResult:

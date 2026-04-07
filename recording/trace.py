@@ -17,7 +17,6 @@ class TraceRecorder:
 
     def __init__(self, output_dir: str) -> None:
         self._output_path = Path(output_dir) / "trace.zip"
-        self._active = False
         self._context: BrowserContext | None = None
 
     async def start(self, context: BrowserContext) -> None:
@@ -29,25 +28,24 @@ class TraceRecorder:
                 sources=False,
             )
             self._context = context
-            self._active = True
             logger.info("Playwright tracing started")
         except Exception as exc:
             logger.warning("Playwright tracing unavailable: %s", exc)
-            self._active = False
+            self._context = None
 
     async def stop(self) -> str | None:
         """Stop tracing and save to disk. Returns output path or None."""
-        if not self._active or not self._context:
+        if self._context is None:
             return None
         try:
             self._output_path.parent.mkdir(parents=True, exist_ok=True)
             await self._context.tracing.stop(path=str(self._output_path))
-            self._active = False
+            self._context = None
             logger.info("Trace saved: %s", self._output_path)
             return str(self._output_path)
         except Exception as exc:
             logger.warning("Failed to stop tracing: %s", exc)
-            self._active = False
+            self._context = None
             return None
 
     @property
@@ -56,4 +54,4 @@ class TraceRecorder:
 
     @property
     def active(self) -> bool:
-        return self._active
+        return self._context is not None

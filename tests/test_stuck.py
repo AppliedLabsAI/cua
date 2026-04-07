@@ -320,6 +320,108 @@ class TestStuckCountDecay:
         assert det.stuck_count == 0
 
 
+class TestFailedClusterDetection:
+    def test_cluster_triggers_on_majority_failures(self):
+        """3 failures in a window of 5 actions triggers HINT."""
+        det = _detector(
+            failure_cluster_window=5,
+            failure_cluster_threshold=3,
+            repeat_hint=20,  # disable repetition detection
+        )
+        _record(det, "click '#a'", success=False)
+        _record(det, "click '#b'", success=True)
+        _record(det, "click '#c'", success=False)
+        _record(det, "click '#d'", success=True)
+        v = _record(det, "click '#e'", success=False)
+        assert v.severity is StuckSeverity.HINT
+        assert "failed" in v.message.lower()
+
+    def test_cluster_no_trigger_below_threshold(self):
+        """2 failures in 5 actions does not trigger."""
+        det = _detector(
+            failure_cluster_window=5,
+            failure_cluster_threshold=3,
+            repeat_hint=20,
+        )
+        _record(det, "click '#a'", success=False)
+        _record(det, "click '#b'", success=True)
+        _record(det, "click '#c'", success=True)
+        _record(det, "click '#d'", success=True)
+        v = _record(det, "click '#e'", success=False)
+        assert v.severity is StuckSeverity.NONE
+
+    def test_cluster_escalation(self):
+        """Repeated cluster detections escalate to WARNING then STOP."""
+        det = _detector(
+            failure_cluster_window=5,
+            failure_cluster_threshold=3,
+            repeat_hint=20,
+        )
+        # First cluster → HINT (stuck_count becomes 1)
+        for i in range(3):
+            _record(det, f"click '#fail-{i}'", success=False)
+        _record(det, "click '#ok-0'", success=True)
+        v = _record(det, "click '#fail-3'", success=False)
+        assert v.severity is StuckSeverity.HINT
+
+        # Second cluster → WARNING (stuck_count becomes 2)
+        v = _record(det, "click '#fail-4'", success=False)
+        assert v.severity is StuckSeverity.WARNING
+
+        # Third cluster → STOP (stuck_count >= 2)
+        v = _record(det, "click '#fail-5'", success=False)
+        assert v.severity is StuckSeverity.STOP
+
+    def test_cluster_catches_different_selector_failures(self):
+        """4 failed clicks with different selectors + 1 get_dom success → detected."""
+        det = _detector(
+            failure_cluster_window=5,
+            failure_cluster_threshold=3,
+            repeat_hint=20,
+        )
+        # Simulates the real failure mode: click fails, get_dom success, click fails...
+        _record(det, "click '#complex-selector-1'", success=False)
+        _record(det, "click '#complex-selector-2'", success=False)
+        det.record(
+            "get_dom",
+            {},
+            input_summary="get DOM",
+            success=True,
+        )
+        _record(det, "click '#complex-selector-3'", success=False)
+        v = _record(det, "click '#complex-selector-4'", success=False)
+        assert v.severity is StuckSeverity.HINT
+
+    def test_cluster_reset_clears_outcomes(self):
+        det = _detector(failure_cluster_window=5, failure_cluster_threshold=3)
+        for i in range(3):
+            _record(det, f"click '#fail-{i}'", success=False)
+        det.reset()
+        # After reset, same failures should not immediately trigger
+        v = _record(det, "click '#fail-new'", success=False)
+        assert v.severity is StuckSeverity.NONE
+
+
+class TestWindowSizeAllowsLength3Cycles:
+    def test_length3_cycle_detected_with_default_window(self):
+        """Default window_size=12 allows length-3 cycle detection (needs 9 entries)."""
+        det = _detector(repeat_hint=20)  # uses default window=12, cycle_repeats=3
+        for _ in range(3):
+            _record(det, "click '#tab-a'", success=True)
+            _record(det, "click '#tab-b'", success=True)
+            _record(det, "click '#tab-c'", success=True)
+        assert det.stuck_count >= 1
+
+    def test_length3_cycle_impossible_with_window_8(self):
+        """window_size=8 cannot detect length-3 cycles (8 < 3*3=9)."""
+        det = _detector(window_size=8, repeat_hint=20)
+        for _ in range(3):
+            _record(det, "click '#tab-a'", success=True)
+            _record(det, "click '#tab-b'", success=True)
+            _record(det, "click '#tab-c'", success=True)
+        assert det.stuck_count == 0
+
+
 def test_build_action_signature_uses_action_and_selector():
     sig = build_action_signature("click", {"selector": "#submit"})
     assert sig == "click|#submit"

@@ -42,7 +42,11 @@ IMPORTANT rules:
 - If the task is ONLY reading/finding information but requires login first -> \
 still "fill_form" (login needs typing)
 - If unsure between read and fill_form, prefer "fill_form" (safer)
-- If unsure between navigate and interact, prefer "interact" (safer)"""
+- If unsure between navigate and interact, prefer "interact" (safer)
+
+Also determine whether the task requires logging in or signing in. \
+Set needs_login to true if the directive mentions signing in, logging in, \
+using credentials, or entering a password."""
 
 
 class ClassificationResult(BaseModel):

@@ -45,11 +45,6 @@ def resolve_credentials(
     return {k: SecretValue(v) for k, v in raw.items()}
 
 
-def credential_refs_for_prompt(creds: Mapping[str, SecretValue]) -> list[str]:
-    """Return non-secret credential reference names for the LLM prompt."""
-    return list(creds)
-
-
 def resolve_credential_ref(
     creds: Mapping[str, SecretValue | str] | None,
     ref: str,

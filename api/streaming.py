@@ -24,7 +24,7 @@ from actionlog.actions import ActionLog, format_sse_event
 from api.errors import ApiError, ApiErrorCode, coerce_api_error, raise_api_error
 from api.models import RunStatus, RunStatusValue
 from recording import DEFAULT_OUTPUT_DIR
-from recording.manager import scan_recording_artifacts
+from recording.models import list_recording_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +201,7 @@ async def get_recording_manifest() -> dict:
     """List available recording artifacts."""
     return {
         "run_id": _status.run_id,
-        "artifacts": scan_recording_artifacts(_RECORDING_DIR),
+        "artifacts": list_recording_artifacts(_RECORDING_DIR),
     }
 
 

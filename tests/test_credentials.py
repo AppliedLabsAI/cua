@@ -8,7 +8,6 @@ import pytest
 
 from credentials import (
     SecretValue,
-    credential_refs_for_prompt,
     resolve_credential_ref,
     resolve_credentials,
 )
@@ -53,16 +52,6 @@ class TestResolveCredentials:
         resolved = resolve_credentials(raw)
         assert resolved is not None
         assert resolved["token"].get_secret_value() == "tok"
-
-
-class TestCredentialRefsForPrompt:
-    def test_returns_refs(self):
-        secure = {"username": SecretValue("admin"), "password": SecretValue("pw")}
-        refs = credential_refs_for_prompt(secure)
-        assert refs == ["username", "password"]
-
-    def test_empty(self):
-        assert credential_refs_for_prompt({}) == []
 
 
 class TestResolveCredentialRef:

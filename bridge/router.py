@@ -55,6 +55,10 @@ logger = logging.getLogger(__name__)
 # Actions that may materially change page/frame state.
 _CAPTCHA_CHECK_ACTIONS = {"goto", "click"}
 
+# Observation-only actions should not reset the consecutive error counter —
+# a get_dom between failed clicks is not meaningful progress.
+_READ_ONLY_ACTIONS = frozenset({"get_dom", "screenshot", "extract"})
+
 
 @dataclass(frozen=True)
 class ActionRequest:
@@ -91,7 +95,6 @@ class ActionRouter:
         self._background = BackgroundTasks()
 
         self._verifier = None
-        self._skip_captcha = False
         if blinders:
             from blinders.verifier import ScopeVerifier
 
@@ -275,7 +278,7 @@ class ActionRouter:
             stop = self.guardrails.record_error()
             if stop:
                 result = ActionResult(error=stop.reason)
-        else:
+        elif request.action not in _READ_ONLY_ACTIONS:
             self.guardrails.record_success()
 
         input_summary = summarize_action(
@@ -424,8 +427,7 @@ class ActionRouter:
         *,
         browser_span,
     ) -> ActionResult:
-        if not self._skip_captcha:
-            result = await self._handle_captcha(result)
+        result = await self._handle_captcha(result)
 
         final_url = self.browser.page.url
         browser_span.set_attribute(
