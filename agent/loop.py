@@ -171,7 +171,7 @@ async def run_agent(
         summary=summary,
         action_count=deps.step,
         action_log=bridge.action_log,
-        total_duration_ms=int((time.monotonic() - run_start) * 1000),
+        total_duration_ms=total_ms,
         total_input_tokens=deps.total_input_tokens,
         total_output_tokens=deps.total_output_tokens,
         data=structured_data,

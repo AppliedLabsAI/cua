@@ -14,7 +14,7 @@ from starlette.responses import Response
 
 from api.errors import ApiErrorCode, raise_api_error
 from api.runs.registry import RunHandle
-from recording.manager import scan_recording_artifacts
+from recording.models import list_recording_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ class RecordingService:
                 "No recordings found",
                 details={"run_id": run_id},
             )
-        return {"run_id": run_id, "artifacts": scan_recording_artifacts(run_dir)}
+        return {"run_id": run_id, "artifacts": list_recording_artifacts(run_dir)}
 
     async def get_trace(self, run_id: str) -> Response:
         """Download the Playwright trace ZIP."""

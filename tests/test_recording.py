@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from recording.manager import scan_recording_artifacts
 from recording.models import (
     RecordingArtifact,
     RecordingManifest,
+    list_recording_artifacts,
     load_recording_manifest,
     save_recording_manifest,
 )
@@ -33,7 +33,7 @@ def test_save_and_load_recording_manifest(tmp_path: Path):
     assert loaded.artifacts[0].filename == "trace.zip"
 
 
-def test_scan_recording_artifacts_uses_manifest_when_present(tmp_path: Path):
+def test_list_recording_artifacts_uses_manifest_when_present(tmp_path: Path):
     save_recording_manifest(
         tmp_path,
         RecordingManifest(
@@ -50,7 +50,7 @@ def test_scan_recording_artifacts_uses_manifest_when_present(tmp_path: Path):
 
     (tmp_path / "trace.zip").write_bytes(b"fake-trace")
 
-    artifacts = scan_recording_artifacts(tmp_path)
+    artifacts = list_recording_artifacts(tmp_path)
     assert artifacts == [
         {
             "filename": "trace.zip",

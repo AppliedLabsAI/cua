@@ -84,6 +84,19 @@ _REVISIT_WARN_MSG = (
     "Think carefully about whether revisiting is required to complete the task, "
     "or whether the information from your earlier visit is sufficient."
 )
+_FAIL_CLUSTER_HINT_MSG = (
+    "[System] Multiple recent actions have failed. "
+    "Try a completely different approach instead of retrying similar actions."
+)
+_FAIL_CLUSTER_WARN_MSG = (
+    "[System] WARNING: Too many recent failures. "
+    "You MUST change strategy — use extract to read content, "
+    "or try a different navigation path."
+)
+_FAIL_CLUSTER_STOP_MSG = (
+    "[System] Agent stopped: too many clustered failures with no progress. "
+    "Summarize what you accomplished and any remaining steps needed."
+)
 
 
 class StuckDetector:
@@ -92,13 +105,15 @@ class StuckDetector:
     def __init__(
         self,
         *,
-        window_size: int = 8,
+        window_size: int = 12,
         repeat_hint: int = 3,
         repeat_warn: int = 5,
         repeat_stop: int = 7,
         cycle_max_length: int = 3,
         cycle_repeats: int = 3,
         revisit_gap: int = 5,
+        failure_cluster_window: int = 5,
+        failure_cluster_threshold: int = 3,
     ) -> None:
         # How many recent actions to keep for pattern analysis
         self._window_size = window_size
@@ -114,6 +129,9 @@ class StuckDetector:
         self._cycle_repeats = cycle_repeats
         # Minimum intervening actions before a URL revisit triggers a hint
         self._revisit_gap = revisit_gap
+        # Failure clustering: detect N failures in a sliding window of M actions
+        self._failure_cluster_window = failure_cluster_window
+        self._failure_cluster_threshold = failure_cluster_threshold
         # Sliding window of normalized action signatures.
         self._history: list[ActionSignature] = []
         # Full history of goto URLs: normalized_url -> [action_indices]
@@ -124,6 +142,8 @@ class StuckDetector:
         # Cumulative detection count — drives cycle escalation and
         # decays by 1 on each non-stuck action
         self._stuck_count: int = 0
+        # Recent success/failure outcomes for failure cluster detection
+        self._recent_outcomes: list[bool] = []
 
     def record(
         self,
@@ -159,7 +179,14 @@ class StuckDetector:
                     )
                     self._just_added_urls.append(normalized)
 
-        # Need minimum history for any detection
+        # Strategy 4 (failure clustering) has its own window size guard,
+        # so run it before the min_needed check for strategies 1-3.
+        cluster = self._check_failed_cluster(success)
+        if cluster.severity is not StuckSeverity.NONE:
+            self._stuck_count += 1
+            return cluster
+
+        # Need minimum history for repetition / cycle detection
         min_needed = min(self._repeat_hint, 2 * self._cycle_repeats)
         if len(self._history) < min_needed:
             return StuckVerdict()
@@ -200,6 +227,20 @@ class StuckDetector:
         self._just_added_urls = []
         self._action_count = 0
         self._stuck_count = 0
+        self._recent_outcomes.clear()
+
+    def _escalate(
+        self,
+        hint_msg: str,
+        warn_msg: str,
+        stop_msg: str,
+    ) -> StuckVerdict:
+        """Return a verdict escalated by cumulative stuck count."""
+        if self._stuck_count >= 2:
+            return StuckVerdict(StuckSeverity.STOP, stop_msg)
+        if self._stuck_count >= 1:
+            return StuckVerdict(StuckSeverity.WARNING, warn_msg)
+        return StuckVerdict(StuckSeverity.HINT, hint_msg)
 
     def _check_repetition(self) -> StuckVerdict:
         """Check if the most recent action repeats too many times in the window."""
@@ -244,12 +285,11 @@ class StuckDetector:
                     break
 
             if repeats >= self._cycle_repeats:
-                # Escalate based on cumulative stuck count
-                if self._stuck_count >= 2:
-                    return StuckVerdict(StuckSeverity.STOP, _CYCLE_STOP_MSG)
-                if self._stuck_count >= 1:
-                    return StuckVerdict(StuckSeverity.WARNING, _CYCLE_WARN_MSG)
-                return StuckVerdict(StuckSeverity.HINT, _CYCLE_HINT_MSG)
+                return self._escalate(
+                    _CYCLE_HINT_MSG,
+                    _CYCLE_WARN_MSG,
+                    _CYCLE_STOP_MSG,
+                )
 
         return StuckVerdict()
 
@@ -275,9 +315,37 @@ class StuckDetector:
                         latest_idx,
                         gap,
                     )
+                    # Two-tier only: revisits cap at WARNING (no STOP).
                     if self._stuck_count >= 2:
                         return StuckVerdict(StuckSeverity.WARNING, _REVISIT_WARN_MSG)
                     return StuckVerdict(StuckSeverity.HINT, _REVISIT_HINT_MSG)
+
+        return StuckVerdict()
+
+    def _check_failed_cluster(self, success: bool) -> StuckVerdict:
+        """Detect clustered failures even when interleaved with minor successes.
+
+        Catches patterns like 4 failed clicks with different selectors
+        separated by a get_dom success — the action signatures differ so
+        repetition/cycle detection misses them, but the failure density
+        reveals the agent is stuck.
+        """
+        self._recent_outcomes.append(success)
+        if len(self._recent_outcomes) > self._failure_cluster_window:
+            self._recent_outcomes = self._recent_outcomes[
+                -self._failure_cluster_window :
+            ]
+
+        if len(self._recent_outcomes) < self._failure_cluster_window:
+            return StuckVerdict()
+
+        failure_count = self._recent_outcomes.count(False)
+        if failure_count >= self._failure_cluster_threshold:
+            return self._escalate(
+                _FAIL_CLUSTER_HINT_MSG,
+                _FAIL_CLUSTER_WARN_MSG,
+                _FAIL_CLUSTER_STOP_MSG,
+            )
 
         return StuckVerdict()
 

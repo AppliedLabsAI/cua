@@ -41,13 +41,15 @@ class GuardrailSettings(BaseModel):
     max_consecutive_errors: int = Field(default=5, ge=1, le=50)
     allow_private_networks: bool = False
     enable_llm_action_check: bool = True
-    stuck_window_size: int = Field(default=8, ge=2, le=50)
+    stuck_window_size: int = Field(default=12, ge=2, le=50)
     stuck_repeat_hint: int = Field(default=3, ge=2, le=20)
     stuck_repeat_warn: int = Field(default=5, ge=2, le=30)
     stuck_repeat_stop: int = Field(default=7, ge=2, le=40)
     stuck_cycle_max_length: int = Field(default=3, ge=2, le=10)
     stuck_cycle_repeats: int = Field(default=3, ge=2, le=20)
     stuck_revisit_gap: int = Field(default=5, ge=1, le=50)
+    stuck_failure_cluster_window: int = Field(default=5, ge=3, le=20)
+    stuck_failure_cluster_threshold: int = Field(default=3, ge=2, le=10)
 
     @model_validator(mode="after")
     def check_stuck_threshold_ordering(self) -> GuardrailSettings:

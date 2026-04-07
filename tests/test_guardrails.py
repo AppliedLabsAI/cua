@@ -181,6 +181,12 @@ class TestGuardrailConfigFromDict:
         assert config.max_urls_visited == 50
         assert config.max_consecutive_errors == 5
 
+    def test_new_stuck_config_defaults(self):
+        config = GuardrailConfig.model_validate({})
+        assert config.stuck_window_size == 12
+        assert config.stuck_failure_cluster_window == 5
+        assert config.stuck_failure_cluster_threshold == 3
+
 
 class TestHaikuDestructiveCheck:
     """Tests for Haiku-based destructive action detection."""

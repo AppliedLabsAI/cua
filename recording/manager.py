@@ -12,7 +12,6 @@ from recording.config import RecordingConfig
 from recording.models import (
     RecordingArtifact,
     RecordingManifest,
-    list_recording_artifacts,
     save_recording_manifest,
 )
 from recording.trace import TraceRecorder
@@ -23,14 +22,6 @@ if TYPE_CHECKING:
     from patchright.async_api import BrowserContext
 
 logger = logging.getLogger(__name__)
-
-
-def scan_recording_artifacts(root: Path) -> list[dict]:
-    """Scan a recording directory and return artifact metadata as dicts.
-
-    Shared by api/streaming.py and api/server.py for serving manifests.
-    """
-    return list_recording_artifacts(root)
 
 
 class RecordingManager:
