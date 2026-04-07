@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import logging
@@ -11,7 +10,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from bridge.js_helpers import EXTRACT_VALUE_INIT_JS, READABILITY_EXTRACT_INIT_JS
-from settings import SETTLE_SLEEP_S, SETTLE_TIMEOUT_MS
+from settings import PAGE_SETTLE_TIMEOUT_MS
 
 logger = logging.getLogger(__name__)
 
@@ -29,51 +28,6 @@ READABILITY_EXTRACT_CALL_JS = """(initJS) => {
         : null;
 }"""
 
-PAGE_READINESS_CALL_JS = """(selector) => {
-    const probeSelector = selector || 'body';
-    let target = null;
-    try {
-        target = document.querySelector(probeSelector);
-    } catch (_) {
-        target = null;
-    }
-
-    const probe = target || document.body || document.documentElement;
-    const text = (
-        probe?.innerText ??
-        probe?.textContent ??
-        probe?.value ??
-        ''
-    ).trim();
-
-    const busySelectors = [
-        "[aria-busy='true']",
-        "[role='progressbar']",
-        "[data-loading='true']",
-        "[data-testid*='loading']",
-        ".loading",
-        ".loader",
-        ".spinner",
-        ".skeleton",
-    ];
-
-    let busyCount = 0;
-    for (const sel of busySelectors) {
-        try {
-            busyCount += document.querySelectorAll(sel).length;
-        } catch (_) {
-            // Ignore invalid selectors and continue probing readiness.
-        }
-    }
-
-    return {
-        readyState: document.readyState || '',
-        selectorMatched: Boolean(target),
-        textLength: text.length,
-        busyCount,
-    };
-}"""
-
 
 class PageActionConfig(BaseModel):
     """Execution knobs shared across browser action call sites."""
@@ -82,10 +36,7 @@ class PageActionConfig(BaseModel):
     navigation_timeout_ms: int
     scroll_unit: int = 1
     type_delay_ms: int = 0
-    settle_after_click: bool = True
-    settle_after_evaluate: bool = True
-    settle_timeout_ms: int = SETTLE_TIMEOUT_MS
-    settle_sleep_s: float = SETTLE_SLEEP_S
+    page_settle_timeout_ms: int = PAGE_SETTLE_TIMEOUT_MS
 
 
 class PageActionOutcome(BaseModel):
@@ -115,11 +66,7 @@ async def execute_page_action(
             wait_until="domcontentloaded",
             timeout=config.navigation_timeout_ms,
         )
-        await wait_for_stable(
-            page,
-            config.settle_timeout_ms,
-            settle_sleep_s=config.settle_sleep_s,
-        )
+        await ensure_page_settled(page, config.page_settle_timeout_ms)
         return PageActionOutcome(
             page_changed=page.url != url_before,
             navigation_status=response.status if response else "unknown",
@@ -128,12 +75,7 @@ async def execute_page_action(
     if action == "click":
         url_before = page.url
         await page.click(params["selector"], timeout=config.action_timeout_ms)
-        if config.settle_after_click:
-            await wait_for_stable(
-                page,
-                config.settle_timeout_ms,
-                settle_sleep_s=config.settle_sleep_s,
-            )
+        await ensure_page_settled(page, config.page_settle_timeout_ms)
         return PageActionOutcome(page_changed=page.url != url_before)
 
     if action == "key_press":
@@ -184,8 +126,6 @@ async def execute_page_action(
         elif direction == "left":
             delta_x = -scaled_amount
         await page.mouse.wheel(delta_x, delta_y)
-        if config.settle_sleep_s > 0:
-            await asyncio.sleep(config.settle_sleep_s)
         return PageActionOutcome(text=f"Scrolled {direction}")
 
     if action == "wait_for":
@@ -214,24 +154,23 @@ async def execute_page_action(
         )
         url_before = page.url
         await page.evaluate(script)
-        if config.settle_after_evaluate:
-            await wait_for_stable(
-                page,
-                config.settle_timeout_ms,
-                settle_sleep_s=config.settle_sleep_s,
-            )
+        await ensure_page_settled(page, config.page_settle_timeout_ms)
         return PageActionOutcome(page_changed=page.url != url_before)
 
     if action == "extract":
         selector = params.get("selector", "body")
         mode = params.get("mode", "markdown")
-        await wait_for_page_ready(
-            page,
-            config.settle_timeout_ms,
-            selector=selector,
-            wait_for_content=mode != "value",
-            settle_sleep_s=config.settle_sleep_s,
-        )
+        # Auto-select text mode for body/html extracts: text mode is faster
+        # (skips Readability+markdown pipeline), never truncated, and returns
+        # complete content. Markdown is better for targeted selectors where
+        # link/heading structure matters.
+        is_body = selector.lower() in ("body", "html")
+        if is_body and mode == "markdown":
+            mode = "text"
+        # Short settle for extract: content is already loaded by the time
+        # the LLM decides to extract. A long wait is only needed after
+        # navigation actions (goto, click).
+        await ensure_page_settled(page, min(config.page_settle_timeout_ms, 2000))
         content = await extract_content(
             page,
             selector=selector,
@@ -292,123 +231,15 @@ async def _extract_markdown(page: Any) -> str:
     return await page.inner_text("body")
 
 
-async def _get_page_readiness_snapshot(
-    page: Any,
-    *,
-    selector: str | None,
-) -> dict[str, Any] | None:
-    try:
-        snapshot = await page.evaluate(PAGE_READINESS_CALL_JS, selector)
-    except Exception:
-        return None
-    if not isinstance(snapshot, dict):
-        return None
-    return snapshot
-
-
-async def wait_for_page_ready(
-    page: Any,
-    timeout_ms: int,
-    *,
-    selector: str | None = None,
-    wait_for_content: bool = False,
-    settle_sleep_s: float = SETTLE_SLEEP_S,
+async def ensure_page_settled(
+    page: Any, timeout_ms: int = PAGE_SETTLE_TIMEOUT_MS
 ) -> None:
-    """Best-effort readiness wait that works for both static and SPA pages."""
+    """Wait until the page's network activity has settled.
+
+    Uses Playwright's networkidle signal (500ms of no in-flight requests).
+    Never raises — silently degrades on timeout.
+    """
     if timeout_ms <= 0:
         return
-
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + (timeout_ms / 1000)
-
-    def remaining_ms() -> int:
-        return max(0, int((deadline - loop.time()) * 1000))
-
-    remaining = remaining_ms()
-    if remaining <= 0:
-        return
     with contextlib.suppress(Exception):
-        await page.wait_for_load_state("domcontentloaded", timeout=remaining)
-
-    remaining = remaining_ms()
-    if remaining <= 0:
-        return
-    with contextlib.suppress(Exception):
-        await page.wait_for_load_state("load", timeout=remaining)
-
-    remaining = remaining_ms()
-    if remaining <= 0:
-        return
-    with contextlib.suppress(Exception):
-        await page.wait_for_load_state("networkidle", timeout=remaining)
-
-    if selector:
-        remaining = remaining_ms()
-        if remaining <= 0:
-            return
-        with contextlib.suppress(Exception):
-            await page.wait_for_selector(
-                selector,
-                state="visible",
-                timeout=remaining,
-            )
-
-    if not wait_for_content:
-        return
-
-    last_signature: tuple[Any, ...] | None = None
-    stable_polls = 0
-    sleep_interval = settle_sleep_s if settle_sleep_s > 0 else 0.05
-
-    while loop.time() < deadline:
-        snapshot = await _get_page_readiness_snapshot(page, selector=selector)
-        if snapshot is None:
-            return
-
-        signature = (
-            snapshot.get("readyState"),
-            snapshot.get("textLength"),
-            snapshot.get("busyCount"),
-            snapshot.get("selectorMatched"),
-        )
-        has_content = bool(snapshot.get("textLength", 0))
-        ready_state = snapshot.get("readyState") in {"interactive", "complete"}
-        selector_matched = bool(snapshot.get("selectorMatched"))
-        busy_count = int(snapshot.get("busyCount", 0) or 0)
-
-        if signature == last_signature and has_content:
-            stable_polls += 1
-        else:
-            stable_polls = 0
-        last_signature = signature
-
-        required_stable_polls = 1 if busy_count == 0 else 2
-
-        if (
-            has_content
-            and ready_state
-            and stable_polls >= required_stable_polls
-            and (not selector or selector_matched)
-        ):
-            return
-
-        remaining_s = deadline - loop.time()
-        if remaining_s <= 0:
-            return
-        await asyncio.sleep(min(sleep_interval, remaining_s))
-
-
-async def wait_for_stable(
-    page: Any,
-    timeout_ms: int,
-    *,
-    settle_sleep_s: float = SETTLE_SLEEP_S,
-) -> None:
-    """Best-effort post-action stabilization shared by both execution paths."""
-    await wait_for_page_ready(
-        page,
-        timeout_ms,
-        selector="body",
-        wait_for_content=True,
-        settle_sleep_s=settle_sleep_s,
-    )
+        await page.wait_for_load_state("networkidle", timeout=timeout_ms)

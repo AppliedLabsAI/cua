@@ -133,8 +133,18 @@ async def quick_page_map(
 async def attach_page_context(
     browser: BrowserManager,
     filter_config: dict | None = None,
+    max_dom_chars: int | None = None,
 ) -> str:
-    """Attach the best available page context with the DOM marker prefix."""
+    """Attach the best available page context with the DOM marker prefix.
+
+    Uses the full DOM snapshot (with actionable selectors) so the LLM can
+    interact immediately without a separate get_dom call.
+
+    Args:
+        max_dom_chars: Override the default snapshot size. Use a smaller value
+            when the caller already provides rich content (e.g. extract results)
+            and the DOM only needs to show interactive elements.
+    """
     wait_for_active_page = getattr(browser, "wait_for_active_page", None)
     if callable(wait_for_active_page):
         with contextlib.suppress(Exception):
@@ -142,7 +152,10 @@ async def attach_page_context(
     page = browser.page
     ctx = await browser.consume_prefetch()
     if not ctx:
-        ctx = await quick_page_map(page, filter_config=filter_config)
+        kwargs: dict = {"filter_config": filter_config}
+        if max_dom_chars is not None:
+            kwargs["max_chars"] = max_dom_chars
+        ctx = await quick_dom_snapshot(page, **kwargs)
     if not ctx:
         ctx = await quick_axtree_snapshot(page)
     if ctx:

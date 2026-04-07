@@ -27,7 +27,6 @@ BrowserAction = Literal[
     "scroll",
     "extract",
     "get_dom",
-    "wait_for",
     "execute_sequence",
 ]
 
@@ -49,7 +48,6 @@ _TOOL_PARAMS = (
     "amount",
     "steps",
     "mode",
-    "state",
     "dom_only",
 )
 
@@ -67,7 +65,6 @@ async def browser_dom(
     amount: int | None = None,
     steps: list[dict[str, Any]] | None = None,
     mode: Literal["text", "html", "value", "markdown"] | None = None,
-    state: Literal["visible", "hidden", "attached", "detached"] | None = None,
     dom_only: bool | None = None,
 ) -> ToolReturn:
     """Browser automation via CSS/text=/role= selectors.
@@ -87,7 +84,6 @@ async def browser_dom(
         amount: Scroll amount in units (scroll action).
         steps: Array of batched actions (execute_sequence action).
         mode: Content extraction mode (extract action). One of "text", "html", "value", or "markdown" (Readability + markdown conversion).
-        state: Element state to wait for (wait_for action).
         dom_only: Skip screenshot, return DOM only. Saves tokens.
     """
     deps = ctx.deps

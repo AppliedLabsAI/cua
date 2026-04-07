@@ -251,7 +251,7 @@ class ActionRouter:
                 action=request.action,
                 tool_input=request.tool_input,
                 input_summary=entry.input_summary,
-                result_text=result.text,
+                result_text=result.error if result.error else result.text,
                 success=result.error is None,
                 visited_urls=visited_urls,
             )

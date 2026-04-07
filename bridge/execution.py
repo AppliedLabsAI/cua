@@ -11,18 +11,17 @@ from typing import TYPE_CHECKING, Any, cast
 from patchright.async_api import Page
 
 from bridge import DOM_MARKER, ActionResult
-from bridge.browser import DOM_MAX_CHARS
+from bridge.browser import DOM_MAX_CHARS, EXTRACT_DOM_MAX_CHARS
 from bridge.observation import (
     attach_page_context,
     get_dom_snapshot,
     page_screenshot,
     quick_dom_snapshot,
-    quick_page_map,
     start_mutation_observer,
     stop_mutation_observer,
 )
 from bridge.page_actions import PageActionConfig, execute_page_action
-from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS, SETTLE_TIMEOUT_MS
+from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS, PAGE_SETTLE_TIMEOUT_MS
 from telemetry.logging import C_DIM, C_RESET, fmt_status, fmt_timing
 
 if TYPE_CHECKING:
@@ -37,10 +36,7 @@ _TOOL_ACTION_CONFIG = PageActionConfig(
     navigation_timeout_ms=NAVIGATION_TIMEOUT_MS,
     scroll_unit=200,
     type_delay_ms=0,
-    settle_after_click=True,
-    settle_after_evaluate=True,
-    settle_timeout_ms=SETTLE_TIMEOUT_MS,
-    settle_sleep_s=0.0,
+    page_settle_timeout_ms=PAGE_SETTLE_TIMEOUT_MS,
 )
 
 
@@ -71,10 +67,13 @@ async def _append_page_context(
     ctx: ExecutionContext,
     *,
     force: bool = False,
+    max_dom_chars: int | None = None,
 ) -> str:
     if not force and not ctx.policy.include_page_context:
         return text
-    return text + await attach_page_context(ctx.browser, ctx.filter_config)
+    return text + await attach_page_context(
+        ctx.browser, ctx.filter_config, max_dom_chars=max_dom_chars
+    )
 
 
 def _context_for(
@@ -144,7 +143,7 @@ async def _handle_click(params: dict[str, Any], ctx: ExecutionContext) -> Action
 
     if ctx.policy.include_page_context:
         ctx.browser.start_prefetch(
-            quick_page_map(ctx.browser.page, filter_config=ctx.filter_config)
+            quick_dom_snapshot(ctx.browser.page, filter_config=ctx.filter_config)
         )
     delta = await stop_mutation_observer(page)
     text = f"Clicked {delta}" if delta else "Clicked"
@@ -163,7 +162,11 @@ async def _handle_extract(
         config=_TOOL_ACTION_CONFIG,
     )
     text = outcome.text or ""
-    return ActionResult(text=await _append_page_context(text, ctx))
+    # Extract results already carry the page content; attach a smaller DOM
+    # (just interactive elements) so the LLM can navigate if needed.
+    return ActionResult(
+        text=await _append_page_context(text, ctx, max_dom_chars=EXTRACT_DOM_MAX_CHARS)
+    )
 
 
 async def _handle_evaluate(
@@ -199,20 +202,6 @@ async def _handle_select(
         config=_TOOL_ACTION_CONFIG,
     )
     return ActionResult(text=outcome.text or "Selected option")
-
-
-async def _handle_wait_for(
-    params: dict[str, Any],
-    ctx: ExecutionContext,
-) -> ActionResult:
-    page = ctx.page
-    outcome = await execute_page_action(
-        page,
-        "wait_for",
-        params,
-        config=_TOOL_ACTION_CONFIG,
-    )
-    return ActionResult(text=outcome.text or "Done")
 
 
 async def _handle_key_press(
@@ -274,7 +263,6 @@ _ACTION_HANDLERS = {
     "screenshot": _handle_screenshot,
     "scroll": _handle_scroll,
     "select": _handle_select,
-    "wait_for": _handle_wait_for,
 }
 
 
@@ -470,9 +458,8 @@ async def execute_dom_action(
             if normalized_action == "goto"
             else _TOOL_ACTION_CONFIG.action_timeout_ms
         )
-        return ActionResult(
-            error=f"{normalized_action} timed out after {timeout_used // 1000}s"
-        )
+        error_msg = f"{normalized_action} timed out after {timeout_used // 1000}s"
+        return await _error_with_dom_context(error_msg, browser, filter_config)
     except (ValueError, KeyError) as exc:
         return ActionResult(
             error=f"browser_dom.{normalized_action} invalid input: {exc}"
@@ -481,4 +468,29 @@ async def execute_dom_action(
         logger.debug(
             "browser_dom.%s unexpected error", normalized_action, exc_info=True
         )
-        return ActionResult(error=f"browser_dom.{normalized_action} failed: {exc}")
+        error_msg = f"browser_dom.{normalized_action} failed: {exc}"
+        return await _error_with_dom_context(error_msg, browser, filter_config)
+
+
+async def _error_with_dom_context(
+    error_msg: str,
+    browser: BrowserManager,
+    filter_config: dict | None,
+) -> ActionResult:
+    """Return an error result with a fresh DOM snapshot attached.
+
+    When an action fails (timeout, bad selector, etc.), the LLM needs to see
+    the current page state to choose a valid selector for its next attempt.
+    Attaching the DOM here saves one round-trip (the LLM doesn't need to
+    call get_dom or screenshot before retrying).
+    """
+    try:
+        dom = await quick_dom_snapshot(browser.page, filter_config=filter_config)
+        if dom:
+            return ActionResult(
+                error=error_msg,
+                text=f"{DOM_MARKER}\n{dom}",
+            )
+    except Exception:
+        pass  # Best-effort; don't let DOM fetch failure mask the original error.
+    return ActionResult(error=error_msg)

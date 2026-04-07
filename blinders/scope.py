@@ -34,7 +34,6 @@ ALL_ACTIONS = frozenset(
         "scroll",
         "extract",
         "get_dom",
-        "wait_for",
         "execute_sequence",
     }
 )
@@ -138,9 +137,19 @@ def _extract_domains(directive: str, start_url: str | None = None) -> list[str]:
 async def _detect_goal_type(directive: str) -> str:
     """Classify the directive into a goal type.
 
+    Fast-path: when the keyword fallback produces a high-confidence match
+    (fill_form with login keywords), skip the LLM call entirely. This saves
+    ~1-3s of latency on every authenticated task.
+
     Primary: LLM-based classification via Haiku (accurate, handles edge cases).
     Fallback: Minimal keyword matching (when the LLM call fails).
     """
+    # Fast-path: fill_form is the most common and most confidently detected
+    # by keywords. Login/sign-in directives are unambiguous — no need for LLM.
+    if _FALLBACK_FILL_FORM_RE.search(directive):
+        logger.info("Classified directive as: fill_form (keyword fast-path)")
+        return "fill_form"
+
     try:
         from blinders.classifier import classify_directive
 
@@ -211,7 +220,6 @@ def _default_actions(goal_type: str) -> frozenset[str]:
                 "screenshot",
                 "scroll",
                 "get_dom",
-                "wait_for",
             }
         )
     elif goal_type == "navigate":

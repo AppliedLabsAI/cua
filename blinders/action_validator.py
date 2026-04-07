@@ -36,7 +36,6 @@ _SAFE_ACTIONS = frozenset(
         "screenshot",
         "scroll",
         "get_dom",
-        "wait_for",
     }
 )
 
