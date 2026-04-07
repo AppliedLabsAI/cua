@@ -1,6 +1,6 @@
 [project]
 name = "cua"
-version = "0.2.0"
+version = "0.4.0"
 description = "Computer Use Agent — autonomous desktop automation"
 readme = "README.md"
 authors = [ { name = "Hwuiwon Kim" } ]
