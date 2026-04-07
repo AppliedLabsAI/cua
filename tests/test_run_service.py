@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -13,6 +14,25 @@ from api.models import RunStatus, RunStatusValue
 from api.runs.registry import InMemoryRunRegistry
 from api.runs.service import RunService
 from api.runs.store import PersistedRunStore
+
+
+class _FailingStreamContext:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def __aenter__(self):
+        raise self._exc
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FailingStreamClient:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def stream(self, *args, **kwargs):
+        return _FailingStreamContext(self._exc)
 
 
 def _persisted_status(run_id: str) -> RunStatus:
@@ -150,3 +170,36 @@ async def test_stream_run_raises_not_found_without_handle_or_persisted_state(
 
     detail = json.dumps(exc.value.detail)
     assert "NOT_FOUND" in detail
+
+
+@pytest.mark.asyncio
+async def test_stream_run_marks_run_inactive_and_falls_back_to_persisted_replay(
+    tmp_path, monkeypatch
+):
+    run_id = "run-123"
+    status = _persisted_status(run_id)
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "status.json").write_text(status.model_dump_json())
+
+    service = _make_service(tmp_path)
+    handle = SimpleNamespace(status_base_url="http://sandbox.test")
+    mark_inactive = MagicMock()
+
+    monkeypatch.setattr(
+        service, "cleanup_finished_sandbox", AsyncMock(return_value=False)
+    )
+    monkeypatch.setattr(service, "get_handle", AsyncMock(return_value=handle))
+    monkeypatch.setattr(service, "_mark_run_inactive", mark_inactive)
+    monkeypatch.setattr(
+        service,
+        "_get_http_client",
+        lambda: _FailingStreamClient(httpx.ConnectError("boom")),
+    )
+
+    response = await service.stream_run(run_id, MagicMock(headers={}))
+
+    payload = await _collect_stream(response)
+    assert 'id: 1\ndata: {"step": 1' in payload
+    assert "event: error" not in payload
+    mark_inactive.assert_called_once_with(run_id)

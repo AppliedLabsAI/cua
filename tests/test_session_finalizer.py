@@ -100,15 +100,45 @@ async def test_run_finalizer_persists_cleans_up_and_records_metrics():
     sessions_total = MagicMock()
     session_duration = MagicMock()
     span = MagicMock()
+    call_order: list[str] = []
+
+    async def _mark(name: str) -> None:
+        call_order.append(name)
+
+    async def _close_browser() -> None:
+        await _mark("browser.close")
+
+    async def _stop_recording() -> None:
+        await _mark("recording.stop")
+
+    async def _upload_recording(_path: str) -> None:
+        await _mark("recording.upload")
+
+    async def _complete_run(**_kwargs) -> None:
+        await _mark("complete_run")
+
+    async def _persist_status(_path: str) -> None:
+        await _mark("persist_status")
+
+    async def _commit_volume() -> None:
+        await _mark("commit_recording_volume")
+
+    browser.close.side_effect = _close_browser
+    recording.stop.side_effect = _stop_recording
+    recording.upload.side_effect = _upload_recording
 
     with (
-        patch("agent.session.finalizer.complete_run", new=AsyncMock()) as complete_run,
         patch(
-            "agent.session.finalizer.persist_status", new=AsyncMock()
+            "agent.session.finalizer.complete_run",
+            new=AsyncMock(side_effect=_complete_run),
+        ) as complete_run,
+        patch(
+            "agent.session.finalizer.persist_status",
+            new=AsyncMock(side_effect=_persist_status),
         ) as persist_status,
         patch(
             "agent.session.finalizer._commit_recording_volume",
-            new=AsyncMock(),
+            new=AsyncMock(side_effect=_commit_volume),
         ) as commit_recording_volume,
         patch("agent.session.finalizer.active_sessions", return_value=active_sessions),
         patch("agent.session.finalizer.sessions_total", return_value=sessions_total),
@@ -151,3 +181,11 @@ async def test_run_finalizer_persists_cleans_up_and_records_metrics():
     active_sessions.add.assert_called_once_with(-1)
     sessions_total.add.assert_called_once_with(1, {"status": "success"})
     session_duration.record.assert_called_once_with(321, {"status": "success"})
+    assert call_order == [
+        "complete_run",
+        "recording.stop",
+        "recording.upload",
+        "browser.close",
+        "persist_status",
+        "commit_recording_volume",
+    ]

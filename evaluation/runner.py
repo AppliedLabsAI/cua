@@ -153,6 +153,7 @@ async def _run_agent_case(
             blinders=blinders,
             directive=case.directive,
             session_memory=session_memory,
+            run_id=run_id,
         )
 
         from credentials import resolve_credentials

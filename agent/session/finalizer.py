@@ -159,8 +159,8 @@ class RunFinalizer:
         self._recording = recording
         self._recording_upload = recording_upload
 
-    async def persist(self, outcome: RunOutcome) -> None:
-        """Persist terminal run state for outer-API retrieval."""
+    async def publish_status(self, outcome: RunOutcome) -> None:
+        """Publish terminal run state to the in-sandbox status API."""
         try:
             await complete_run(
                 summary=outcome.summary,
@@ -170,6 +170,12 @@ class RunFinalizer:
                 status=outcome.status,
                 session_memory=outcome.session_memory,
             )
+        except Exception:
+            logger.warning("Failed to publish run state", exc_info=True)
+
+    async def persist(self) -> None:
+        """Persist terminal run state for outer-API retrieval."""
+        try:
             await persist_status(f"/recordings/{self._run_id}")
             await _commit_recording_volume()
         except Exception:
@@ -207,8 +213,9 @@ class RunFinalizer:
         result=None,
     ) -> int:
         """Persist state, cleanup resources, and emit terminal metrics."""
-        await self.persist(outcome)
+        await self.publish_status(outcome)
         await self.cleanup()
+        await self.persist()
 
         if result is not None:
             otel_trace.get_current_span().add_event(

@@ -510,6 +510,7 @@ class RunService:
 
         async def proxy_events():
             headers: dict[str, str] = {}
+            yielded_any = False
             if last_event_id:
                 headers["Last-Event-ID"] = last_event_id
             try:
@@ -521,9 +522,20 @@ class RunService:
                 ) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
+                        yielded_any = True
                         yield line + "\n"
             except httpx.HTTPError as exc:
                 self.remove_handle(run_id)
+                self._mark_run_inactive(run_id)
+                if not yielded_any:
+                    persisted = await self.build_persisted_event_stream(
+                        run_id,
+                        start_after=start_after,
+                    )
+                    if persisted is not None:
+                        async for chunk in persisted.body_iterator:
+                            yield chunk
+                        return
                 yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
 
         return StreamingResponse(

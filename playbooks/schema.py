@@ -96,6 +96,7 @@ class PlaybookStep(BaseModel):
     verify: StepVerification | None = None
     description: str = ""
     on_failure: OnFailureMode = "llm_recover"
+    failure_message: str = ""  # User-facing error when the step cannot complete
     store_as: str = ""  # Save extracted output for later {param} substitution
     prompt: str = ""  # LLM prompt for llm_extract — analyzed against page content
 

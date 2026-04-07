@@ -6,7 +6,8 @@ import json
 
 import pytest
 
-from actionlog.actions import ActionLog, save_action_log
+import actionlog.actions as actions_mod
+from actionlog.actions import ActionLog, persist_action_log, save_action_log
 
 
 def _log(step: int, action: str = "click") -> ActionLog:
@@ -67,3 +68,27 @@ async def test_save_action_log_includes_session_memory(tmp_path):
     assert len(payload["actions"]) == 2
     assert payload["actions"][0]["step"] == 1
     assert payload["actions"][1]["step"] == 2
+
+
+@pytest.mark.asyncio
+async def test_persist_action_log_namespaces_files_by_run_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(actions_mod, "_LOG_DIR", str(tmp_path))
+
+    path_one = await persist_action_log(_log(1), run_id="run-one")
+    path_two = await persist_action_log(_log(1), run_id="run-two")
+
+    assert path_one != path_two
+    assert path_one.endswith("run-one/0001_browser_dom_click.json")
+    assert path_two.endswith("run-two/0001_browser_dom_click.json")
+    assert (
+        json.loads((tmp_path / "run-one" / "0001_browser_dom_click.json").read_text())[
+            "step"
+        ]
+        == 1
+    )
+    assert (
+        json.loads((tmp_path / "run-two" / "0001_browser_dom_click.json").read_text())[
+            "step"
+        ]
+        == 1
+    )

@@ -163,6 +163,7 @@ async def _run_agent(
         blinders=blinders,
         directive=directive,
         session_memory=session_memory,
+        run_id="local",
     )
 
     try:

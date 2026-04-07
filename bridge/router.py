@@ -12,6 +12,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from actionlog.actions import ActionLog, persist_action_log, summarize_action
 from bridge import DOM_MARKER, ActionResult
@@ -75,12 +76,14 @@ class ActionRouter:
         blinders: DOMBlinders | None = None,
         directive: str = "",
         session_memory: SessionMemory | None = None,
+        run_id: str | None = None,
     ) -> None:
         self.browser = browser
         self.guardrails = GuardrailEngine(guardrail_config)
         self.blinders = blinders
         self._filter_config = blinders.to_js_filter_config() if blinders else None
         self.action_log: list[ActionLog] = []
+        self._run_id = run_id or uuid4().hex
         self._session_memory = session_memory
         self._step = 0
         self._stopped = False
@@ -236,7 +239,7 @@ class ActionRouter:
             thinking=reasoning,
         )
         self.action_log.append(entry)
-        self._background.schedule(persist_action_log(entry))
+        self._background.schedule(persist_action_log(entry, run_id=self._run_id))
 
         # Record to session memory so the LLM retains awareness of this action.
         if self._session_memory is not None:

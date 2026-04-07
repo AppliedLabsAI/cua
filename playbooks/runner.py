@@ -145,6 +145,7 @@ class PlaybookRunner:
                 )
 
             logger.error("  Step %d aborted: %s", index + 1, result.error)
+            step_results.append(result)
             screenshot_b64 = await self._capture_failure_screenshot(page)
             return PlaybookResult(
                 playbook_id=playbook.id,

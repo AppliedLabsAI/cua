@@ -53,6 +53,19 @@ class RecordingService:
         await self._reload_volume()
         return self._volume_path(run_id, "trace.zip")
 
+    async def _stream_persisted_trace(self, run_id: str):
+        """Yield bytes from the persisted trace file."""
+        path = await self._trace_path(run_id)
+        if not path.exists():
+            return
+
+        with path.open("rb") as fallback:
+            while True:
+                chunk = await asyncio.to_thread(fallback.read, 64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+
     async def get_manifest(self, run_id: str) -> dict:
         """List recording artifacts from the live sandbox or persisted volume."""
         handle = await self._get_handle(run_id)
@@ -92,8 +105,10 @@ class RecordingService:
                 upstream.raise_for_status()
 
                 async def proxy_trace():
+                    bytes_sent = 0
                     try:
                         async for chunk in upstream.aiter_bytes():
+                            bytes_sent += len(chunk)
                             yield chunk
                     except httpx.HTTPError as exc:
                         logger.warning(
@@ -102,16 +117,9 @@ class RecordingService:
                             exc,
                             exc_info=True,
                         )
-                        path = await self._trace_path(run_id)
-                        if path.exists():
-                            with path.open("rb") as fallback:
-                                while True:
-                                    chunk = await asyncio.to_thread(
-                                        fallback.read, 64 * 1024
-                                    )
-                                    if not chunk:
-                                        break
-                                    yield chunk
+                        if bytes_sent == 0:
+                            async for chunk in self._stream_persisted_trace(run_id):
+                                yield chunk
                     finally:
                         await upstream.aclose()
 

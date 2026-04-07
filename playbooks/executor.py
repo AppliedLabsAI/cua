@@ -66,7 +66,7 @@ class PlaybookStepExecutor:
                 action=step.action,
                 success=False,
                 description=step.description,
-                error=str(exc),
+                error=self._step_error(step, str(exc)),
                 input_tokens=self._last_input_tokens,
                 output_tokens=self._last_output_tokens,
                 session_memory=self._last_session_memory,
@@ -87,7 +87,7 @@ class PlaybookStepExecutor:
                     action=step.action,
                     success=False,
                     description=step.description,
-                    error=f"Verification failed: {exc}",
+                    error=self._step_error(step, f"Verification failed: {exc}"),
                     input_tokens=self._last_input_tokens,
                     output_tokens=self._last_output_tokens,
                     session_memory=self._last_session_memory,
@@ -104,6 +104,10 @@ class PlaybookStepExecutor:
             output_tokens=self._last_output_tokens,
             session_memory=self._last_session_memory,
         )
+
+    def _step_error(self, step: PlaybookStep, default_error: str) -> str:
+        """Prefer a playbook-authored failure message when one is provided."""
+        return step.failure_message or default_error
 
     async def resolve_selector(
         self,
