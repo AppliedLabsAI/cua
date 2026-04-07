@@ -196,7 +196,7 @@ class TestSessionMemoryRender:
             success=True,
         )
         output = mem.render()
-        assert "Actions completed:" in output
+        assert "Data gathered:" in output
         assert (
             "Step 3: extract text from 'table' → Found 15 entries in Q1 report"
             in output
@@ -213,7 +213,7 @@ class TestSessionMemoryRender:
             success=True,
         )
         output = mem.render()
-        assert "Step 1: click '#btn'" in output
+        assert "click '#btn'" in output
         assert "→" not in output
 
     def test_failed_actions_do_not_count_as_completed(self):
@@ -228,8 +228,8 @@ class TestSessionMemoryRender:
         )
         output = mem.render()
         assert "Steps completed: 0" in output
-        assert "Failed attempts:" in output
-        assert "Actions completed:" not in output
+        assert "Failed attempts (do not repeat these):" in output
+        assert "Data gathered:" not in output
 
     def test_render_keeps_distinct_query_pages(self):
         mem = SessionMemory()

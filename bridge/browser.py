@@ -30,12 +30,11 @@ from bridge.js_helpers import (
     PAGE_CONTEXT_INIT_JS,
     READABILITY_EXTRACT_INIT_JS,
 )
-from bridge.page_actions import wait_for_page_ready
+from bridge.page_actions import ensure_page_settled
 from settings import (
     ACTION_TIMEOUT_MS,
     NAVIGATION_TIMEOUT_MS,
-    SETTLE_SLEEP_S,
-    SETTLE_TIMEOUT_MS,
+    PAGE_SETTLE_TIMEOUT_MS,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +42,8 @@ logger = logging.getLogger(__name__)
 DOM_MAX_CHARS = 4000
 # Compact DOM auto-attached to goto/click responses
 AUTO_DOM_MAX_CHARS = 3000  # Leave room for nav text + content summary
+# Smaller DOM for extract results — content is already in the text
+EXTRACT_DOM_MAX_CHARS = 1500
 
 
 class BrowserManager:
@@ -55,7 +56,7 @@ class BrowserManager:
         self._page: Page | None = None
         self._prefetch_task: asyncio.Task[str] | None = None
         self._prefetch_url: str | None = None
-        self._page_ready_task: asyncio.Task[None] | None = None
+        self._settle_task: asyncio.Task[None] | None = None
 
     async def launch(
         self,
@@ -111,48 +112,30 @@ class BrowserManager:
                 wait_until="domcontentloaded",
                 timeout=NAVIGATION_TIMEOUT_MS,
             )
-            self._schedule_page_ready(self._page)
-            await self.wait_for_active_page()
+            await ensure_page_settled(self._page, NAVIGATION_TIMEOUT_MS)
 
     def _on_new_page(self, page: Page) -> None:
         """Handle new tab / popup: switch the active page automatically."""
         prev_url = self._page.url if self._page else "none"
         self._page = page
-        self._schedule_page_ready(page)
+        if self._settle_task and not self._settle_task.done():
+            self._settle_task.cancel()
+        self._settle_task = asyncio.create_task(
+            ensure_page_settled(page, PAGE_SETTLE_TIMEOUT_MS)
+        )
         logger.info(
             "Switched to new tab: %s (from %s)",
             page.url[:80] or "about:blank",
             prev_url[:80],
         )
 
-    def _schedule_page_ready(self, page: Page) -> None:
-        """Track readiness for the active page after a popup/tab switch."""
-        if self._page_ready_task and not self._page_ready_task.done():
-            self._page_ready_task.cancel()
-        self._page_ready_task = asyncio.create_task(self._prime_page(page))
-
-    async def _prime_page(self, page: Page) -> None:
-        with contextlib.suppress(Exception):
-            await wait_for_page_ready(
-                page,
-                NAVIGATION_TIMEOUT_MS + SETTLE_TIMEOUT_MS,
-                selector="body",
-                wait_for_content=True,
-                settle_sleep_s=SETTLE_SLEEP_S,
-            )
-
     async def wait_for_active_page(self) -> None:
-        """Await any in-flight readiness work for the current active page."""
-        task = self._page_ready_task
-        if task is None:
+        """Await any in-flight settle for the current active page."""
+        task = self._settle_task
+        if task is None or task.done():
             return
-        try:
+        with contextlib.suppress(Exception):
             await asyncio.shield(task)
-        except Exception:
-            pass
-        finally:
-            if task.done() and task is self._page_ready_task:
-                self._page_ready_task = None
 
     @property
     def page(self) -> Page:
@@ -212,9 +195,9 @@ class BrowserManager:
             self._prefetch_task.cancel()
         self._prefetch_task = None
         self._prefetch_url = None
-        if self._page_ready_task and not self._page_ready_task.done():
-            self._page_ready_task.cancel()
-        self._page_ready_task = None
+        if self._settle_task and not self._settle_task.done():
+            self._settle_task.cancel()
+        self._settle_task = None
 
         try:
             if self._browser:

@@ -34,8 +34,7 @@ SELECTOR_PROBE_TIMEOUT_MS = 800  # wait for a selector to appear
 LOGIN_DETECT_TIMEOUT_MS = (
     1_500  # wait for login form elements (more generous than probe)
 )
-SETTLE_TIMEOUT_MS = 3_000  # DOM stabilization after actions
-SETTLE_SLEEP_S = 0.3  # sleep between DOM stability checks
+PAGE_SETTLE_TIMEOUT_MS = 8_000  # networkidle wait after navigation actions
 
 
 # ---------------------------------------------------------------------------

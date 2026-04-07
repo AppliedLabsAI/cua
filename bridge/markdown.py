@@ -59,19 +59,26 @@ def _element_attr(el: object, name: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+# Base64 data URIs waste tokens in extracted content — strip them.
+_DATA_URI_RE = re.compile(r"data:[^;]+;base64,[A-Za-z0-9+/=]+")
+
+
 def html_to_markdown(html: str, base_url: str = "") -> str:
     """Convert clean HTML to GFM markdown.
 
     Preserves headings, links, lists, tables, code blocks, and emphasis.
     Resolves relative URLs against *base_url*.
+    Strips base64 data URIs which waste tokens.
     """
     md = _CuaMarkdownConverter(base_url=base_url).convert(html)
     # Collapse 3+ blank lines into 2
     md = re.sub(r"\n{3,}", "\n\n", md)
+    # Strip base64 data URIs — they add thousands of chars with no value.
+    md = _DATA_URI_RE.sub("[image]", md)
     return md.strip()
 
 
-def truncate_markdown(text: str, max_chars: int = 4000) -> str:
+def truncate_markdown(text: str, max_chars: int = 3000) -> str:
     """Truncate markdown at paragraph boundaries.
 
     Finds the last double-newline before *max_chars* and cuts there,
@@ -92,4 +99,7 @@ def truncate_markdown(text: str, max_chars: int = 4000) -> str:
         last_nl = search_region.rfind("\n")
         truncated = text[:last_nl] if last_nl > max_chars // 3 else text[:max_chars]
 
-    return truncated + f"\n\n[...truncated, {len(text)} chars total]"
+    return (
+        truncated + f"\n\n[...truncated, {len(text)} chars total. "
+        f"Use extract with mode=text or a more specific selector to see remaining content.]"
+    )

@@ -24,12 +24,16 @@ from pydantic_ai.messages import (
 
 from bridge import DOM_MARKER
 
-# How many recent messages (request+response pairs) to leave untouched
-KEEP_LAST = 4
+# How many recent messages (request+response pairs) to leave untouched.
+# Reduced from 4 to 3: session memory now carries enough context that
+# the LLM doesn't need as many raw messages. Smaller context = faster inference.
+KEEP_LAST = 3
 # Total screenshots to retain across the full history
 MAX_SCREENSHOTS = 2
 # Max chars for text content in old tool results (after DOM removal)
-MAX_OLD_TEXT = 1000
+MAX_OLD_TEXT = 800
+# Max chars for extract action results (higher because they contain task data)
+MAX_OLD_EXTRACT_TEXT = 1500
 
 
 def prune_context(messages: list[ModelMessage]) -> list[ModelMessage]:
@@ -92,7 +96,11 @@ def _remove_old_screenshots(
 
 
 def _truncate_old_dom(old: list[ModelMessage]) -> None:
-    """Truncate DOM snapshots in old tool results, keeping action summaries."""
+    """Truncate DOM snapshots in old tool results, keeping action summaries.
+
+    Extract action results get a higher text budget since they contain
+    the actual task-relevant data that the agent gathered.
+    """
     for msg in old:
         if not isinstance(msg, ModelRequest):
             continue
@@ -100,11 +108,15 @@ def _truncate_old_dom(old: list[ModelMessage]) -> None:
             if not isinstance(part, ToolReturnPart):
                 continue
 
+            # Determine text budget: extract results keep more context.
+            is_extract = _is_extract_result(part)
+            max_text = MAX_OLD_EXTRACT_TEXT if is_extract else MAX_OLD_TEXT
+
             if isinstance(part.content, str) and DOM_MARKER in part.content:
                 cut = part.content.index(DOM_MARKER)
                 summary = part.content[:cut].rstrip()
-                if len(summary) > MAX_OLD_TEXT:
-                    summary = summary[:MAX_OLD_TEXT] + "..."
+                if len(summary) > max_text:
+                    summary = summary[:max_text] + "..."
                 part.content = summary + "\n[DOM removed]"
 
             elif isinstance(part.content, list):
@@ -113,14 +125,35 @@ def _truncate_old_dom(old: list[ModelMessage]) -> None:
                     if isinstance(item, str) and DOM_MARKER in item:
                         cut = item.index(DOM_MARKER)
                         summary = item[:cut].rstrip()
-                        if len(summary) > MAX_OLD_TEXT:
-                            summary = summary[:MAX_OLD_TEXT] + "..."
+                        if len(summary) > max_text:
+                            summary = summary[:max_text] + "..."
                         new_content.append(summary + "\n[DOM removed]")
-                    elif isinstance(item, str) and len(item) > MAX_OLD_TEXT:
-                        new_content.append(item[:MAX_OLD_TEXT] + "...")
+                    elif isinstance(item, str) and len(item) > max_text:
+                        new_content.append(item[:max_text] + "...")
                     else:
                         new_content.append(item)
                 part.content = new_content
+
+
+def _is_extract_result(part: ToolReturnPart) -> bool:
+    """Heuristic: check if a ToolReturnPart came from an extract action.
+
+    Extract results typically don't start with common action prefixes
+    (Navigated, Clicked, Scrolled, Step N) and don't contain screenshots.
+    """
+    text = ""
+    if isinstance(part.content, str):
+        text = part.content
+    elif isinstance(part.content, list):
+        for item in part.content:
+            if isinstance(item, str):
+                text = item
+                break
+    if not text:
+        return False
+    # Navigation/click/scroll results have recognizable prefixes.
+    nav_prefixes = ("Navigated", "Clicked", "Scrolled", "Step ", "Typed", "Pressed")
+    return not text.lstrip().startswith(nav_prefixes)
 
 
 def _strip_old_thinking(old: list[ModelMessage]) -> None:

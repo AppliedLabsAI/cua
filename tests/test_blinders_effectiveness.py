@@ -168,7 +168,6 @@ class TestScenarioA1ReadWithHostileSidebar:
             "screenshot",
             "scroll",
             "get_dom",
-            "wait_for",
         ):
             assert action in scope.allowed_actions
 
@@ -1142,7 +1141,6 @@ class TestScenarioC12ToolSchemaNarrowing:
             "screenshot",
             "scroll",
             "get_dom",
-            "wait_for",
         ):
             assert action in action_enum
 
@@ -1155,7 +1153,6 @@ class TestScenarioC12ToolSchemaNarrowing:
         assert "key_press" not in action_enum
         assert "execute_sequence" not in action_enum
         assert "extract" not in action_enum
-        assert "wait_for" not in action_enum
 
     @pytest.mark.asyncio
     async def test_interact_scope_has_all_actions(self):
@@ -1163,13 +1160,13 @@ class TestScenarioC12ToolSchemaNarrowing:
 
         scope = await extract_task_scope("Click the download button on example.com")
         action_enum = get_action_enum(allowed_actions=scope.allowed_actions)
-        assert len(action_enum) == 9  # all actions
+        assert len(action_enum) == 8  # all actions
 
     def test_no_allowed_actions_returns_full_schema(self):
         from agent.tools import get_action_enum
 
         action_enum = get_action_enum(allowed_actions=None)
-        assert len(action_enum) == 9
+        assert len(action_enum) == 8
 
     @pytest.mark.asyncio
     async def test_schema_is_sorted(self):

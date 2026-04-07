@@ -12,8 +12,8 @@ import pytest
 from bridge.page_actions import (
     PageActionConfig,
     _extract_markdown,
+    ensure_page_settled,
     execute_page_action,
-    wait_for_page_ready,
 )
 from credentials import SecretValue
 
@@ -87,10 +87,7 @@ def _config() -> PageActionConfig:
         navigation_timeout_ms=7000,
         scroll_unit=200,
         type_delay_ms=0,
-        settle_after_click=True,
-        settle_after_evaluate=True,
-        settle_timeout_ms=1000,
-        settle_sleep_s=0,
+        page_settle_timeout_ms=1000,
     )
 
 
@@ -202,230 +199,110 @@ def test_extract_value_returns_raw_field_value():
     assert outcome.text == "f1a1523a-a020-4417-a6fb-85f00ce929af"
 
 
-def test_extract_waits_for_page_readiness(monkeypatch):
+def test_ensure_page_settled_calls_networkidle():
+    """ensure_page_settled delegates to Playwright's networkidle."""
+    page = AsyncMock()
+    page.wait_for_load_state = AsyncMock()
+
+    asyncio.run(ensure_page_settled(page, 5000))
+
+    page.wait_for_load_state.assert_awaited_once_with("networkidle", timeout=5000)
+
+
+def test_ensure_page_settled_suppresses_timeout():
+    """ensure_page_settled never raises — silently degrades on timeout."""
+    page = AsyncMock()
+    page.wait_for_load_state = AsyncMock(side_effect=TimeoutError("networkidle"))
+
+    # Should not raise
+    asyncio.run(ensure_page_settled(page, 1000))
+
+
+def test_ensure_page_settled_skips_when_zero_timeout():
+    """ensure_page_settled is a no-op when timeout_ms <= 0."""
+    page = AsyncMock()
+    page.wait_for_load_state = AsyncMock()
+
+    asyncio.run(ensure_page_settled(page, 0))
+
+    page.wait_for_load_state.assert_not_awaited()
+
+
+def test_goto_calls_ensure_page_settled(monkeypatch):
+    """goto action waits for network idle after navigation."""
     page = _FakePage()
-    observed: dict[str, object] = {}
+    calls: list[tuple] = []
 
-    async def _fake_wait(page_obj, timeout_ms, **kwargs):
-        observed["page"] = page_obj
-        observed["timeout_ms"] = timeout_ms
-        observed["kwargs"] = kwargs
+    async def _fake_settle(p, timeout_ms=8000):
+        calls.append((p, timeout_ms))
 
-    monkeypatch.setattr("bridge.page_actions.wait_for_page_ready", _fake_wait)
+    monkeypatch.setattr("bridge.page_actions.ensure_page_settled", _fake_settle)
 
-    outcome = asyncio.run(
+    asyncio.run(
         execute_page_action(
-            page,
-            "extract",
-            {"selector": "body", "mode": "text"},
-            config=_config(),
+            page, "goto", {"url": "https://example.com"}, config=_config()
         )
     )
 
-    assert outcome.text == "text:body:3000"
-    assert observed == {
-        "page": page,
-        "timeout_ms": 1000,
-        "kwargs": {
-            "selector": "body",
-            "wait_for_content": True,
-            "settle_sleep_s": 0,
-        },
-    }
+    assert len(calls) == 1
+    assert calls[0] == (page, 1000)
 
 
-def test_extract_value_mode_skips_content_wait(monkeypatch):
+def test_click_calls_ensure_page_settled(monkeypatch):
+    """click action waits for network idle after clicking."""
     page = _FakePage()
-    observed: dict[str, object] = {}
+    calls: list[tuple] = []
 
-    async def _fake_wait(page_obj, timeout_ms, **kwargs):
-        observed["page"] = page_obj
-        observed["timeout_ms"] = timeout_ms
-        observed["kwargs"] = kwargs
+    async def _fake_settle(p, timeout_ms=8000):
+        calls.append((p, timeout_ms))
 
-    monkeypatch.setattr("bridge.page_actions.wait_for_page_ready", _fake_wait)
+    monkeypatch.setattr("bridge.page_actions.ensure_page_settled", _fake_settle)
 
-    outcome = asyncio.run(
+    asyncio.run(
+        execute_page_action(page, "click", {"selector": "button"}, config=_config())
+    )
+
+    assert len(calls) == 1
+    assert calls[0] == (page, 1000)
+
+
+def test_extract_calls_ensure_page_settled(monkeypatch):
+    """extract action waits for network idle before extraction."""
+    page = _FakePage()
+    calls: list[tuple] = []
+
+    async def _fake_settle(p, timeout_ms=8000):
+        calls.append((p, timeout_ms))
+
+    monkeypatch.setattr("bridge.page_actions.ensure_page_settled", _fake_settle)
+
+    asyncio.run(
         execute_page_action(
-            page,
-            "extract",
-            {"selector": "#shop", "mode": "value"},
-            config=_config(),
+            page, "extract", {"selector": "body", "mode": "text"}, config=_config()
         )
     )
 
-    assert outcome.text == "f1a1523a-a020-4417-a6fb-85f00ce929af"
-    assert observed == {
-        "page": page,
-        "timeout_ms": 1000,
-        "kwargs": {
-            "selector": "#shop",
-            "wait_for_content": False,
-            "settle_sleep_s": 0,
-        },
-    }
+    assert len(calls) == 1
+    assert calls[0] == (page, 1000)
 
 
-def test_wait_for_page_ready_polls_until_content_stabilizes():
-    snapshots = [
-        {
-            "readyState": "interactive",
-            "selectorMatched": True,
-            "textLength": 0,
-            "busyCount": 1,
-        },
-        {
-            "readyState": "complete",
-            "selectorMatched": True,
-            "textLength": 42,
-            "busyCount": 1,
-        },
-        {
-            "readyState": "complete",
-            "selectorMatched": True,
-            "textLength": 42,
-            "busyCount": 1,
-        },
-        {
-            "readyState": "complete",
-            "selectorMatched": True,
-            "textLength": 42,
-            "busyCount": 1,
-        },
-    ]
-    page = AsyncMock()
-    page.wait_for_load_state = AsyncMock()
-    page.wait_for_selector = AsyncMock()
-    page.evaluate = AsyncMock(side_effect=snapshots)
+def test_scroll_does_not_settle(monkeypatch):
+    """scroll action does NOT call ensure_page_settled."""
+    page = _FakePage()
+    calls: list[tuple] = []
+
+    async def _fake_settle(p, timeout_ms=8000):
+        calls.append((p, timeout_ms))
+
+    monkeypatch.setattr("bridge.page_actions.ensure_page_settled", _fake_settle)
 
     asyncio.run(
-        wait_for_page_ready(
-            page,
-            200,
-            selector="body",
-            wait_for_content=True,
-            settle_sleep_s=0,
+        execute_page_action(
+            page, "scroll", {"direction": "down", "amount": 1}, config=_config()
         )
     )
 
-    assert page.wait_for_load_state.await_count == 3
-    assert page.evaluate.await_count == 4
-
-
-def test_wait_for_page_ready_uses_total_timeout_budget():
-    observed_timeouts: list[int] = []
-
-    async def _fake_wait_for_load_state(_state: str, *, timeout: int) -> None:
-        observed_timeouts.append(timeout)
-        await asyncio.sleep(0.02)
-
-    async def _fake_wait_for_selector(
-        _selector: str, *, state: str, timeout: int
-    ) -> object:
-        observed_timeouts.append(timeout)
-        return object()
-
-    page = AsyncMock()
-    page.wait_for_load_state = AsyncMock(side_effect=_fake_wait_for_load_state)
-    page.wait_for_selector = AsyncMock(side_effect=_fake_wait_for_selector)
-
-    asyncio.run(
-        wait_for_page_ready(
-            page,
-            100,
-            selector="#ready",
-            wait_for_content=False,
-        )
-    )
-
-    assert len(observed_timeouts) == 4
-    assert 1 <= observed_timeouts[0] <= 100
-    assert observed_timeouts[0] > observed_timeouts[1] > observed_timeouts[2]
-    assert observed_timeouts[2] > observed_timeouts[3]
-
-
-def test_wait_for_page_ready_requires_stable_snapshot_without_loader():
-    snapshots = [
-        {
-            "readyState": "complete",
-            "selectorMatched": True,
-            "textLength": 128,
-            "busyCount": 0,
-        },
-        {
-            "readyState": "complete",
-            "selectorMatched": True,
-            "textLength": 128,
-            "busyCount": 0,
-        },
-    ]
-    page = AsyncMock()
-    page.wait_for_load_state = AsyncMock()
-    page.wait_for_selector = AsyncMock()
-    page.evaluate = AsyncMock(side_effect=snapshots)
-
-    asyncio.run(
-        wait_for_page_ready(
-            page,
-            200,
-            selector="body",
-            wait_for_content=True,
-            settle_sleep_s=0,
-        )
-    )
-
-    assert page.evaluate.await_count == 2
-
-
-def test_wait_for_page_ready_requires_selector_match_before_return():
-    snapshots = [
-        {
-            "readyState": "complete",
-            "selectorMatched": False,
-            "textLength": 128,
-            "busyCount": 0,
-        },
-        {
-            "readyState": "complete",
-            "selectorMatched": False,
-            "textLength": 128,
-            "busyCount": 0,
-        },
-        {
-            "readyState": "complete",
-            "selectorMatched": False,
-            "textLength": 128,
-            "busyCount": 0,
-        },
-        {
-            "readyState": "complete",
-            "selectorMatched": True,
-            "textLength": 128,
-            "busyCount": 0,
-        },
-        {
-            "readyState": "complete",
-            "selectorMatched": True,
-            "textLength": 128,
-            "busyCount": 0,
-        },
-    ]
-    page = AsyncMock()
-    page.wait_for_load_state = AsyncMock()
-    page.wait_for_selector = AsyncMock()
-    page.evaluate = AsyncMock(side_effect=snapshots)
-
-    asyncio.run(
-        wait_for_page_ready(
-            page,
-            300,
-            selector="#ready",
-            wait_for_content=True,
-            settle_sleep_s=0.01,
-        )
-    )
-
-    assert page.evaluate.await_count == 5
+    assert len(calls) == 0
 
 
 # ---------------------------------------------------------------------------

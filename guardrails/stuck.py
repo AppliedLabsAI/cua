@@ -355,7 +355,7 @@ def build_action_signature(action: str, tool_input: dict) -> str:
     normalized_action = action.strip().lower()
     if normalized_action == "goto":
         return f"goto|{tool_input.get('url', '').strip().lower()}"
-    if normalized_action in {"click", "extract", "wait_for", "select"}:
+    if normalized_action in {"click", "extract", "select"}:
         selector = str(tool_input.get("selector", "")).strip().lower()
         return f"{normalized_action}|{selector}"
     if normalized_action == "key_press":
