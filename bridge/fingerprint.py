@@ -51,8 +51,14 @@ def generate_fingerprint(
     if cache_path and cache_path.exists():
         try:
             cached = json.loads(cache_path.read_text())
-            logger.info("Loaded cached fingerprint for %s", start_url)
-            return cached
+            if _fingerprint_matches_browser(cached, width, height):
+                logger.info("Loaded cached fingerprint for %s", start_url)
+                return cached
+            logger.info(
+                "Discarding cached fingerprint for %s because it no longer "
+                "matches the launched browser",
+                start_url,
+            )
         except Exception:
             logger.debug("Failed to load cached fingerprint", exc_info=True)
 
@@ -99,13 +105,14 @@ def _generate_fresh(width: int, height: int) -> dict:
             os="linux",
             screen=Screen(
                 min_width=width,
-                max_width=max(width, 1920),
+                max_width=width,
                 min_height=height,
-                max_height=max(height, 1080),
+                max_height=height,
             ),
         )
         renderer = (fp.videoCard.renderer if fp.videoCard else None) or ""
         ua = fp.navigator.userAgent or ""
+        platform = fp.navigator.platform or "Linux x86_64"
 
         # Reject SwiftShader (headless signal)
         if "swiftshader" in renderer.lower():
@@ -115,6 +122,10 @@ def _generate_fresh(width: int, height: int) -> dict:
         if "aarch64" in ua and (
             "intel" in renderer.lower() or "nvidia" in renderer.lower()
         ):
+            continue
+
+        # Reject macOS-only renderers for Linux browser personas.
+        if not _renderer_matches_linux(renderer, platform, ua):
             continue
 
         break
@@ -157,15 +168,15 @@ def _generate_fresh(width: int, height: int) -> dict:
         "extraProperties": fp.navigator.extraProperties,
         # Screen
         "screen": {
-            "width": fp.screen.width,
-            "height": fp.screen.height,
-            "availWidth": fp.screen.availWidth,
-            "availHeight": fp.screen.availHeight,
+            "width": width,
+            "height": height,
+            "availWidth": width,
+            "availHeight": height,
             "colorDepth": fp.screen.colorDepth,
             "pixelDepth": fp.screen.pixelDepth,
             "devicePixelRatio": fp.screen.devicePixelRatio,
-            "outerWidth": fp.screen.outerWidth,
-            "outerHeight": fp.screen.outerHeight,
+            "outerWidth": width,
+            "outerHeight": height,
         },
         # WebGL
         "webgl": {
@@ -181,14 +192,41 @@ def _generate_fresh(width: int, height: int) -> dict:
     logger.info(
         "Generated fingerprint: UA=%s, Screen=%dx%d, WebGL=%s/%s, HW=%d, Mem=%d",
         user_agent[:70],
-        fp.screen.width,
-        fp.screen.height,
+        width,
+        height,
         vc_vendor[:20],
         vc_renderer[:40],
         hw_concurrency,
         device_memory,
     )
     return result
+
+
+def _fingerprint_matches_browser(fp: dict, width: int, height: int) -> bool:
+    """Return True when a cached fingerprint still matches the current browser."""
+    screen = fp.get("screen") or {}
+    if screen.get("width") != width or screen.get("height") != height:
+        return False
+
+    renderer = (fp.get("webgl") or {}).get("renderer") or ""
+    platform = str(fp.get("platform") or "")
+    user_agent = str(fp.get("userAgent") or "")
+    return _renderer_matches_linux(renderer, platform, user_agent)
+
+
+def _renderer_matches_linux(renderer: str, platform: str, user_agent: str) -> bool:
+    """Reject platform/renderers combos that are impossible for Linux Chrome."""
+    platform_bits = f"{platform} {user_agent}".lower()
+    if "linux" not in platform_bits:
+        return True
+
+    renderer_lower = renderer.lower()
+    impossible_tokens = (
+        "apple",
+        "metal",
+        "opengl engine",
+    )
+    return not any(token in renderer_lower for token in impossible_tokens)
 
 
 def build_fingerprint_js(fp: dict) -> str:

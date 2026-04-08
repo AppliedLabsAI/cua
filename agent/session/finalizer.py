@@ -190,7 +190,7 @@ class RunFinalizer:
         except Exception:
             logger.warning("Failed to persist run state", exc_info=True)
 
-    async def cleanup(self) -> None:
+    async def cleanup(self, *, save_storage_state: bool) -> None:
         """Finalize recording artifacts and close the browser."""
         if self._recording:
             try:
@@ -210,7 +210,7 @@ class RunFinalizer:
                 )
 
         try:
-            await self._browser.close()
+            await self._browser.close(save_storage_state=save_storage_state)
             logger.info("Browser closed")
         except Exception:
             logger.warning("Browser close failed during cleanup", exc_info=True)
@@ -223,7 +223,9 @@ class RunFinalizer:
     ) -> int:
         """Persist state, cleanup resources, and emit terminal metrics."""
         await self.publish_status(outcome)
-        await self.cleanup()
+        await self.cleanup(
+            save_storage_state=outcome.status is RunStatusValue.COMPLETED
+        )
         await self.persist()
 
         if result is not None:

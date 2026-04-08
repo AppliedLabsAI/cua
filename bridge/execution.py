@@ -21,7 +21,12 @@ from bridge.observation import (
     stop_mutation_observer,
 )
 from bridge.page_actions import PageActionConfig, execute_page_action
-from settings import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS, PAGE_SETTLE_TIMEOUT_MS
+from settings import (
+    ACTION_TIMEOUT_MS,
+    NAVIGATION_TIMEOUT_MS,
+    PAGE_SETTLE_TIMEOUT_MS,
+    TYPE_DELAY_MS,
+)
 from telemetry.logging import C_DIM, C_RESET, fmt_status, fmt_timing
 
 if TYPE_CHECKING:
@@ -35,7 +40,7 @@ _TOOL_ACTION_CONFIG = PageActionConfig(
     action_timeout_ms=ACTION_TIMEOUT_MS,
     navigation_timeout_ms=NAVIGATION_TIMEOUT_MS,
     scroll_unit=200,
-    type_delay_ms=0,
+    type_delay_ms=TYPE_DELAY_MS,
     page_settle_timeout_ms=PAGE_SETTLE_TIMEOUT_MS,
 )
 

@@ -47,6 +47,25 @@ class PageActionOutcome(BaseModel):
     navigation_status: int | str | None = None
 
 
+async def type_into_selector(
+    page: Any,
+    *,
+    selector: str,
+    text: str,
+    timeout_ms: int,
+    type_delay_ms: int,
+) -> None:
+    """Type into a focused field without using page.fill().
+
+    This keeps auth interactions closer to real user input and avoids the
+    immediate value injection pattern that login risk engines can flag.
+    """
+    await page.click(selector, timeout=timeout_ms)
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Backspace")
+    await page.keyboard.type(text, delay=type_delay_ms)
+
+
 async def execute_page_action(
     page: Any,
     action: str,
@@ -98,7 +117,13 @@ async def execute_page_action(
         if text:
             selector = params.get("selector")
             if selector:
-                await page.fill(selector, text, timeout=config.action_timeout_ms)
+                await type_into_selector(
+                    page,
+                    selector=selector,
+                    text=text,
+                    timeout_ms=config.action_timeout_ms,
+                    type_delay_ms=config.type_delay_ms,
+                )
             else:
                 await page.keyboard.type(text, delay=config.type_delay_ms)
             if credential_ref:

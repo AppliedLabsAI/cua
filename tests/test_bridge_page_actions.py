@@ -44,6 +44,7 @@ class _FakePage:
         self.keyboard = _FakeKeyboard()
         self.mouse = _FakeMouse()
         self.filled: list[tuple[str, str, int]] = []
+        self.clicked: list[tuple[str, int]] = []
         self.selected: list[tuple[str, str, int]] = []
         self.evaluated: list[tuple[str, object]] = []
 
@@ -53,6 +54,7 @@ class _FakePage:
 
     async def click(self, selector: str, **kwargs) -> None:
         self.last_click = selector
+        self.clicked.append((selector, kwargs.get("timeout", 0)))
 
     async def fill(self, selector: str, value: str, timeout: int) -> None:
         self.filled.append((selector, value, timeout))
@@ -91,34 +93,52 @@ def _config() -> PageActionConfig:
     )
 
 
-def test_key_press_with_selector_uses_fill():
+def test_key_press_with_selector_types_like_user():
     page = _FakePage()
     outcome = asyncio.run(
         execute_page_action(
             page,
             "key_press",
             {"selector": "#email", "text": "user@example.com"},
-            config=_config(),
+            config=PageActionConfig(
+                action_timeout_ms=3000,
+                navigation_timeout_ms=7000,
+                scroll_unit=200,
+                type_delay_ms=50,
+                page_settle_timeout_ms=1000,
+            ),
         )
     )
 
-    assert page.filled == [("#email", "user@example.com", 3000)]
+    assert page.filled == []
+    assert page.clicked == [("#email", 3000)]
+    assert page.keyboard.pressed == ["Control+A", "Backspace"]
+    assert page.keyboard.typed == [("user@example.com", 50)]
     assert outcome.text == "Typed 'user@example.com'"
 
 
-def test_key_press_with_credential_ref_uses_fill_without_exposing_value():
+def test_key_press_with_credential_ref_types_without_exposing_value():
     page = _FakePage()
     outcome = asyncio.run(
         execute_page_action(
             page,
             "key_press",
             {"selector": "#password", "credential_ref": "password"},
-            config=_config(),
+            config=PageActionConfig(
+                action_timeout_ms=3000,
+                navigation_timeout_ms=7000,
+                scroll_unit=200,
+                type_delay_ms=35,
+                page_settle_timeout_ms=1000,
+            ),
             credentials={"password": SecretValue("s3cr3t")},
         )
     )
 
-    assert page.filled == [("#password", "s3cr3t", 3000)]
+    assert page.filled == []
+    assert page.clicked == [("#password", 3000)]
+    assert page.keyboard.pressed == ["Control+A", "Backspace"]
+    assert page.keyboard.typed == [("s3cr3t", 35)]
     assert outcome.text == "Typed credential 'password'"
 
 

@@ -105,7 +105,8 @@ async def test_run_finalizer_persists_cleans_up_and_records_metrics():
     async def _mark(name: str) -> None:
         call_order.append(name)
 
-    async def _close_browser() -> None:
+    async def _close_browser(*, save_storage_state: bool) -> None:
+        assert save_storage_state is True
         await _mark("browser.close")
 
     async def _stop_recording() -> None:
@@ -176,7 +177,7 @@ async def test_run_finalizer_persists_cleans_up_and_records_metrics():
     commit_recording_volume.assert_awaited_once()
     recording.stop.assert_awaited_once()
     recording.upload.assert_awaited_once_with("/recordings/run-123")
-    browser.close.assert_awaited_once()
+    browser.close.assert_awaited_once_with(save_storage_state=True)
     span.add_event.assert_called_once()
     active_sessions.add.assert_called_once_with(-1)
     sessions_total.add.assert_called_once_with(1, {"status": "success"})
@@ -189,3 +190,32 @@ async def test_run_finalizer_persists_cleans_up_and_records_metrics():
         "persist_status",
         "commit_recording_volume",
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_finalizer_skips_storage_save_for_failed_runs():
+    browser = SimpleNamespace(close=AsyncMock())
+    finalizer = RunFinalizer(
+        run_id="run-123",
+        browser=browser,
+        recording=None,
+        recording_upload=False,
+    )
+    outcome = RunOutcome(
+        status=RunStatusValue.FAILED,
+        metrics_status="failed",
+        exit_code=1,
+        error="boom",
+    )
+
+    with (
+        patch("agent.session.finalizer.complete_run", new=AsyncMock()),
+        patch("agent.session.finalizer.persist_status", new=AsyncMock()),
+        patch("agent.session.finalizer._commit_recording_volume", new=AsyncMock()),
+        patch("agent.session.finalizer.active_sessions", return_value=MagicMock()),
+        patch("agent.session.finalizer.sessions_total", return_value=MagicMock()),
+        patch("agent.session.finalizer.session_duration", return_value=MagicMock()),
+    ):
+        await finalizer.finalize(outcome)
+
+    browser.close.assert_awaited_once_with(save_storage_state=False)

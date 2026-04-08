@@ -14,11 +14,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
 import logging
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
+import httpx
 from patchright.async_api import (
     Browser,
     BrowserContext,
@@ -35,7 +37,7 @@ from bridge.js_helpers import (
     READABILITY_EXTRACT_INIT_JS,
 )
 from bridge.page_actions import ensure_page_settled
-from bridge.stealth import get_stealth_launch_args
+from bridge.stealth import get_stealth_launch_args, inject_stealth_scripts
 from settings import (
     ACTION_TIMEOUT_MS,
     NAVIGATION_TIMEOUT_MS,
@@ -67,7 +69,7 @@ class BrowserManager:
         self._prefetch_task: asyncio.Task[str] | None = None
         self._prefetch_url: str | None = None
         self._settle_task: asyncio.Task[None] | None = None
-        self._storage_state_path: str | None = None
+        self._storage_state_paths: list[str] = []
 
     async def launch(
         self,
@@ -108,21 +110,28 @@ class BrowserManager:
             context_kwargs["user_agent"] = user_agent
         if proxy:
             context_kwargs["proxy"] = _parse_proxy(proxy)
+            proxy_timezone = await _lookup_timezone_for_proxy(proxy)
+            context_kwargs["timezone_id"] = proxy_timezone
+        else:
+            proxy_timezone = None
 
         # Restore cookies/localStorage keyed by start_url domain so
         # hCaptcha passes and auth sessions persist across runs.
-        self._storage_state_path = _storage_path_for_url(start_url)
-        if self._storage_state_path and Path(self._storage_state_path).exists():
-            context_kwargs["storage_state"] = self._storage_state_path
-            logger.info("Restored storage state from %s", self._storage_state_path)
+        self._storage_state_paths = _storage_paths_for_url(start_url)
+        storage_state_path = _restore_storage_state_path_for_url(start_url)
+        if storage_state_path:
+            context_kwargs["storage_state"] = storage_state_path
+            logger.info("Restored storage state from %s", storage_state_path)
 
         self._context = await self._browser.new_context(**context_kwargs)
         self._context.set_default_timeout(ACTION_TIMEOUT_MS)
 
-        # When using a proxy, set timezone and geolocation to match the
-        # proxy IP's region and block WebRTC from leaking the real IP.
+        await inject_stealth_scripts(self._context)
+
+        # When using a proxy, block WebRTC from leaking the real IP.
         if proxy:
-            await self._apply_proxy_protections(proxy)
+            await self._apply_proxy_protections()
+            logger.info("Set timezone to %s to match proxy", proxy_timezone)
 
         # Inject fingerprint JS in sandbox mode only.
         if fp:
@@ -149,38 +158,43 @@ class BrowserManager:
                 timeout=NAVIGATION_TIMEOUT_MS,
             )
             await ensure_page_settled(self._page, NAVIGATION_TIMEOUT_MS)
+            if storage_state_path and not await _page_looks_authenticated(self._page):
+                logger.info(
+                    "Restored storage state from %s appears unauthenticated; "
+                    "disabling saved-session reuse",
+                    storage_state_path,
+                )
+                self._invalidate_storage_state_paths()
 
-    async def _apply_proxy_protections(self, proxy: str) -> None:
-        """Prevent IP/timezone leaks when using a proxy.
+    async def _apply_proxy_protections(self) -> None:
+        """Prevent WebRTC IP leaks when using a proxy.
 
         hCaptcha cross-checks:
         1. WebRTC STUN requests (reveals real IP behind proxy)
-        2. JS timezone vs proxy IP geolocation
-        3. navigator.language vs expected locale
 
-        We use CDP to set timezone and block WebRTC leaks.
+        We block WebRTC at both the current page and init-script levels.
         """
         assert self._context is not None  # Called right after context creation
         ctx = self._context
 
         # Block WebRTC IP leak via CDP
         try:
-            cdp = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            await cdp.evaluate("""
-                // Override RTCPeerConnection to prevent IP leak via STUN
-                const origRTC = window.RTCPeerConnection;
-                window.RTCPeerConnection = function(...args) {
-                    const config = args[0] || {};
-                    // Remove all STUN/TURN servers
-                    config.iceServers = [];
-                    return new origRTC(config);
-                };
-                window.RTCPeerConnection.prototype = origRTC.prototype;
-                // Also block via webkitRTCPeerConnection
-                if (window.webkitRTCPeerConnection) {
-                    window.webkitRTCPeerConnection = window.RTCPeerConnection;
-                }
-            """)
+            if ctx.pages:
+                await ctx.pages[0].evaluate("""
+                    // Override RTCPeerConnection to prevent IP leak via STUN
+                    const origRTC = window.RTCPeerConnection;
+                    window.RTCPeerConnection = function(...args) {
+                        const config = args[0] || {};
+                        // Remove all STUN/TURN servers
+                        config.iceServers = [];
+                        return new origRTC(config);
+                    };
+                    window.RTCPeerConnection.prototype = origRTC.prototype;
+                    // Also block via webkitRTCPeerConnection
+                    if (window.webkitRTCPeerConnection) {
+                        window.webkitRTCPeerConnection = window.RTCPeerConnection;
+                    }
+                """)
         except Exception:
             logger.debug("WebRTC override via evaluate failed", exc_info=True)
 
@@ -202,20 +216,6 @@ class BrowserManager:
             })();
         """
         )
-
-        # Set timezone to match proxy IP's approximate region
-        # For US residential proxies, America/New_York is a safe default
-        try:
-            tz = _guess_timezone_for_proxy(proxy)
-            if ctx.pages:
-                page = ctx.pages[0]
-            else:
-                page = await ctx.new_page()
-            cdp_session = await page.context.new_cdp_session(page)
-            await cdp_session.send("Emulation.setTimezoneOverride", {"timezoneId": tz})
-            logger.info("Set timezone to %s to match proxy", tz)
-        except Exception:
-            logger.debug("Timezone override failed", exc_info=True)
 
     def _on_new_page(self, page: Page) -> None:
         """Handle new tab / popup: switch the active page automatically."""
@@ -308,19 +308,34 @@ class BrowserManager:
             task.cancel()
         return ""
 
-    async def close(self) -> None:
+    async def close(self, *, save_storage_state: bool = True) -> None:
         """Shut down browser and Patchright.
 
         Tolerates already-dead connections (e.g. after Ctrl+C).
         """
-        # Save storage state so cookies persist for this domain
-        if self._storage_state_path and self._context:
-            try:
-                Path(self._storage_state_path).parent.mkdir(parents=True, exist_ok=True)
-                await self._context.storage_state(path=self._storage_state_path)
-                logger.info("Saved storage state to %s", self._storage_state_path)
-            except Exception:
-                logger.debug("Failed to save storage state", exc_info=True)
+        # Persist only known-good storage states so failed auth flows do not
+        # overwrite the last working session.
+        if save_storage_state and self._storage_state_paths and self._context:
+            if self._page and not await _page_looks_authenticated(self._page):
+                logger.info(
+                    "Skipping storage state save because the current page still "
+                    "looks like a login or hCaptcha challenge"
+                )
+                self._invalidate_storage_state_paths()
+            else:
+                try:
+                    storage_state_json = json.dumps(await self._context.storage_state())
+                    saved_paths: list[str] = []
+                    for storage_state_path in self._storage_state_paths:
+                        path = Path(storage_state_path)
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text(storage_state_json)
+                        _storage_success_marker(path).write_text("ok")
+                        saved_paths.append(storage_state_path)
+                    if saved_paths:
+                        logger.info("Saved storage state to %s", ", ".join(saved_paths))
+                except Exception:
+                    logger.debug("Failed to save storage state", exc_info=True)
 
         # Cancel any in-flight prefetch
         if self._prefetch_task and not self._prefetch_task.done():
@@ -350,6 +365,12 @@ class BrowserManager:
             finally:
                 self._playwright = None
 
+    def _invalidate_storage_state_paths(self) -> None:
+        """Disable saved-session reuse for the current storage-state files."""
+        for storage_state_path in self._storage_state_paths:
+            with contextlib.suppress(FileNotFoundError):
+                _storage_success_marker(storage_state_path).unlink()
+
 
 # ---------------------------------------------------------------------------
 # Storage state persistence — keyed by start_url domain
@@ -371,11 +392,121 @@ def _storage_path_for_url(url: str | None) -> str | None:
     # Only use persistent storage when the recordings volume is mounted
     if not _STORAGE_DIR.parent.exists():
         return None
+    paths = _storage_paths_for_url(url)
+    if not paths:
+        return None
+    return paths[0]
+
+
+def _storage_paths_for_url(url: str | None) -> list[str]:
+    """Return candidate storage-state paths for a URL.
+
+    The exact hostname remains the primary key. We also write an alias for the
+    registrable domain so related subdomains can reuse the same good session.
+    """
+    if not url:
+        return []
+    if not _STORAGE_DIR.parent.exists():
+        return []
     from urllib.parse import urlparse
 
     domain = urlparse(url).hostname or "default"
+    domains = [domain]
+    registrable_domain = _registrable_domain(domain)
+    if registrable_domain and registrable_domain != domain:
+        domains.append(registrable_domain)
+
+    unique_domains = list(dict.fromkeys(domains))
+    return [str(_storage_path_for_domain(value)) for value in unique_domains]
+
+
+def _restore_storage_state_path_for_url(url: str | None) -> str | None:
+    """Return the first known-good storage state path for the URL."""
+    for storage_state_path in _storage_paths_for_url(url):
+        path = Path(storage_state_path)
+        if path.exists() and _storage_success_marker(path).exists():
+            return storage_state_path
+    return None
+
+
+def _storage_path_for_domain(domain: str) -> Path:
     domain_hash = hashlib.sha256(domain.encode()).hexdigest()[:12]
-    return str(_STORAGE_DIR / f"{domain}_{domain_hash}.json")
+    return _STORAGE_DIR / f"{domain}_{domain_hash}.json"
+
+
+def _storage_success_marker(path: str | Path) -> Path:
+    return Path(f"{path}.ok")
+
+
+def _registrable_domain(domain: str) -> str:
+    """Return a simple registrable-domain alias for subdomain reuse."""
+    try:
+        parts = domain.split(".")
+        if len(parts) < 2 or all(part.isdigit() for part in parts):
+            return domain
+        return ".".join(parts[-2:])
+    except Exception:
+        return domain
+
+
+async def _lookup_timezone_for_proxy(proxy: str) -> str:
+    """Resolve the proxy timezone via IP geolocation, with heuristic fallback."""
+    from urllib.parse import urlparse
+
+    host = urlparse(proxy).hostname or ""
+    timezone = await _fetch_timezone_for_host(host)
+    return timezone or _guess_timezone_for_proxy(proxy)
+
+
+async def _fetch_timezone_for_host(host: str) -> str | None:
+    """Fetch timezone data for a proxy host from ipinfo."""
+    if not host:
+        return None
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=3.0,
+            trust_env=False,
+        ) as client:
+            response = await client.get(f"https://ipinfo.io/{host}/json")
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        logger.debug("Proxy geolocation lookup failed for %s", host, exc_info=True)
+        return None
+
+    timezone = data.get("timezone")
+    if isinstance(timezone, str) and timezone:
+        return timezone
+    return None
+
+
+async def _page_looks_authenticated(page: Any) -> bool:
+    """Return False when the page still looks like login/captcha state."""
+    url_lower = str(getattr(page, "url", "")).lower()
+    if any(marker in url_lower for marker in ("/login", "/signin", "/sign-in")):
+        return False
+    if "login." in url_lower:
+        return False
+
+    suspicious_selectors = (
+        "input[type='password']",
+        'iframe[title="hCaptcha challenge"]',
+        'iframe[data-hcaptcha-widget-id][aria-hidden="true"]',
+    )
+    for selector in suspicious_selectors:
+        if await _selector_is_visible(page, selector):
+            return False
+    return True
+
+
+async def _selector_is_visible(page: Any, selector: str, timeout_ms: int = 300) -> bool:
+    """Best-effort visibility probe used by auth/session heuristics."""
+    try:
+        locator = page.locator(selector).first
+        return await locator.is_visible(timeout=timeout_ms)
+    except Exception:
+        return False
 
 
 def _guess_timezone_for_proxy(proxy: str) -> str:
