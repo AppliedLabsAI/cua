@@ -56,6 +56,11 @@ STEALTH_LAUNCH_ARGS: list[str] = [
     "--disable-breakpad",
     "--no-pings",
     "--dns-prefetch-disable",
+    # WebRTC IP leak prevention — critical when using proxies.
+    # Without this, STUN requests reveal the real (datacenter) IP
+    # even behind a residential proxy. hCaptcha checks for this.
+    "--enforce-webrtc-ip-permission-check",
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
     # Suppress UI elements that leak automation context
     "--disable-infobars",
     "--disable-translate",
@@ -80,7 +85,8 @@ STEALTH_LAUNCH_ARGS: list[str] = [
     "UserAgentClientHint,"
     "PrivacySandboxSettings4,"
     "OptimizationHintsFetching,"
-    "InterestFeedContentSuggestions",
+    "InterestFeedContentSuggestions,"
+    "WebRtcHideLocalIpsWithMdns",
     # Testing / animation suppression (reduces timing-based detection)
     "--wm-window-animations-disabled",
     "--animation-duration-scale=0",
@@ -183,7 +189,7 @@ async def try_click_turnstile(page: Page) -> bool:
     for selector in turnstile_selectors:
         try:
             element = page.locator(selector).first
-            if await element.is_visible(timeout=300):
+            if await element.is_visible(timeout=2_000):
                 box = await element.bounding_box()
                 if box:
                     # SeleniumBase offset: x=28, y=32 from element origin
@@ -200,6 +206,7 @@ async def try_click_turnstile(page: Page) -> bool:
         except Exception:
             continue
 
+    logger.debug("No Turnstile widget found with any selector")
     return False
 
 
@@ -207,34 +214,49 @@ async def try_click_hcaptcha(page: Page) -> bool:
     """Attempt to click an hCaptcha checkbox via CDP.
 
     Port of SeleniumBase's __cdp_click_incapsula_hcaptcha.
-    Locates the hCaptcha iframe and clicks with offset (x=30, y=36).
 
-    Returns True if a click was attempted, False if no hCaptcha found.
+    hCaptcha has two modes:
+    1. **Checkbox mode** — an iframe with the "I'm human" checkbox.
+       Click at offset (30, 36) from the iframe's top-left corner.
+    2. **Challenge mode** — the site auto-triggers hCaptcha on form submit
+       and skips the checkbox entirely, jumping straight to an image-selection
+       popup (iframe[title="hCaptcha challenge"]). The checkbox iframe is
+       hidden (display:none, aria-hidden:true, bounding rect 0×0).
+       In this case the challenge requires visual puzzle solving which
+       cannot be done via simple clicking.
+
+    Returns True if a click was attempted, False if no clickable hCaptcha found.
     """
-    hcaptcha_selectors = [
+    # hCaptcha loads asynchronously — give it time to render.
+    iframe_timeout_ms = 2_000
+
+    # --- Phase 1: Try to find a visible checkbox iframe ---
+    # Selectors ordered from most specific to broadest.
+    checkbox_selectors = [
         "iframe[data-hcaptcha-widget-id]",
-        'iframe[src*="hcaptcha.com/captcha"]',
+        'iframe[src*="hcaptcha.com"]',
+        ".h-captcha iframe",
+        "#hcaptchaWidget iframe",
     ]
 
     # Check if we're inside an Incapsula wrapper first
     incapsula_wrapper = 'iframe[src*="_Incapsula_Resource?"]'
     try:
         wrapper = page.locator(incapsula_wrapper).first
-        if await wrapper.is_visible(timeout=300):
-            # Nested iframe scenario — hCaptcha inside Incapsula frame
+        if await wrapper.is_visible(timeout=500):
             frame = wrapper.content_frame
             if frame:
-                for sel in hcaptcha_selectors:
+                for sel in checkbox_selectors:
                     try:
                         inner = frame.locator(sel).first
-                        if await inner.is_visible(timeout=300):
+                        if await inner.is_visible(timeout=iframe_timeout_ms):
                             box = await inner.bounding_box()
-                            if box:
+                            if box and box["width"] > 0:
                                 x = box["x"] + 30
                                 y = box["y"] + 36
                                 await page.mouse.click(x, y)
                                 logger.info(
-                                    "Clicked nested hCaptcha at (%.0f, %.0f)",
+                                    "Clicked nested hCaptcha checkbox at (%.0f, %.0f)",
                                     x,
                                     y,
                                 )
@@ -244,27 +266,51 @@ async def try_click_hcaptcha(page: Page) -> bool:
     except Exception:
         pass
 
-    # Direct hCaptcha (not nested in Incapsula)
-    for sel in hcaptcha_selectors:
+    # Direct checkbox (not nested in Incapsula)
+    for sel in checkbox_selectors:
         try:
             element = page.locator(sel).first
-            if await element.is_visible(timeout=300):
+            if await element.is_visible(timeout=iframe_timeout_ms):
                 box = await element.bounding_box()
-                if box:
-                    # SeleniumBase offset: x=30, y=36
+                if box and box["width"] > 0:
                     x = box["x"] + 30
                     y = box["y"] + 36
                     await page.mouse.click(x, y)
                     logger.info(
-                        "Clicked hCaptcha at (%.0f, %.0f) via selector: %s",
+                        "Clicked hCaptcha checkbox at (%.0f, %.0f) via: %s",
                         x,
                         y,
                         sel,
                     )
                     return True
-        except Exception:
+                else:
+                    logger.debug(
+                        "hCaptcha checkbox iframe (%s) has zero-size bounding box "
+                        "— likely hidden (challenge mode)",
+                        sel,
+                    )
+        except Exception as exc:
+            logger.debug("hCaptcha selector %s failed: %s", sel, exc)
             continue
 
+    # --- Phase 2: Detect if an image challenge popup is already showing ---
+    # When the site auto-triggers hCaptcha, the checkbox is hidden and the
+    # challenge popup iframe appears directly. We can't solve image puzzles,
+    # but we should log it clearly so the agent knows what's happening.
+    challenge_sel = 'iframe[title="hCaptcha challenge"]'
+    try:
+        challenge = page.locator(challenge_sel).first
+        if await challenge.is_visible(timeout=500):
+            logger.warning(
+                "hCaptcha image challenge popup is visible — this requires "
+                "visual puzzle solving which cannot be automated via clicking. "
+                "The checkbox was skipped by the site."
+            )
+            return False
+    except Exception:
+        pass
+
+    logger.debug("No hCaptcha iframe found with any selector")
     return False
 
 

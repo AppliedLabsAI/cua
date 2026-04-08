@@ -126,10 +126,13 @@ async def handle_captcha_with_active_solving(
                 message=f"[{captcha_type} solved via click in {wait_ms}ms: {click_result}]",
             )
 
-    # Phase 4: Nothing worked
+    # Phase 4: Nothing worked — diagnose why
     wait_ms = int((time.monotonic() - start) * 1000)
+    failure_hint = await _diagnose_captcha_failure(page, captcha_type)
     logger.warning(
-        "CAPTCHA not resolved after passive + active attempts (%dms)", wait_ms
+        "CAPTCHA not resolved after passive + active attempts (%dms): %s",
+        wait_ms,
+        failure_hint,
     )
     return CaptchaHandleResult(
         detected=True,
@@ -137,11 +140,38 @@ async def handle_captcha_with_active_solving(
         captcha_type=captcha_type,
         wait_time_ms=wait_ms,
         message=(
-            f"[{captcha_type} challenge detected. Passive auto-resolution and "
-            f"active clicking both failed after {wait_ms}ms. "
-            f"Try navigating to a different URL or using an alternative approach.]"
+            f"[{captcha_type} challenge not solved after {wait_ms}ms. {failure_hint}]"
         ),
     )
+
+
+async def _diagnose_captcha_failure(page: Page, captcha_type: str) -> str:
+    """Diagnose why CAPTCHA solving failed and return an actionable hint."""
+    if captcha_type == "hcaptcha":
+        try:
+            # Check if the image challenge popup is showing
+            challenge = page.locator('iframe[title="hCaptcha challenge"]').first
+            if await challenge.is_visible(timeout=300):
+                return (
+                    "An hCaptcha image-selection challenge is showing. "
+                    "This requires visual puzzle solving and cannot be "
+                    "bypassed automatically. Try reloading the page for "
+                    "a fresh challenge, or use a different login method "
+                    "(e.g. SSO, magic link, OTP) if available."
+                )
+            # Check if checkbox iframe exists but is hidden
+            hidden = page.locator(
+                'iframe[data-hcaptcha-widget-id][aria-hidden="true"]'
+            ).first
+            if await hidden.count() > 0:
+                return (
+                    "The hCaptcha checkbox is hidden (the site auto-triggered "
+                    "the challenge on form submit). Try a different login "
+                    "approach or reload the page."
+                )
+        except Exception:
+            pass
+    return "Try navigating to a different URL or using an alternative approach."
 
 
 async def _try_active_click(page: Page, captcha_type: str) -> str | None:
