@@ -20,6 +20,40 @@ logger = logging.getLogger(__name__)
 
 # Max recursion depth for execute_sequence validation
 _MAX_SEQUENCE_DEPTH = 10
+_AUTH_DOMAIN_TOKENS = frozenset(
+    {
+        "account",
+        "accounts",
+        "auth",
+        "id",
+        "login",
+        "oauth",
+        "okta",
+        "signin",
+        "signon",
+        "sso",
+    }
+)
+
+
+def _normalize_domain_pattern(pattern: str) -> str:
+    """Convert a glob pattern into its exact-hostname equivalent."""
+    if pattern.startswith("*."):
+        return pattern[2:]
+    return pattern
+
+
+def _parent_domain(domain: str) -> str:
+    """Return the parent suffix after removing the left-most label."""
+    _, _, parent = domain.partition(".")
+    return parent
+
+
+def _looks_like_auth_domain(domain: str) -> bool:
+    """Heuristic for common dedicated login/auth hostnames."""
+    return any(
+        label.replace("-", "") in _AUTH_DOMAIN_TOKENS for label in domain.split(".")
+    )
 
 
 class ScopeVerifier:
@@ -35,6 +69,7 @@ class ScopeVerifier:
     ) -> None:
         self.scope = scope
         self.guardrails = guardrails
+        self._dynamic_allowed_domains: set[str] = set()
         self._has_directive = bool(directive)
         # When skip_llm_validation is True, skip the task-alignment LLM call.
         # If no directive is available, keep verifier fully deterministic and
@@ -135,7 +170,7 @@ class ScopeVerifier:
 
     def check_post_navigation(self, url: str) -> str | None:
         """Validate the landing URL after a navigation-like action."""
-        domain_block = self._check_domain(url)
+        domain_block = self._check_domain(url, allow_related_auth_redirect=True)
         if domain_block:
             return domain_block
 
@@ -144,14 +179,19 @@ class ScopeVerifier:
             return url_check.reason
         return None
 
-    def _check_domain(self, url: str) -> str | None:
+    def _check_domain(
+        self,
+        url: str,
+        *,
+        allow_related_auth_redirect: bool = False,
+    ) -> str | None:
         """Check if URL's domain is within the task scope.
 
         If allowed_domains is empty (no URLs found in directive),
         domain scoping is not applied — falls through to existing
         guardrail domain checks.
         """
-        if not self.scope.allowed_domains:
+        if not self.scope.allowed_domains and not self._dynamic_allowed_domains:
             return None  # No domain restriction from scope
 
         try:
@@ -163,13 +203,47 @@ class ScopeVerifier:
         if not domain:
             return None
 
-        for pattern in self.scope.allowed_domains:
-            if fnmatch.fnmatch(domain, pattern):
-                return None
+        if self._is_domain_allowed(domain):
+            return None
+
+        if allow_related_auth_redirect and self._allow_related_auth_domain(domain):
+            self._dynamic_allowed_domains.add(domain)
+            logger.info("Scope accepted related auth domain '%s'", domain)
+            return None
 
         logger.info(
             "Scope blocked domain '%s' (allowed: %s)",
             domain,
-            self.scope.allowed_domains,
+            [*self.scope.allowed_domains, *sorted(self._dynamic_allowed_domains)],
         )
         return f"Domain '{domain}' not in task scope"
+
+    def _is_domain_allowed(self, domain: str) -> bool:
+        for pattern in self.scope.allowed_domains:
+            if fnmatch.fnmatch(domain, pattern):
+                return True
+        return domain in self._dynamic_allowed_domains
+
+    def _allow_related_auth_domain(self, domain: str) -> bool:
+        """Allow sibling login domains reached as part of a scoped navigation."""
+        if not _looks_like_auth_domain(domain):
+            return False
+
+        domain_parent = _parent_domain(domain)
+        if not domain_parent:
+            return False
+
+        allowed_domains = {
+            _normalize_domain_pattern(pattern) for pattern in self.scope.allowed_domains
+        }
+        allowed_domains.update(self._dynamic_allowed_domains)
+
+        for allowed in allowed_domains:
+            if not allowed:
+                continue
+            if domain_parent == allowed:
+                return True
+            allowed_parent = _parent_domain(allowed)
+            if allowed_parent and domain_parent == allowed_parent:
+                return True
+        return False

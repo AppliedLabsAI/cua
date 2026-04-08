@@ -77,7 +77,9 @@ def test_router_filters_dom_and_namespaces_persisted_logs(monkeypatch):
 
     monkeypatch.setattr("bridge.router.execute_dom_action", _fake_execute_dom_action)
     monkeypatch.setattr("bridge.router.persist_action_log", _fake_persist)
-    monkeypatch.setattr("bridge.router.handle_captcha_if_present", _fake_handle_captcha)
+    monkeypatch.setattr(
+        "bridge.router.handle_captcha_with_active_solving", _fake_handle_captcha
+    )
     monkeypatch.setattr("blinders.verifier.ScopeVerifier", _FakeVerifier)
 
     router = ActionRouter(
@@ -122,10 +124,64 @@ def test_router_prepends_captcha_message_for_navigation_actions(monkeypatch):
 
     monkeypatch.setattr("bridge.router.execute_dom_action", _fake_execute_dom_action)
     monkeypatch.setattr("bridge.router.persist_action_log", _fake_persist)
-    monkeypatch.setattr("bridge.router.handle_captcha_if_present", _fake_handle_captcha)
+    monkeypatch.setattr(
+        "bridge.router.handle_captcha_with_active_solving", _fake_handle_captcha
+    )
 
     router = ActionRouter(browser=browser, run_id="run-123")
     result = asyncio.run(_run_router_action(router, {"action": "click"}))
 
     assert result["is_error"] is False
     assert result["content"][0]["text"] == "CAPTCHA solved\nClicked"
+
+
+def test_router_checks_captcha_after_execute_sequence_with_navigation(monkeypatch):
+    browser = _FakeBrowser()
+    calls = {"captcha": 0}
+
+    async def _fake_execute_dom_action(
+        action,
+        tool_input,
+        browser_obj,
+        *,
+        include_page_context=True,
+        filter_config=None,
+        credentials=None,
+    ):
+        return ActionResult(text="Sequence done")
+
+    async def _fake_persist(log_entry, *, run_id: str = ""):
+        return "/tmp/fake.json"
+
+    async def _fake_handle_captcha(page):
+        calls["captcha"] += 1
+        return SimpleNamespace(
+            detected=False,
+            message="",
+            captcha_type=None,
+            resolved=False,
+            wait_time_ms=0,
+        )
+
+    monkeypatch.setattr("bridge.router.execute_dom_action", _fake_execute_dom_action)
+    monkeypatch.setattr("bridge.router.persist_action_log", _fake_persist)
+    monkeypatch.setattr(
+        "bridge.router.handle_captcha_with_active_solving", _fake_handle_captcha
+    )
+
+    router = ActionRouter(browser=browser, run_id="run-123")
+    result = asyncio.run(
+        _run_router_action(
+            router,
+            {
+                "action": "execute_sequence",
+                "steps": [
+                    {"action": "key_press", "text": "hello"},
+                    {"action": "click", "selector": "button[type=submit]"},
+                ],
+            },
+        )
+    )
+
+    assert result["is_error"] is False
+    assert calls["captcha"] == 1

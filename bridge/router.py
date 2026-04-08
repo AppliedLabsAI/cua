@@ -18,7 +18,7 @@ from actionlog.actions import ActionLog, persist_action_log, summarize_action
 from bridge import DOM_MARKER, ActionResult
 from bridge.background import BackgroundTasks
 from bridge.browser import BrowserManager
-from bridge.captcha import handle_captcha_if_present
+from bridge.captcha_solver import handle_captcha_with_active_solving
 from bridge.execution import execute_dom_action
 from bridge.tool_result import action_result_to_tool_result, error_result
 from bridge.url_utils import extract_visited_urls
@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Actions that may materially change page/frame state.
-_CAPTCHA_CHECK_ACTIONS = {"goto", "click"}
+_CAPTCHA_CHECK_ACTIONS = frozenset({"goto", "click"})
 
 # Observation-only actions should not reset the consecutive error counter —
 # a get_dom between failed clicks is not meaningful progress.
@@ -407,7 +407,7 @@ class ActionRouter:
                 filter_config=self._filter_config,
                 credentials=credentials,
             )
-            if action in _CAPTCHA_CHECK_ACTIONS:
+            if _needs_post_navigation_check(action, tool_input):
                 result = await self._post_navigation_phase(
                     action,
                     page_url_before,
@@ -466,9 +466,14 @@ class ActionRouter:
     # -----------------------------------------------------------------------
 
     async def _handle_captcha(self, result: ActionResult) -> ActionResult:
-        """Check for CAPTCHAs after navigation actions and wait for auto-resolution."""
+        """Check for CAPTCHAs after navigation actions.
+
+        Uses active-click solving ported from SeleniumBase's CDP Mode:
+        first tries passive auto-resolution (Patchright stealth), then
+        falls back to clicking the CAPTCHA checkbox directly.
+        """
         try:
-            captcha_result = await handle_captcha_if_present(self.browser.page)
+            captcha_result = await handle_captcha_with_active_solving(self.browser.page)
             if captcha_result.detected:
                 with self._tracer.start_as_current_span(CAPTCHA_HANDLE) as captcha_span:
                     captcha_span.add_event(
@@ -493,3 +498,17 @@ class ActionRouter:
         except Exception as e:
             logger.warning("CAPTCHA handling failed: %s", e)
         return result
+
+
+def _needs_post_navigation_check(action: str, tool_input: dict) -> bool:
+    """Return True when an action may trigger navigation or challenge flows."""
+    if action in _CAPTCHA_CHECK_ACTIONS:
+        return True
+    if action != "execute_sequence":
+        return False
+
+    steps = tool_input.get("steps", [])
+    return any(
+        isinstance(step, dict) and step.get("action") in _CAPTCHA_CHECK_ACTIONS
+        for step in steps
+    )

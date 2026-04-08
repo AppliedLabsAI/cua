@@ -6,6 +6,7 @@ import base64
 import contextlib
 import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from patchright.async_api import Page
@@ -15,6 +16,27 @@ from bridge.browser import AUTO_DOM_MAX_CHARS
 from bridge.js_helpers import PAGE_CONTEXT_INIT_JS
 
 logger = logging.getLogger(__name__)
+
+_VALUE_ATTR_RE = re.compile(r' value="[^"]*"')
+_SENSITIVE_FIELD_TOKENS = (
+    "account",
+    "auth",
+    "cardnumber",
+    "cvc",
+    "cvv",
+    "email",
+    "login",
+    "otp",
+    "password",
+    "passcode",
+    "secret",
+    "socialsecurity",
+    "ssn",
+    "token",
+    "username",
+    "userid",
+    "verificationcode",
+)
 
 if TYPE_CHECKING:
     from bridge.browser import BrowserManager
@@ -54,7 +76,8 @@ async def quick_dom_snapshot(
         if raw is None:
             return ""
         data = json.loads(raw)
-        return f"[{data['title']}] {data['url']}\n{data['dom']}"
+        dom = _redact_sensitive_form_values(data["dom"])
+        return f"[{data['title']}] {data['url']}\n{dom}"
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         logger.debug("DOM snapshot parse failed: %s", exc)
         return ""
@@ -83,7 +106,7 @@ async def get_dom_snapshot(
     try:
         data = json.loads(raw)
         header = f"[{data['title']}] {data['url']}\n"
-        return header + data["dom"]
+        return header + _redact_sensitive_form_values(data["dom"])
     except (json.JSONDecodeError, KeyError, TypeError):
         return None
 
@@ -121,7 +144,7 @@ async def quick_page_map(
         if raw is None:
             return ""
         data = json.loads(raw)
-        return data["map"]
+        return _redact_sensitive_form_values(data["map"])
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         logger.debug("Page map parse failed: %s", exc)
         return ""
@@ -183,3 +206,28 @@ async def page_screenshot(page: Page) -> str:
     """Capture the browser viewport as base64 JPEG via Playwright."""
     jpeg_bytes = await page.screenshot(type="jpeg", quality=55)
     return base64.standard_b64encode(jpeg_bytes).decode("ascii")
+
+
+def _redact_sensitive_form_values(snapshot: str) -> str:
+    """Mask sensitive input values before persisting DOM-derived text."""
+    lines: list[str] = []
+    for line in snapshot.splitlines():
+        if ' value="' not in line:
+            lines.append(line)
+            continue
+
+        lower = line.lower()
+        if "<input" not in lower and "<textarea" not in lower:
+            lines.append(line)
+            continue
+
+        canonical = lower.replace("-", "").replace("_", "").replace(" ", "")
+        if 'type="password"' not in lower and not any(
+            token in canonical for token in _SENSITIVE_FIELD_TOKENS
+        ):
+            lines.append(line)
+            continue
+
+        lines.append(_VALUE_ATTR_RE.sub(' value="[redacted]"', line, count=1))
+
+    return "\n".join(lines)

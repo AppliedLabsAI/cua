@@ -247,3 +247,26 @@ class TestScopeVerifier:
         assert "not in task scope" in (
             v.check_post_navigation("https://evil.com") or ""
         )
+
+    @pytest.mark.asyncio
+    async def test_post_navigation_allows_related_auth_redirect(self):
+        scope = await extract_task_scope("Open https://cs-admin.fabfitfun.com")
+        v = ScopeVerifier(scope, GuardrailEngine())
+
+        assert v.check_post_navigation("https://login.fabfitfun.com") is None
+        assert (
+            await v.check(
+                "goto",
+                {"url": "https://login.fabfitfun.com/help"},
+            )
+            is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_navigation_still_blocks_unrelated_sibling_subdomain(self):
+        scope = await extract_task_scope("Open https://cs-admin.fabfitfun.com")
+        v = ScopeVerifier(scope, GuardrailEngine())
+
+        result = v.check_post_navigation("https://cdn.fabfitfun.com/assets")
+        assert result is not None
+        assert "not in task scope" in result

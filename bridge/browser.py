@@ -4,8 +4,9 @@ Manages a Patchright Chromium instance running headful on Xvfb (DISPLAY=:99).
 Provides precise, fast browser interactions via CSS/text/role selectors — no
 pixel-hunting needed. Sessions are recorded via Playwright tracing for replay.
 
-Patchright handles bot detection evasion natively. Do NOT add extra stealth
-flags — they can conflict with its internal CDP patches.
+Patchright handles core bot-detection evasion (navigator.webdriver, etc.).
+On top of that, this module injects additional anti-fingerprint JS evasions
+and uses enhanced Chrome launch args to reduce automation signals.
 """
 
 from __future__ import annotations
@@ -29,8 +30,10 @@ from bridge.js_helpers import (
     EXTRACT_VALUE_INIT_JS,
     PAGE_CONTEXT_INIT_JS,
     READABILITY_EXTRACT_INIT_JS,
+    STEALTH_EVASIONS_INIT_JS,
 )
 from bridge.page_actions import ensure_page_settled
+from bridge.stealth import get_stealth_launch_args
 from settings import (
     ACTION_TIMEOUT_MS,
     NAVIGATION_TIMEOUT_MS,
@@ -47,7 +50,12 @@ EXTRACT_DOM_MAX_CHARS = 1500
 
 
 class BrowserManager:
-    """Manages a Patchright Chromium browser lifecycle on the virtual display."""
+    """Manages a Patchright Chromium browser lifecycle on the virtual display.
+
+    Stealth evasions (anti-bot launch args + JS fingerprint masking) are
+    always active. CAPTCHA solving uses active click strategies ported
+    from SeleniumBase's CDP Mode.
+    """
 
     def __init__(self) -> None:
         self._playwright: Playwright | None = None
@@ -66,16 +74,14 @@ class BrowserManager:
         proxy: str | None = None,
         user_agent: str | None = None,
     ) -> None:
-        """Launch Patchright Chromium headful on the Xvfb display."""
+        """Launch Patchright Chromium headful on the Xvfb display.
+
+        Uses enhanced launch args (from SeleniumBase's Config) and injects
+        stealth JS evasions before any page scripts execute.
+        """
         self._playwright = await async_playwright().start()
 
-        launch_args = [
-            f"--window-size={width},{height}",
-            "--window-position=0,0",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-infobars",
-        ]
+        launch_args = get_stealth_launch_args(width, height)
 
         self._browser = await self._playwright.chromium.launch(
             headless=False,
@@ -92,6 +98,11 @@ class BrowserManager:
 
         self._context = await self._browser.new_context(**context_kwargs)
         self._context.set_default_timeout(ACTION_TIMEOUT_MS)
+
+        # Stealth JS evasions — must be injected FIRST so they run before
+        # any page script (including anti-bot detectors).
+        if STEALTH_EVASIONS_INIT_JS:
+            await self._context.add_init_script(script=STEALTH_EVASIONS_INIT_JS)
 
         # Pre-load JS helpers on every page (survives navigations).
         # Sequential: Playwright serializes CDP commands on one socket anyway.
@@ -149,6 +160,26 @@ class BrowserManager:
         if self._context is None:
             raise RuntimeError("Browser not launched — call launch() first")
         return self._context
+
+    # ------------------------------------------------------------------
+    # CAPTCHA solving
+    # ------------------------------------------------------------------
+
+    async def solve_captcha(self) -> str | None:
+        """Actively attempt to solve any CAPTCHA on the current page.
+
+        Uses SeleniumBase's click strategies ported in captcha_solver.py.
+        Returns a status message if solved, None if no CAPTCHA found.
+        """
+        from bridge.captcha_solver import handle_captcha_with_active_solving
+
+        result = await handle_captcha_with_active_solving(self.page)
+        if result.detected:
+            if result.resolved:
+                return result.message
+            logger.warning("CAPTCHA not resolved: %s", result.message)
+            return result.message
+        return None
 
     # ------------------------------------------------------------------
     # Speculative prefetch

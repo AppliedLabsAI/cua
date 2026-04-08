@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from pydantic_ai import ModelSettings
 from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 from pydantic_ai.usage import UsageLimits
 
 from actionlog.actions import ActionLog
@@ -31,6 +32,21 @@ from settings import PRIMARY_MODEL
 from telemetry.logging import C_BLUE_BOLD, C_DIM, C_RESET
 
 logger = logging.getLogger(__name__)
+
+
+def _build_model_settings(
+    model: str,
+    thinking: bool | Literal["minimal", "low", "medium", "high", "xhigh"],
+) -> ModelSettings | OpenAIResponsesModelSettings:
+    """Build per-run model settings, including provider-specific knobs."""
+    if model.startswith("openai-responses:"):
+        return OpenAIResponsesModelSettings(
+            thinking=thinking,
+            # Reuse the latest Responses API turn server-side instead of
+            # replaying the full locally-pruned history back to OpenAI.
+            openai_previous_response_id="auto",
+        )
+    return ModelSettings(thinking=thinking)
 
 
 def _error(
@@ -111,7 +127,7 @@ async def run_agent(
             initial_msg,
             deps=deps,
             model=model,
-            model_settings=ModelSettings(thinking=thinking),
+            model_settings=_build_model_settings(model, thinking),
             usage_limits=UsageLimits(request_limit=max_steps),
         )
 
