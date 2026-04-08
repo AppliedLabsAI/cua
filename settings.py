@@ -35,7 +35,8 @@ LOGIN_DETECT_TIMEOUT_MS = (
     1_500  # wait for login form elements (more generous than probe)
 )
 PAGE_SETTLE_TIMEOUT_MS = 8_000  # networkidle wait after navigation actions
-TYPE_DELAY_MS = 50  # per-keystroke delay for human-like typing
+TYPE_DELAY_MS = 0  # per-keystroke delay (0 for speed; auth fields override to 50)
+AUTH_TYPE_DELAY_MS = 50  # per-keystroke delay for credential/auth typing only
 
 
 # ---------------------------------------------------------------------------

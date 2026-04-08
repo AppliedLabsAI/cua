@@ -14,10 +14,10 @@ if TYPE_CHECKING:
 from bridge.page_actions import type_into_selector
 from settings import (
     ACTION_TIMEOUT_MS,
+    AUTH_TYPE_DELAY_MS,
     LOGIN_DETECT_TIMEOUT_MS,
     LOGIN_TIMEOUT_MS,
     SELECTOR_PROBE_TIMEOUT_MS,
-    TYPE_DELAY_MS,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,7 +199,7 @@ class DashboardAuth:
                         selector=selector,
                         text=value,
                         timeout_ms=ACTION_TIMEOUT_MS,
-                        type_delay_ms=TYPE_DELAY_MS,
+                        type_delay_ms=AUTH_TYPE_DELAY_MS,
                     )
                     return True
             except Exception:

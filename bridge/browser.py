@@ -19,6 +19,7 @@ import logging
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from patchright.async_api import (
@@ -110,10 +111,7 @@ class BrowserManager:
             context_kwargs["user_agent"] = user_agent
         if proxy:
             context_kwargs["proxy"] = _parse_proxy(proxy)
-            proxy_timezone = await _lookup_timezone_for_proxy(proxy)
-            context_kwargs["timezone_id"] = proxy_timezone
-        else:
-            proxy_timezone = None
+            context_kwargs["timezone_id"] = await _lookup_timezone_for_proxy(proxy)
 
         # Restore cookies/localStorage keyed by start_url domain so
         # hCaptcha passes and auth sessions persist across runs.
@@ -131,7 +129,7 @@ class BrowserManager:
         # When using a proxy, block WebRTC from leaking the real IP.
         if proxy:
             await self._apply_proxy_protections()
-            logger.info("Set timezone to %s to match proxy", proxy_timezone)
+            logger.info("Applied proxy protections (timezone + WebRTC block)")
 
         # Inject fingerprint JS in sandbox mode only.
         if fp:
@@ -177,45 +175,14 @@ class BrowserManager:
         assert self._context is not None  # Called right after context creation
         ctx = self._context
 
-        # Block WebRTC IP leak via CDP
+        # Apply to the current page immediately, then as init script for future navigations.
         try:
             if ctx.pages:
-                await ctx.pages[0].evaluate("""
-                    // Override RTCPeerConnection to prevent IP leak via STUN
-                    const origRTC = window.RTCPeerConnection;
-                    window.RTCPeerConnection = function(...args) {
-                        const config = args[0] || {};
-                        // Remove all STUN/TURN servers
-                        config.iceServers = [];
-                        return new origRTC(config);
-                    };
-                    window.RTCPeerConnection.prototype = origRTC.prototype;
-                    // Also block via webkitRTCPeerConnection
-                    if (window.webkitRTCPeerConnection) {
-                        window.webkitRTCPeerConnection = window.RTCPeerConnection;
-                    }
-                """)
+                await ctx.pages[0].evaluate(_WEBRTC_BLOCK_JS)
         except Exception:
             logger.debug("WebRTC override via evaluate failed", exc_info=True)
 
-        # Inject WebRTC block as init script so it persists across navigations
-        await ctx.add_init_script(
-            script="""
-            (() => {
-                const origRTC = window.RTCPeerConnection;
-                if (!origRTC) return;
-                window.RTCPeerConnection = function(...args) {
-                    const config = args[0] || {};
-                    config.iceServers = [];
-                    return new origRTC(config);
-                };
-                window.RTCPeerConnection.prototype = origRTC.prototype;
-                if (window.webkitRTCPeerConnection) {
-                    window.webkitRTCPeerConnection = window.RTCPeerConnection;
-                }
-            })();
-        """
-        )
+        await ctx.add_init_script(script=_WEBRTC_BLOCK_JS)
 
     def _on_new_page(self, page: Page) -> None:
         """Handle new tab / popup: switch the active page automatically."""
@@ -378,24 +345,23 @@ class BrowserManager:
 # Modal sandbox: /recordings/.storage/<domain_hash>.json  (survives across runs)
 # Local:         not used (real browser fingerprint is sufficient)
 
+_WEBRTC_BLOCK_JS = """\
+(() => {
+    const origRTC = window.RTCPeerConnection;
+    if (!origRTC) return;
+    window.RTCPeerConnection = function(...args) {
+        const config = args[0] || {};
+        config.iceServers = [];
+        return new origRTC(config);
+    };
+    window.RTCPeerConnection.prototype = origRTC.prototype;
+    if (window.webkitRTCPeerConnection) {
+        window.webkitRTCPeerConnection = window.RTCPeerConnection;
+    }
+})();
+"""
+
 _STORAGE_DIR = Path("/recordings/.storage")
-
-
-def _storage_path_for_url(url: str | None) -> str | None:
-    """Return a storage state file path keyed by the URL's domain.
-
-    Returns None if no URL is provided or the storage dir doesn't exist
-    (i.e. we're not running in a Modal sandbox with the volume mounted).
-    """
-    if not url:
-        return None
-    # Only use persistent storage when the recordings volume is mounted
-    if not _STORAGE_DIR.parent.exists():
-        return None
-    paths = _storage_paths_for_url(url)
-    if not paths:
-        return None
-    return paths[0]
 
 
 def _storage_paths_for_url(url: str | None) -> list[str]:
@@ -408,16 +374,13 @@ def _storage_paths_for_url(url: str | None) -> list[str]:
         return []
     if not _STORAGE_DIR.parent.exists():
         return []
-    from urllib.parse import urlparse
-
     domain = urlparse(url).hostname or "default"
     domains = [domain]
     registrable_domain = _registrable_domain(domain)
     if registrable_domain and registrable_domain != domain:
         domains.append(registrable_domain)
 
-    unique_domains = list(dict.fromkeys(domains))
-    return [str(_storage_path_for_domain(value)) for value in unique_domains]
+    return [str(_storage_path_for_domain(d)) for d in domains]
 
 
 def _restore_storage_state_path_for_url(url: str | None) -> str | None:
@@ -451,8 +414,6 @@ def _registrable_domain(domain: str) -> str:
 
 async def _lookup_timezone_for_proxy(proxy: str) -> str:
     """Resolve the proxy timezone via IP geolocation, with heuristic fallback."""
-    from urllib.parse import urlparse
-
     host = urlparse(proxy).hostname or ""
     timezone = await _fetch_timezone_for_host(host)
     return timezone or _guess_timezone_for_proxy(proxy)
@@ -494,10 +455,10 @@ async def _page_looks_authenticated(page: Any) -> bool:
         'iframe[title="hCaptcha challenge"]',
         'iframe[data-hcaptcha-widget-id][aria-hidden="true"]',
     )
-    for selector in suspicious_selectors:
-        if await _selector_is_visible(page, selector):
-            return False
-    return True
+    results = await asyncio.gather(
+        *(_selector_is_visible(page, s) for s in suspicious_selectors)
+    )
+    return not any(results)
 
 
 async def _selector_is_visible(page: Any, selector: str, timeout_ms: int = 300) -> bool:
@@ -515,8 +476,6 @@ def _guess_timezone_for_proxy(proxy: str) -> str:
     Uses a simple IP-to-region heuristic. For production use, an IP
     geolocation service would be more accurate.
     """
-    from urllib.parse import urlparse
-
     host = urlparse(proxy).hostname or ""
 
     # Simple heuristic based on first octet of common US IP ranges
@@ -543,8 +502,6 @@ def _parse_proxy(proxy: str) -> dict:
     Handles both simple (http://host:port) and authenticated
     (http://user:pass@host:port) proxy URLs.
     """
-    from urllib.parse import urlparse
-
     parsed = urlparse(proxy)
     result: dict = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
     if parsed.username:

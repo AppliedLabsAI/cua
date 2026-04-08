@@ -10,7 +10,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from bridge.js_helpers import EXTRACT_VALUE_INIT_JS, READABILITY_EXTRACT_INIT_JS
-from settings import PAGE_SETTLE_TIMEOUT_MS
+from settings import AUTH_TYPE_DELAY_MS, PAGE_SETTLE_TIMEOUT_MS
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ async def type_into_selector(
     immediate value injection pattern that login risk engines can flag.
     """
     await page.click(selector, timeout=timeout_ms)
+    # Control+A: sandbox runs on Linux; Meta+A would be needed on macOS
     await page.keyboard.press("Control+A")
     await page.keyboard.press("Backspace")
     await page.keyboard.type(text, delay=type_delay_ms)
@@ -116,16 +117,21 @@ async def execute_page_action(
         parts: list[str] = []
         if text:
             selector = params.get("selector")
+            delay = (
+                config.type_delay_ms
+                if not credential_ref
+                else max(config.type_delay_ms, AUTH_TYPE_DELAY_MS)
+            )
             if selector:
                 await type_into_selector(
                     page,
                     selector=selector,
                     text=text,
                     timeout_ms=config.action_timeout_ms,
-                    type_delay_ms=config.type_delay_ms,
+                    type_delay_ms=delay,
                 )
             else:
-                await page.keyboard.type(text, delay=config.type_delay_ms)
+                await page.keyboard.type(text, delay=delay)
             if credential_ref:
                 parts.append(f"Typed credential '{credential_ref}'")
             else:

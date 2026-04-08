@@ -104,7 +104,7 @@ def test_key_press_with_selector_types_like_user():
                 action_timeout_ms=3000,
                 navigation_timeout_ms=7000,
                 scroll_unit=200,
-                type_delay_ms=50,
+                type_delay_ms=0,
                 page_settle_timeout_ms=1000,
             ),
         )
@@ -113,7 +113,7 @@ def test_key_press_with_selector_types_like_user():
     assert page.filled == []
     assert page.clicked == [("#email", 3000)]
     assert page.keyboard.pressed == ["Control+A", "Backspace"]
-    assert page.keyboard.typed == [("user@example.com", 50)]
+    assert page.keyboard.typed == [("user@example.com", 0)]
     assert outcome.text == "Typed 'user@example.com'"
 
 
@@ -128,7 +128,7 @@ def test_key_press_with_credential_ref_types_without_exposing_value():
                 action_timeout_ms=3000,
                 navigation_timeout_ms=7000,
                 scroll_unit=200,
-                type_delay_ms=35,
+                type_delay_ms=0,
                 page_settle_timeout_ms=1000,
             ),
             credentials={"password": SecretValue("s3cr3t")},
@@ -138,7 +138,8 @@ def test_key_press_with_credential_ref_types_without_exposing_value():
     assert page.filled == []
     assert page.clicked == [("#password", 3000)]
     assert page.keyboard.pressed == ["Control+A", "Backspace"]
-    assert page.keyboard.typed == [("s3cr3t", 35)]
+    # credential_ref forces AUTH_TYPE_DELAY_MS (50) even when config.type_delay_ms is 0
+    assert page.keyboard.typed == [("s3cr3t", 50)]
     assert outcome.text == "Typed credential 'password'"
 
 
