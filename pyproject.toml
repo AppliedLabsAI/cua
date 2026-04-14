@@ -36,7 +36,7 @@ dev = [
   "pytest-cov>=7.1.0",
   "python-multipart>=0.0.22",
   "ruff>=0.15",
-  "ty>=0.0.26",
+  "ty>=0.0.30",
 ]
 
 [tool.ruff]
